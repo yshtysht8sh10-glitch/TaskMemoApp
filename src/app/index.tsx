@@ -1,30 +1,61 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+
+import { NodeTree } from '@/components/NodeTree';
+import { DateTimeField } from '@/components/DateTimeField';
+import { completedMemos, completeMemo, createNode, hardDeleteNode, moveNode, restoreMemo, restoreNode, softDeleteNode, updateNode } from '@/domain/nodeOperations';
+import { mockNodes } from '@/data/mockNodes';
+import type { DuePreset, Node } from '@/models/node';
+import { loadNodes, normalizeLegacyRanks, resetNodes, saveNodes } from '@/services/nodeStorage';
+import { dueDateForPreset, formatDateTimeInput, parseLocalDateTime } from '@/utils/dueDates';
+
+type Panel = 'completed' | 'trash' | null;
+type Editor = { type: 'memo' | 'category'; node?: Node; parentId: string | null } | null;
+const presets: { key: DuePreset; label: string }[] = [{ key: 'none', label: '期限なし' }, { key: 'today', label: '今日中' }, { key: 'morning', label: '午前中' }, { key: 'afternoon', label: '午後まで' }, { key: 'thisWeek', label: '今週中' }, { key: 'thisMonth', label: '今月中' }, { key: 'thisYear', label: '今年中' }, { key: 'custom', label: '日時指定' }];
 
 export default function HomeScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>TaskMemoApp</Text>
-      <Text style={styles.subtitle}>タスク・メモ管理アプリ</Text>
-    </View>
-  );
+  const [nodes, setNodes] = useState<Node[]>(mockNodes); const [ready, setReady] = useState(false);
+  const [panel, setPanel] = useState<Panel>(null); const [editor, setEditor] = useState<Editor>(null); const [menuNode, setMenuNode] = useState<Node | null>(null); const [createOpen, setCreateOpen] = useState(false); const [createParentId, setCreateParentId] = useState<string | null>(null); const [movingNode, setMovingNode] = useState<Node | null>(null);
+  useEffect(() => { loadNodes(mockNodes).then(setNodes).catch(() => Alert.alert('読み込みエラー', '保存データを読み込めませんでした。')).finally(() => setReady(true)); }, []);
+  useEffect(() => { if (ready) saveNodes(nodes).catch(() => Alert.alert('保存エラー', '端末への保存に失敗しました。')); }, [nodes, ready]);
+  const parentName = (id: string | null) => id ? nodes.find((n) => n.id === id)?.title ?? 'ルート' : 'ルート';
+  const apply = (operation: (current: Node[]) => Node[]) => { try { setNodes(operation); } catch (error) { Alert.alert('操作できません', error instanceof Error ? error.message : '不明なエラー'); } };
+  const openCreate = (type: 'memo' | 'category') => { setCreateOpen(false); setMenuNode(null); setEditor({ type, parentId: createParentId }); };
+  const onDrop = (moving: Node, target: Node | null) => apply((current) => target?.type === 'category' ? moveNode(current, moving.id, target.id) : moveNode(current, moving.id, target?.parentId ?? null, target?.id));
+  const askDelete = (node: Node) => { setMenuNode(null); if (node.type === 'memo') Alert.alert('Memoを削除', `「${node.title}」をゴミ箱へ移動します。`, [{ text: 'キャンセル', style: 'cancel' }, { text: '削除', style: 'destructive', onPress: () => apply((n) => softDeleteNode(n, node.id)) }]); else Alert.alert('Categoryを削除', '子の扱いを選択してください。', [{ text: 'キャンセル', style: 'cancel' }, { text: 'Categoryのみ削除', onPress: () => apply((n) => softDeleteNode(n, node.id, false)) }, { text: '子ごと削除', style: 'destructive', onPress: () => apply((n) => softDeleteNode(n, node.id, true)) }]); };
+  return <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}><StatusBar style="dark" />
+    <View style={styles.header}><View><Text style={styles.title}>TaskMemo</Text><Text style={styles.subtitle}>メモとタスク</Text></View><View style={styles.headerActions}><TopButton label="完了" onPress={() => setPanel('completed')} /><TopButton label="ゴミ箱" onPress={() => setPanel('trash')} /></View></View>
+    <View style={styles.tree} pointerEvents={ready ? 'auto' : 'none'}><NodeTree nodes={nodes} onEdit={(node) => setEditor({ type: node.type, node, parentId: node.parentId })} onMenu={setMenuNode} onDrop={onDrop} /></View>
+    <Pressable disabled={!ready} style={[styles.fab, !ready && { opacity: 0.4 }]} onPress={() => { setCreateParentId(null); setCreateOpen(true); }} accessibilityLabel="新規作成"><Text style={styles.fabText}>＋</Text></Pressable>
+    <Sheet visible={createOpen} title="新規作成" onClose={() => setCreateOpen(false)}><Action label="Memo" onPress={() => openCreate('memo')} /><Action label="Category" onPress={() => openCreate('category')} /></Sheet>
+    <Sheet visible={!!menuNode} title={menuNode?.title ?? ''} onClose={() => setMenuNode(null)}>
+      <Action label="編集" onPress={() => { if (menuNode) setEditor({ type: menuNode.type, node: menuNode, parentId: menuNode.parentId }); setMenuNode(null); }} />
+      {menuNode?.type === 'memo' ? <Action label="完了" onPress={() => { apply((n) => completeMemo(n, menuNode.id)); setMenuNode(null); }} /> : <Action label="子を追加" onPress={() => { if (menuNode) setCreateParentId(menuNode.id); setMenuNode(null); setCreateOpen(true); }} />}
+      <Action label="移動" onPress={() => { setMovingNode(menuNode); setMenuNode(null); }} /><Action label="削除" danger onPress={() => menuNode && askDelete(menuNode)} />
+    </Sheet>
+    <EditorModal key={editor?.node?.id ?? `${editor?.type}-${editor?.parentId ?? 'root'}`} editor={editor} nodes={nodes} onClose={() => setEditor(null)} onSave={(draft) => { apply((current) => editor?.node ? updateNode(current, editor.node.id, draft) : createNode(current, editor!.type, draft)); setEditor(null); }} />
+    <ListPanel type={panel} nodes={nodes} parentName={parentName} onClose={() => setPanel(null)} onRestore={(id, completed) => apply((n) => completed ? restoreMemo(n, id) : restoreNode(n, id))} onHardDelete={(id) => Alert.alert('完全に削除', '完全に削除すると元に戻せません。', [{ text: 'キャンセル', style: 'cancel' }, { text: '完全に削除', style: 'destructive', onPress: () => apply((n) => hardDeleteNode(n, id)) }])} onReset={() => Alert.alert('データを初期化', '端末の変更を破棄して初期データへ戻します。', [{ text: 'キャンセル', style: 'cancel' }, { text: '初期化', style: 'destructive', onPress: async () => { await resetNodes(); setNodes(normalizeLegacyRanks(mockNodes)); setPanel(null); } }])} />
+    <MovePanel node={movingNode} nodes={nodes} onClose={() => setMovingNode(null)} onMove={(parentId) => { if (movingNode) apply((n) => moveNode(n, movingNode.id, parentId)); setMovingNode(null); }} />
+  </SafeAreaView>;
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    backgroundColor: '#ffffff',
-  },
-  title: {
-    color: '#111827',
-    fontSize: 32,
-    fontWeight: '700',
-  },
-  subtitle: {
-    marginTop: 12,
-    color: '#4b5563',
-    fontSize: 18,
-  },
-});
+function TopButton({ label, onPress }: { label: string; onPress: () => void }) { return <Pressable onPress={onPress} style={styles.topButton}><Text style={styles.topText}>{label}</Text></Pressable>; }
+function Action({ label, onPress, danger }: { label: string; onPress: () => void; danger?: boolean }) { return <Pressable onPress={onPress} style={styles.action}><Text style={[styles.actionText, danger && styles.danger]}>{label}</Text></Pressable>; }
+function Sheet({ visible, title, onClose, children }: { visible: boolean; title: string; onClose: () => void; children: React.ReactNode }) { return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}><Pressable style={styles.backdrop} onPress={onClose}><Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}><Text style={styles.sheetTitle}>{title}</Text>{children}<Action label="キャンセル" onPress={onClose} /></Pressable></Pressable></Modal>; }
+
+function EditorModal({ editor, nodes, onClose, onSave }: { editor: Editor; nodes: Node[]; onClose: () => void; onSave: (draft: { title: string; parentId: string | null; body?: string; duePreset?: DuePreset; dueAt?: Date | null; status?: 'active' | 'completed' }) => void }) {
+  const memo = editor?.node?.type === 'memo' ? editor.node : null; const [title, setTitle] = useState(editor?.node?.title ?? ''); const [body, setBody] = useState(memo?.body ?? ''); const [preset, setPreset] = useState<DuePreset>(memo?.duePreset ?? 'today'); const [custom, setCustom] = useState(() => formatDateTimeInput(memo?.dueAt ?? new Date())); const [status, setStatus] = useState<'active' | 'completed'>(memo?.status ?? 'active');
+  const save = () => { if (!editor || !title.trim()) return Alert.alert('入力エラー', 'タイトルは必須です。'); let dueAt = dueDateForPreset(preset); if (preset === 'custom') { dueAt = parseLocalDateTime(custom); if (!dueAt) return Alert.alert('入力エラー', '日時を YYYY/MM/DD HH:mm 形式で入力してください。'); } onSave({ title, parentId: editor.parentId, body, duePreset: preset, dueAt, status }); };
+  return <Modal visible={!!editor} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.modalPage}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.form}><Text style={styles.modalTitle}>{editor?.node ? '編集' : '新規作成'}</Text><Text style={styles.label}>{editor?.type === 'memo' ? 'タイトル' : 'Category名'} *</Text><TextInput value={title} onChangeText={setTitle} style={styles.input} autoFocus />{editor?.type === 'memo' && <><Text style={styles.label}>自由記述</Text><TextInput value={body} onChangeText={setBody} style={[styles.input, styles.multiline]} multiline textAlignVertical="top" /><Text style={styles.label}>期限</Text><View style={styles.chips}>{presets.map((item) => <Pressable key={item.key} onPress={() => setPreset(item.key)} style={[styles.chip, preset === item.key && styles.chipOn]}><Text style={preset === item.key && styles.chipTextOn}>{item.label}</Text></Pressable>)}</View>{preset === 'custom' && <DateTimeField value={custom} onChange={setCustom} />}<Text style={styles.label}>ステータス</Text><View style={styles.chips}><Pressable onPress={() => setStatus('active')} style={[styles.chip, status === 'active' && styles.chipOn]}><Text>未完了</Text></Pressable><Pressable onPress={() => setStatus('completed')} style={[styles.chip, status === 'completed' && styles.chipOn]}><Text>完了</Text></Pressable></View></>}<View style={styles.formButtons}><Pressable onPress={onClose} style={styles.secondary}><Text>キャンセル</Text></Pressable><Pressable onPress={save} style={styles.primary}><Text style={styles.primaryText}>保存</Text></Pressable></View></ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>;
+}
+
+function ListPanel({ type, nodes, parentName, onClose, onRestore, onHardDelete, onReset }: { type: Panel; nodes: Node[]; parentName: (id: string | null) => string; onClose: () => void; onRestore: (id: string, completed: boolean) => void; onHardDelete: (id: string) => void; onReset: () => void }) {
+  const items = useMemo(() => type === 'completed' ? completedMemos(nodes) : nodes.filter((n) => n.deletedAt).sort((a, b) => b.deletedAt!.getTime() - a.deletedAt!.getTime()), [type, nodes]);
+  return <Modal visible={!!type} animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.modalPage}><View style={styles.panelHeader}><Text style={styles.modalTitle}>{type === 'completed' ? '完了一覧' : 'ゴミ箱'}</Text><Pressable onPress={onClose} style={styles.close}><Text>閉じる</Text></Pressable></View><ScrollView contentContainerStyle={styles.panelList}>{items.length === 0 && <Text style={styles.empty}>項目はありません</Text>}{items.map((node) => <View key={node.id} style={styles.panelCard}><Text style={styles.cardTitle}>{node.title}</Text><Text style={styles.meta}>{node.type === 'memo' ? 'Memo' : 'Category'} · 元: {parentName(node.parentId)}</Text><Text style={styles.meta}>{(type === 'completed' && node.type === 'memo' ? node.completedAt : node.deletedAt)?.toLocaleString()}</Text><View style={styles.cardActions}><Pressable onPress={() => onRestore(node.id, type === 'completed')} style={styles.smallButton}><Text>{type === 'completed' ? '未完了へ戻す' : '復元'}</Text></Pressable>{type === 'trash' && <Pressable onPress={() => onHardDelete(node.id)} style={styles.smallButton}><Text style={styles.danger}>完全削除</Text></Pressable>}</View></View>)}</ScrollView>{type === 'trash' && <Pressable onPress={onReset} style={styles.reset}><Text style={styles.danger}>データを初期化</Text></Pressable>}</SafeAreaView></Modal>;
+}
+
+function MovePanel({ node, nodes, onClose, onMove }: { node: Node | null; nodes: Node[]; onClose: () => void; onMove: (parentId: string | null) => void }) { const categories = nodes.filter((item) => item.type === 'category' && item.deletedAt === null && item.id !== node?.id); return <Modal visible={!!node} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.modalPage}><View style={styles.panelHeader}><Text style={styles.modalTitle}>移動先</Text><Pressable onPress={onClose} style={styles.close}><Text>閉じる</Text></Pressable></View><ScrollView contentContainerStyle={styles.panelList}><Action label="ルート" onPress={() => onMove(null)} />{categories.map((category) => <Action key={category.id} label={category.title} onPress={() => onMove(category.id)} />)}</ScrollView></SafeAreaView></Modal>; }
+
+const styles = StyleSheet.create({ safeArea: { flex: 1, backgroundColor: '#f8f9fb' }, tree: { flex: 1 }, header: { paddingHorizontal: 20, paddingVertical: 13, backgroundColor: '#fff', borderBottomColor: '#e9ebef', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, title: { color: '#18202b', fontSize: 27, fontWeight: '700' }, subtitle: { marginTop: 2, color: '#7a818c', fontSize: 12 }, headerActions: { flexDirection: 'row', gap: 6 }, topButton: { minHeight: 42, paddingHorizontal: 11, justifyContent: 'center', borderRadius: 10, backgroundColor: '#f0f2f5' }, topText: { color: '#46515e', fontSize: 13, fontWeight: '600' }, fab: { position: 'absolute', right: 22, bottom: 24, width: 58, height: 58, alignItems: 'center', justifyContent: 'center', borderRadius: 29, backgroundColor: '#27394c', elevation: 6, shadowOpacity: .2, shadowRadius: 8 }, fabText: { color: '#fff', fontSize: 34, fontWeight: '300', marginTop: -3 }, backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(20,25,30,.35)' }, sheet: { padding: 18, paddingBottom: 28, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#fff' }, sheetTitle: { marginBottom: 10, color: '#242d38', fontSize: 19, fontWeight: '700' }, action: { minHeight: 50, justifyContent: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7ea' }, actionText: { color: '#29343f', fontSize: 16 }, danger: { color: '#b63838' }, modalPage: { flex: 1, backgroundColor: '#f8f9fb' }, form: { padding: 22, paddingBottom: 50 }, modalTitle: { color: '#1e2833', fontSize: 25, fontWeight: '700' }, label: { marginTop: 20, marginBottom: 7, color: '#4f5965', fontSize: 13, fontWeight: '700' }, input: { minHeight: 48, paddingHorizontal: 13, borderWidth: 1, borderColor: '#d9dde3', borderRadius: 11, backgroundColor: '#fff', fontSize: 16 }, multiline: { minHeight: 130, paddingTop: 12 }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { minHeight: 40, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#e9edf1' }, chipOn: { backgroundColor: '#aebdcb' }, chipTextOn: { fontWeight: '700' }, formButtons: { marginTop: 30, flexDirection: 'row', gap: 12 }, secondary: { flex: 1, minHeight: 50, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#e8ebef' }, primary: { flex: 1, minHeight: 50, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#27394c' }, primaryText: { color: '#fff', fontWeight: '700' }, panelHeader: { padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff' }, close: { minHeight: 44, minWidth: 56, justifyContent: 'center', alignItems: 'center' }, panelList: { padding: 16, paddingBottom: 80 }, empty: { padding: 30, textAlign: 'center', color: '#7e8791' }, panelCard: { marginBottom: 10, padding: 15, borderRadius: 12, backgroundColor: '#fff' }, cardTitle: { color: '#27313d', fontSize: 16, fontWeight: '700' }, meta: { marginTop: 4, color: '#7a838e', fontSize: 12 }, cardActions: { marginTop: 12, flexDirection: 'row', gap: 10 }, smallButton: { minHeight: 40, paddingHorizontal: 12, justifyContent: 'center', borderRadius: 9, backgroundColor: '#edf0f3' }, reset: { position: 'absolute', bottom: 18, alignSelf: 'center', padding: 14, borderRadius: 10, backgroundColor: '#fff' } });

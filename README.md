@@ -60,6 +60,8 @@ Windows上でiOSネイティブビルドはできません。iPhone実機のExpo
 - `src/constants`: 共通定数
 - `docs`: 設計・運用ドキュメント
 
+詳細なドメイン仕様は [TaskMemo 設計書](docs/DESIGN.md) を参照してください。
+
 ## Environment Variables
 
 ローカル設定は `.env.example` を `.env.local` にコピーして使用します。`.env` および `.env.*` はGit管理対象外です。クライアントから参照する値は `EXPO_PUBLIC_` 接頭辞が必要ですが、これは秘密を保護する仕組みではありません。秘密鍵や管理者用認証情報はアプリへ含めず、サーバー側で管理してください。
