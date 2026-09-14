@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 
 import type { Node } from '@/models/node';
+import { compareNodes } from '@/domain/nodeOperations';
 
 const STORAGE_KEY = '@taskmemo/nodes/v1';
 const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'dueAt', 'completedAt'] as const;
@@ -10,7 +11,7 @@ export function normalizeLegacyRanks(nodes: Node[]) {
   const parents = new Set(nodes.map((node) => node.parentId));
   let result = nodes;
   for (const parentId of parents) {
-    const siblings = result.filter((node) => node.parentId === parentId).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+    const siblings = result.filter((node) => node.parentId === parentId).sort(compareNodes);
     const valid = siblings.every((node, index) => {
       if (index > 0 && node.sortKey === siblings[index - 1].sortKey) return false;
       try { generateKeyBetween(node.sortKey, null); return true; } catch { return false; }

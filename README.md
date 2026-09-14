@@ -48,6 +48,40 @@ npm run web
 
 Windows上でiOSネイティブビルドはできません。iPhone実機のExpo GoまたはEAS Buildを利用してください。
 
+## Web / PWA
+
+開発サーバーは `npm run web`、配布用の静的ファイルは `npm run web:export` で生成します。成果物は `dist` に出力され、HTTPS対応の静的ホスティングへそのまま配置できます。データはブラウザ内に保存されるため、ブラウザのサイトデータを消す前や端末移行前には「設定 > データを書き出す」でバックアップしてください。
+
+iPhoneでは公開先をSafariで開き、共有ボタンから「ホーム画面に追加」を選択します。追加後はホーム画面の `TaskMemo` アイコンからstandalone表示で起動できます。初回表示後はアプリ本体がキャッシュされ、オフラインでも再起動できます（更新反映には再読み込みが必要な場合があります）。Safariとホーム画面版は同じ公開URLを使い、プライベートブラウズは日常データの保存先として使用しないでください。
+
+Web版では短冊を上下にスワイプしてスクロールします。MemoやCategoryを移動するときは、短冊を少し長めに押してつかみ、そのまま移動先までドラッグしてください。
+
+実機確認では、縦向きの狭い画面で以下を確認してください。
+
+- Memo/Categoryの作成・編集・完了・移動・削除・復元
+- 期限一覧とツリーのスクロール、長押しドラッグ
+- 入力中のキーボード表示と、保存/キャンセルボタンへの到達
+- 設定変更、JSONバックアップの書き出し/読み込み
+- Safari再読み込み、ホーム画面版の終了・再起動後のデータ保持
+- 機内モードでホーム画面版を再起動できること
+
+## iPhone単体で使う（EAS Build）
+
+`preview` はJavaScriptをアプリに同梱する内部配布ビルドです。Expo GoやMetroを起動せずに、登録済みのiPhone単体で利用できます。`development` は開発クライアント用であり、通常の開発時はMetroへ接続します。
+
+初回のみ、Expoアカウントへのログイン、EASプロジェクトの作成、iPhoneのUDID登録を行います。
+
+```powershell
+npx eas-cli@latest login
+npx eas-cli@latest init
+npx eas-cli@latest device:create
+npx eas-cli@latest build --platform ios --profile preview
+```
+
+Apple Developer Programへ加入したApple Accountが必要です。初回ビルド時はEAS CLIの案内に従ってApple Accountへログインし、Distribution CertificateとAd Hoc Provisioning ProfileをEASに自動管理させます。ビルド完了後、EASのビルドページをiPhoneで開き、Installからインストールしてください。iOS 16以降では、インストール後に「設定 > プライバシーとセキュリティ > デベロッパモード」を有効にする必要があります。
+
+新しいiPhoneを追加した場合は `device:create` 後に再度 `preview` をビルドしてください。既存ビルドを再署名する場合は `npx eas-cli@latest build:resign` も利用できます。
+
 ## Project Structure
 
 - `src/app`: Expo Routerの画面とレイアウト

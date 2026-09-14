@@ -1,19 +1,77 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import DraggableFlatList, { type DragEndParams, ScaleDecorator } from 'react-native-draggable-flatlist';
-import { compareNodes, visibleNodes } from '@/domain/nodeOperations';
+import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, type VisibleTreeRow } from '@/domain/treeView';
+import { dropCandidateFor, resolveDropCandidate, type DropCandidate } from '@/domain/treeDrop';
 import type { Node } from '@/models/node';
 import { CategoryRow } from '@/components/CategoryRow';
 import { MemoRow } from '@/components/MemoRow';
+import { measureAllTreeRows, TreeRowDiagnostics } from '@/components/TreeRowDiagnostics';
+import { beginTreeDragTrace, nextTreeMountId, nodesRevision, summarizeNodes, summarizeRows, treeDiagnosticLog } from '@/components/treeDiagnostics';
+import { useAppTheme, type ThemeColors } from '@/theme/theme';
+import { WebSortableScrollList } from '@/components/WebSortableScrollList';
 
-type VisibleRow = { node: Node; depth: number };
-type Props = { nodes: Node[]; onEdit: (node: Node) => void; onMenu: (node: Node) => void; onDrop: (node: Node, target: Node | null) => void };
-const INITIAL_EXPANDED_CATEGORY_IDS = ['personal', 'books', 'technical-books'];
-function flatten(nodes: Node[], expanded: Set<string>) { const available = visibleNodes(nodes); const byParent = new Map<string | null, Node[]>(); for (const node of available) byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]); for (const siblings of byParent.values()) siblings.sort(compareNodes); const rows: VisibleRow[] = []; const walk = (parentId: string | null, depth: number) => { for (const node of byParent.get(parentId) ?? []) { rows.push({ node, depth }); if (node.type === 'category' && expanded.has(node.id)) walk(node.id, depth + 1); } }; walk(null, 0); return rows; }
-export function NodeTree({ nodes, onEdit, onMenu, onDrop }: Props) {
+export type VisibleRow = VisibleTreeRow;
+export type { DropCandidate } from '@/domain/treeDrop';
+type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; showCompleted: boolean; onShowCompletedChange: (value: boolean) => void; onAddMemo: (parentId: string | null) => void; onEdit: (node: Node) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void };
+const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
+
+export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, showCompleted, onShowCompletedChange, onAddMemo, onEdit, onComplete, onMenu, onDrop }: Props) {
+  const styles = createStyles(useAppTheme().colors);
+  const [mountId] = useState(nextTreeMountId);
+  const viewportRef = useRef<View>(null); const scrollOffsetRef = useRef(0);
   const [renderedAt] = useState(() => Date.now());
   const [expanded, setExpanded] = useState(() => new Set(INITIAL_EXPANDED_CATEGORY_IDS));
-  const rows = useMemo(() => flatten(nodes, expanded), [nodes, expanded]);
+  const [candidate, setCandidate] = useState<DropCandidate | null>(null);
+  const movingId = useRef<string | null>(null);
+  const candidateRef = useRef<DropCandidate | null>(null);
+  const rows = useMemo(() => flattenVisibleNodes(nodes, expanded, showCompleted), [nodes, expanded, showCompleted]);
+  const categoryIds = useMemo(() => [UNASSIGNED_GROUP_ID, ...nodes.filter((node) => node.type === 'category' && node.deletedAt === null).map((node) => node.id)], [nodes]);
+  const orderedKeys = useMemo(() => rows.map((row) => row.node.id), [rows]);
+  const revision = useMemo(() => nodesRevision(nodes), [nodes]);
+  useEffect(() => { treeDiagnosticLog('tree-render', { mountId, nodesRevision: revision, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys, expanded: [...expanded], showCompleted }); }, [expanded, mountId, nodes, orderedKeys, revision, rows, showCompleted]);
+  useEffect(() => { treeDiagnosticLog('tree-mount', { mountId }); return () => treeDiagnosticLog('tree-unmount', { mountId }); }, [mountId]);
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  const drop = ({ data, from, to }: DragEndParams<VisibleRow>) => { if (from === to) return; onDrop(rows[from].node, data[to]?.node ?? null); };
-  return <DraggableFlatList data={rows} keyExtractor={(row) => row.node.id} onDragEnd={drop} activationDistance={12} contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 110 }} renderItem={({ item, drag, isActive }) => <ScaleDecorator activeScale={1.025}>{item.node.type === 'category' ? <CategoryRow category={item.node} depth={item.depth} isExpanded={expanded.has(item.node.id)} isActive={isActive} onToggle={() => toggle(item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={drag} /> : <MemoRow memo={item.node} depth={item.depth} now={renderedAt} isActive={isActive} onPress={() => onEdit(item.node)} onMenu={() => onMenu(item.node)} onLongPress={drag} />}</ScaleDecorator>} />;
+  const updateCandidate = (index: number, data = rows) => { const target = data[index]?.node; const next = movingId.current ? dropCandidateFor(nodes, movingId.current, target) : null; candidateRef.current = next; setCandidate(next); treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next }); };
+  const drop = ({ data, from, to }: DragEndParams<VisibleRow>) => {
+    const id = movingId.current;
+    // The returned array already contains the moving row at `to`, so it is not
+    // a reliable target. Keep the ID-based candidate captured during hovering.
+    const hoverCandidate = candidateRef.current;
+    const finalCandidate = id && hoverCandidate ? resolveDropCandidate(nodes, id, hoverCandidate, data) : null;
+    const movingBefore = nodes.find((node) => node.id === id);
+    treeDiagnosticLog('drag-end-before-state', { from, to, movingId: id, hoverCandidate, candidate: finalCandidate, movingBefore: movingBefore ? { parentId: movingBefore.parentId, sortKey: movingBefore.sortKey } : null, nodesRevision: revision, libraryDataKeys: data.map((row) => row.node.id), nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows) });
+    measureAllTreeRows('drop');
+    movingId.current = null; candidateRef.current = null; setCandidate(null);
+    if (id && finalCandidate) onDrop(id, finalCandidate);
+  };
+  if (Platform.OS === 'web') return <View style={styles.container}>
+    <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable><Pressable style={styles.tool} onPress={() => onShowCompletedChange(!showCompleted)} accessibilityRole="switch" accessibilityState={{ checked: showCompleted }}><Text style={styles.toolText}>{showCompleted ? '完了を隠す' : '完了を表示'}</Text></Pressable></View>
+    <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !row.virtual}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 110 }}
+      onHover={(active, target) => { movingId.current = active.node.id; const next = dropCandidateFor(nodes, active.node.id, target.node); candidateRef.current = next; setCandidate(next); }}
+      onDrop={(active, target) => { const next = dropCandidateFor(nodes, active.node.id, target.node); candidateRef.current = null; setCandidate(null); if (next) onDrop(active.node.id, next); }}
+      renderItem={(item, isActive) => {
+        const isTarget = candidate?.targetId === item.node.id; const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
+        return item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} isExpanded={expanded.has(item.node.id)} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} onPress={() => onEdit(item.node)} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} />;
+      }} />
+  </View>;
+  return <View style={styles.container}>
+    <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable><Pressable style={styles.tool} onPress={() => onShowCompletedChange(!showCompleted)} accessibilityRole="switch" accessibilityState={{ checked: showCompleted }}><Text style={styles.toolText}>{showCompleted ? '完了を隠す' : '完了を表示'}</Text></Pressable></View>
+    <View ref={viewportRef} collapsable={false} style={styles.listViewport}>
+      <DraggableFlatList data={rows} keyExtractor={(row) => row.node.id}
+        onDragBegin={(index) => { movingId.current = rows[index]?.virtual ? null : rows[index]?.node.id ?? null; if (movingId.current) beginTreeDragTrace(movingId.current); treeDiagnosticLog('drag-begin', { mountId, index, movingId: movingId.current, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys }); updateCandidate(index); }}
+        onPlaceholderIndexChange={updateCandidate} onRelease={(index) => { treeDiagnosticLog('drag-release', { index, movingId: movingId.current, candidate: candidateRef.current }); measureAllTreeRows('release'); }} onDragEnd={drop}
+        onScrollOffsetChange={(offset) => { scrollOffsetRef.current = offset; }} activationDistance={16} autoscrollThreshold={70} autoscrollSpeed={85}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 110 }} renderItem={({ item, drag, isActive, getIndex }) => {
+    const isTarget = candidate?.targetId === item.node.id;
+    const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
+    return <TreeRowDiagnostics rowKey={item.node.id} index={getIndex() ?? -1} orderedKeys={orderedKeys} viewportRef={viewportRef} scrollOffsetRef={scrollOffsetRef} revision={revision}>
+      <ScaleDecorator activeScale={1.025}>{item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} isExpanded={expanded.has(item.node.id)} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={item.virtual ? () => {} : drag} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} onPress={() => onEdit(item.node)} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={drag} />}</ScaleDecorator>
+    </TreeRowDiagnostics>;
+      }} />
+    </View>
+  </View>;
 }
+
+const createStyles = (colors: ThemeColors) => StyleSheet.create({ container: { flex: 1 }, listViewport: { flex: 1 }, toolbar: { minHeight: 38, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', paddingHorizontal: 12, gap: 4 }, tool: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 8, borderRadius: 8, backgroundColor: colors.surfaceAlt }, toolText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' } });

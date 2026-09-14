@@ -1,0 +1,79 @@
+diff --git a/node_modules/react-native-draggable-flatlist/lib/module/components/CellRendererComponent.js b/node_modules/react-native-draggable-flatlist/lib/module/components/CellRendererComponent.js
+index 7e32214..761d08f 100644
+--- a/node_modules/react-native-draggable-flatlist/lib/module/components/CellRendererComponent.js
++++ b/node_modules/react-native-draggable-flatlist/lib/module/components/CellRendererComponent.js
+@@ -39,7 +39,6 @@ function CellRendererComponent(props) {
+   const key = keyExtractor(item, index);
+   const offset = useSharedValue(-1);
+   const size = useSharedValue(-1);
+-  const heldTanslate = useSharedValue(0);
+   const translate = useCellTranslate({
+     cellOffset: offset,
+     cellSize: size,
+@@ -47,15 +46,9 @@ function CellRendererComponent(props) {
+   });
+   const isActive = activeKey === key;
+   const animStyle = useAnimatedStyle(() => {
+-    // When activeKey becomes null at the end of a drag and the list reorders,
+-    // the animated style may apply before the next paint, causing a flicker.
+-    // Solution is to hold over the last animated value until the next onLayout.
+-    // (Not required in web)
+-    if (translate.value && !isWeb) {
+-      heldTanslate.value = translate.value;
+-    }
+-
+-    const t = activeKey ? translate.value : heldTanslate.value;
++    // Reset spacer translation as soon as a drag ends. Fabric may not emit a
++    // later onLayout when a keyed cell only changes list position.
++    const t = activeKey ? translate.value : 0;
+     return {
+       transform: [horizontalAnim.value ? {
+         translateX: t
+@@ -97,7 +90,6 @@ function CellRendererComponent(props) {
+     }
+   });
+   const onCellLayout = useStableCallback(e => {
+-    heldTanslate.value = 0;
+     updateCellMeasurements();
+     if (onLayout && e) onLayout(e);
+   });
+diff --git a/node_modules/react-native-draggable-flatlist/src/components/CellRendererComponent.tsx b/node_modules/react-native-draggable-flatlist/src/components/CellRendererComponent.tsx
+index e4e861a..49c9c3e 100644
+--- a/node_modules/react-native-draggable-flatlist/src/components/CellRendererComponent.tsx
++++ b/node_modules/react-native-draggable-flatlist/src/components/CellRendererComponent.tsx
+@@ -45,7 +45,6 @@ function CellRendererComponent<T>(props: Props<T>) {
+   const key = keyExtractor(item, index);
+   const offset = useSharedValue(-1);
+   const size = useSharedValue(-1);
+-  const heldTanslate = useSharedValue(0);
+ 
+   const translate = useCellTranslate({
+     cellOffset: offset,
+@@ -56,14 +55,11 @@ function CellRendererComponent<T>(props: Props<T>) {
+   const isActive = activeKey === key;
+ 
+   const animStyle = useAnimatedStyle(() => {
+-    // When activeKey becomes null at the end of a drag and the list reorders,
+-    // the animated style may apply before the next paint, causing a flicker.
+-    // Solution is to hold over the last animated value until the next onLayout.
+-    // (Not required in web)
+-    if (translate.value && !isWeb) {
+-      heldTanslate.value = translate.value;
+-    }
+-    const t = activeKey ? translate.value : heldTanslate.value;
++    // A completed drag must never leave the previous spacer translation on a
++    // keyed cell. Fabric does not guarantee another onLayout when only the
++    // cell's list position changes, so waiting for onLayout can freeze the
++    // dragged cell and displaced siblings at their pre-drop coordinates.
++    const t = activeKey ? translate.value : 0;
+     return {
+       transform: [horizontalAnim.value ? { translateX: t } : { translateY: t }],
+     };
+@@ -99,7 +95,6 @@ function CellRendererComponent<T>(props: Props<T>) {
+   });
+ 
+   const onCellLayout = useStableCallback((e?: LayoutChangeEvent) => {
+-    heldTanslate.value = 0;
+     updateCellMeasurements();
+     if (onLayout && e) onLayout(e);
+   });

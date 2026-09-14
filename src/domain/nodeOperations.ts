@@ -11,8 +11,9 @@ export type NodeDraft = {
   status?: 'active' | 'completed';
 };
 
+export const compareSortKeys = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 export const compareNodes = (a: Node, b: Node) =>
-  a.sortKey.localeCompare(b.sortKey) || a.id.localeCompare(b.id);
+  compareSortKeys(a.sortKey, b.sortKey) || a.id.localeCompare(b.id);
 
 export function siblingsOf(nodes: Node[], parentId: string | null, excludedId?: string) {
   return nodes
@@ -31,16 +32,30 @@ function assertParent(nodes: Node[], parentId: string | null) {
   if (!parent || parent.type !== 'category') throw new Error('移動先のCategoryが見つかりません。');
 }
 
-export function isDescendant(nodes: Node[], ancestorId: string, possibleDescendantId: string) {
-  let current = nodes.find((node) => node.id === possibleDescendantId);
+export function canMoveNode(nodes: Node[], nodeId: string, destinationParentId: string | null) {
+  const moving = nodes.find((node) => node.id === nodeId && node.deletedAt === null);
+  if (!moving) return false;
+  if (destinationParentId === null) return true;
+  if (destinationParentId === nodeId) return false;
+
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const destination = byId.get(destinationParentId);
+  if (!destination || destination.type !== 'category' || destination.deletedAt !== null) return false;
+
+  let current: Node | undefined = destination;
   const visited = new Set<string>();
-  while (current?.parentId) {
-    if (current.parentId === ancestorId) return true;
-    if (visited.has(current.parentId)) return true;
-    visited.add(current.parentId);
-    current = nodes.find((node) => node.id === current?.parentId);
+  while (current) {
+    if (current.id === nodeId || visited.has(current.id)) return false;
+    visited.add(current.id);
+    if (current.parentId === null) return true;
+    current = byId.get(current.parentId);
+    if (!current) return false;
   }
   return false;
+}
+
+export function isDescendant(nodes: Node[], ancestorId: string, possibleDescendantId: string) {
+  return !canMoveNode(nodes, ancestorId, possibleDescendantId);
 }
 
 export function createNode(
@@ -60,9 +75,20 @@ export function createNode(
   const node: Node = type === 'category'
     ? ({ ...base, type: 'category' } satisfies CategoryNode)
     : ({ ...base, type: 'memo', body: draft.body ?? '', dueAt: draft.dueAt ?? null,
-        duePreset: draft.duePreset ?? 'none', status: draft.status ?? 'active',
-        completedAt: draft.status === 'completed' ? now : null } satisfies MemoNode);
+        duePreset: draft.duePreset ?? 'none', status: 'active',
+        completedAt: null } satisfies MemoNode);
   return [...nodes, node];
+}
+
+export function duplicateMemo(nodes: Node[], sourceId: string, now = new Date(), id = `memo-${now.getTime()}-${Math.random().toString(36).slice(2, 7)}`) {
+  const source = nodes.find((node): node is MemoNode => node.id === sourceId && node.type === 'memo' && node.deletedAt === null);
+  if (!source) throw new Error('複製するMemoが見つかりません。');
+  const siblings = siblingsOf(nodes, source.parentId);
+  const sourceIndex = siblings.findIndex((node) => node.id === source.id);
+  const next = siblings[sourceIndex + 1];
+  const sortKey = generateKeyBetween(source.sortKey, next?.sortKey ?? null);
+  const duplicate: MemoNode = { ...source, id, sortKey, dueAt: source.dueAt ? new Date(source.dueAt) : null, createdAt: now, updatedAt: now, deletedAt: null, deletionBatchId: null, status: 'active', completedAt: null };
+  return [...nodes, duplicate];
 }
 
 export function updateNode(nodes: Node[], id: string, draft: Partial<NodeDraft>, now = new Date()) {
@@ -92,18 +118,29 @@ export function moveNode(
 ) {
   const moving = nodes.find((node) => node.id === id);
   if (!moving) throw new Error('移動するNodeが見つかりません。');
-  assertParent(nodes, parentId);
-  if (moving.type === 'category' && (parentId === id || (parentId && isDescendant(nodes, id, parentId)))) {
-    throw new Error('Categoryを自分自身または子孫へ移動できません。');
-  }
+  if (!canMoveNode(nodes, id, parentId)) throw new Error('この場所には移動できません。');
   const siblings = siblingsOf(nodes, parentId, id);
-  const index = beforeId ? siblings.findIndex((node) => node.id === beforeId) : siblings.length;
-  const insertion = index < 0 ? siblings.length : index;
+  const index = beforeId === undefined ? siblings.length : siblings.findIndex((node) => node.id === beforeId);
+  if (beforeId !== undefined && index < 0) throw new Error('挿入位置が見つかりません。');
+  if (moving.parentId === parentId) {
+    const currentSiblings = siblingsOf(nodes, parentId);
+    const currentIndex = currentSiblings.findIndex((node) => node.id === id);
+    const nextId = currentSiblings[currentIndex + 1]?.id;
+    if ((beforeId === undefined && currentIndex === currentSiblings.length - 1) || beforeId === nextId) return nodes;
+  }
+  const insertion = index;
   const sortKey = generateKeyBetween(
     insertion > 0 ? siblings[insertion - 1].sortKey : null,
     insertion < siblings.length ? siblings[insertion].sortKey : null,
   );
   return nodes.map((node) => node.id === id ? { ...node, parentId, sortKey, updatedAt: now } : node);
+}
+
+export function tryMoveNode(
+  nodes: Node[], id: string, parentId: string | null, beforeId?: string, now = new Date(),
+) {
+  if (!canMoveNode(nodes, id, parentId)) return nodes;
+  try { return moveNode(nodes, id, parentId, beforeId, now); } catch { return nodes; }
 }
 
 export const reorderNode = moveNode;
@@ -145,7 +182,7 @@ export function deleteCategoryOnly(nodes: Node[], id: string, now = new Date()) 
   if (!category) return nodes;
   const children = siblingsOf(nodes, id);
   const outer = siblingsOf(nodes, category.parentId, id);
-  const position = outer.findIndex((node) => node.sortKey.localeCompare(category.sortKey) > 0);
+  const position = outer.findIndex((node) => compareSortKeys(node.sortKey, category.sortKey) > 0);
   const after = position < 0 ? outer.length : position;
   const keys = generateNKeysBetween(
     after > 0 ? outer[after - 1].sortKey : null,
@@ -183,8 +220,8 @@ export function hardDeleteNode(nodes: Node[], id: string) {
   return nodes.filter((node) => !ids.has(node.id));
 }
 
-export function visibleNodes(nodes: Node[]) {
-  return nodes.filter((node) => node.deletedAt === null && (node.type === 'category' || node.status === 'active'));
+export function visibleNodes(nodes: Node[], showCompleted = false) {
+  return nodes.filter((node) => node.deletedAt === null && (node.type === 'category' || showCompleted || node.status === 'active'));
 }
 
 export function completedMemos(nodes: Node[]) {

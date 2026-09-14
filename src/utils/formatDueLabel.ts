@@ -2,6 +2,7 @@ import type { MemoNode } from '@/models/node';
 
 const PRESET_LABELS: Partial<Record<MemoNode['duePreset'], string>> = {
   today: '今日まで',
+  tomorrow: '明日まで',
   morning: '午前中',
   afternoon: '午後まで',
   thisWeek: '今週まで',

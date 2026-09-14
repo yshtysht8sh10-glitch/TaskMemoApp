@@ -23,6 +23,7 @@ export type CategoryNode = BaseNode & {
 export type DuePreset =
   | 'none'
   | 'today'
+  | 'tomorrow'
   | 'morning'
   | 'afternoon'
   | 'thisWeek'
@@ -34,6 +35,8 @@ export type MemoStatus = 'active' | 'completed';
 
 export type MemoNode = BaseNode & {
   type: 'memo';
+  /** Manual ordering used by the deadline list, independent of tree order. */
+  deadlineSortKey?: string;
   body: string;
   /** The authoritative instant used for due-date checks. */
   dueAt: Date | null;
