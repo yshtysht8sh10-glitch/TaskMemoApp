@@ -12,6 +12,7 @@
       "bundleIdentifier": "com.yshtysht8sh10.taskmemoapp"
     },
     "android": {
+      "package": "com.yshtysht8sh10.taskmemoapp",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

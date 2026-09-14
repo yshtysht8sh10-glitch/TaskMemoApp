@@ -7,7 +7,7 @@ OneNoteで行っていたタスク・メモ管理を置き換えることを目�
 - React Native
 - Expo
 - TypeScript
-- Firebase（予定）
+- Firebase Authentication / Cloud Firestore
 
 ## Target Platforms
 
@@ -18,8 +18,7 @@ OneNoteで行っていたタスク・メモ管理を置き換えることを目�
 
 - タスク管理
 - メモ管理
-- Firebase Authentication
-- Cloud Firestoreによる複数端末同期
+- 設定項目の端末間同期
 - 広告
 - 広告非表示の買い切り課金
 - プレミアム機能 / サブスクリプション
@@ -100,4 +99,38 @@ Apple Developer Programへ加入したApple Accountが必要です。初回ビ�
 
 ローカル設定は `.env.example` を `.env.local` にコピーして使用します。`.env` および `.env.*` はGit管理対象外です。クライアントから参照する値は `EXPO_PUBLIC_` 接頭辞が必要ですが、これは秘密を保護する仕組みではありません。秘密鍵や管理者用認証情報はアプリへ含めず、サーバー側で管理してください。
 
-Firebase SDKとFirebaseプロジェクトへの接続はまだ追加していません。
+## Firebase同期
+
+Web/Android/iOSで同じメールアドレスとパスワードを使うと、MemoとCategory（作成、編集、完了、削除、復元、移動、並び順）がリアルタイム同期されます。未ログイン時や通信不能時も端末内保存を継続します。設定画面の「クラウド同期」から新規登録またはログインしてください。
+
+初回ログインではローカルとクラウドをNode単位でマージします。同じIDは `updatedAt` が新しい側を採用し、片方だけに存在するNodeは保持するため、既存ローカルデータを一括上書きしません。通常削除は `deletedAt` を含むNodeとして同期され、完全削除も他端末へ伝播します。現段階ではテーマなどのアプリ設定は端末ごとに保持します。
+
+### Firebaseプロジェクトの準備
+
+1. Firebase ConsoleでプロジェクトとWebアプリを作成する。
+2. Authenticationの「Sign-in method」で「メール/パスワード」を有効にする。
+3. Cloud Firestoreを作成する（本番モードを推奨）。
+4. `.env.example` を `.env.local` にコピーし、Webアプリ設定の値を入力する。
+5. Firebase CLIでログインして対象プロジェクトを選び、ルールを配布する。
+
+```powershell
+Copy-Item .env.example .env.local
+npx firebase-tools login
+npx firebase-tools use --add
+npx firebase-tools deploy --only firestore:rules
+```
+
+`firestore.rules` は `users/{uid}` 以下を本人だけが読み書きできる構成です。FirebaseのWeb設定値は公開識別子であり、アクセス制御はSecurity Rulesで行います。サービスアカウント鍵などの秘密情報は `.env.local` にも入れないでください。
+
+### 利用量と運用
+
+同期対象はNodeのみで、各Nodeを個別ドキュメントとして差分書き込みします。画面を開いている間はログインユーザーのNodeコレクションにリスナーを1本だけ張ります。想定外の課金を避けるため、Firebase Consoleで予算アラートとFirestore使用量を確認し、不要なテストアカウントや大量データを放置しないでください。
+
+### 端末間テスト
+
+1. Webでアカウントを新規登録し、MemoとCategoryを作成する。
+2. Xperiaで同じアカウントへログインし、作成内容と並び順を確認する。
+3. Xperiaで編集・完了・移動し、Webへ反映されることを確認する。
+4. Webで削除・復元・完全削除し、Xperiaへ反映されることを確認する。
+5. 一方をオフラインにして編集し、再接続後に同期されることを確認する。
+6. 別アカウントでログインし、他ユーザーのデータが見えないことを確認する。
