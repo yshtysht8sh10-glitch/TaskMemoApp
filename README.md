@@ -217,22 +217,155 @@ Web/Android/iOSで同じメールアドレスとパスワードを使うと、Me
 
 初回ログインではローカルとクラウドをNode単位でマージします。同じIDは `updatedAt` が新しい側を採用し、片方だけに存在するNodeは保持するため、既存ローカルデータを一括上書きしません。通常削除は `deletedAt` を含むNodeとして同期され、完全削除も他端末へ伝播します。現段階ではテーマなどのアプリ設定は端末ごとに保持します。
 
-### Firebaseプロジェクトの準備
+### 全体の流れ
 
-1. Firebase ConsoleでプロジェクトとWebアプリを作成する。
-2. Authenticationの「Sign-in method」で「メール/パスワード」を有効にする。
-3. Cloud Firestoreを作成する（本番モードを推奨）。
-4. `.env.example` を `.env.local` にコピーし、Webアプリ設定の値を入力する。
-5. Firebase CLIでログインして対象プロジェクトを選び、ルールを配布する。
+初回だけ次の順序で設定します。
+
+1. FirebaseプロジェクトとWebアプリを作る。
+2. メール/パスワード認証とCloud Firestoreを有効にする。
+3. Firebaseの6個の接続値を取得する。
+4. PCの `.env.local` とEASの `preview` 環境へ同じ値を登録する。
+5. Firestore Security Rulesを配布する。
+6. Web/PWAを公開し、Android APKをビルドする。
+7. iPhoneとXperiaで同じTaskMemoアカウントへログインする。
+
+Firebase JS SDKを共通利用しているため、Android用の `google-services.json` はこの構成では不要です。
+
+### 1. Firebaseプロジェクトを作る
+
+1. [Firebase Console](https://console.firebase.google.com/)で「プロジェクトを追加」を選ぶ。
+2. プロジェクト内の「アプリを追加」からWebアイコン `</>` を選ぶ。
+3. アプリ名に `TaskMemoApp` などを入力して登録する。
+4. 表示された `firebaseConfig` を手元に控える。
+
+必要なのは次の対応関係です。
+
+| Firebaseの項目 | TaskMemoの環境変数 |
+| --- | --- |
+| `apiKey` | `EXPO_PUBLIC_FIREBASE_API_KEY` |
+| `authDomain` | `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` |
+| `projectId` | `EXPO_PUBLIC_FIREBASE_PROJECT_ID` |
+| `storageBucket` | `EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET` |
+| `messagingSenderId` | `EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` |
+| `appId` | `EXPO_PUBLIC_FIREBASE_APP_ID` |
+
+これらはクライアントアプリへ埋め込まれる公開設定値です。サービスアカウント秘密鍵などは使用しません。
+
+### 2. AuthenticationとFirestoreを有効にする
+
+Firebase Consoleで次を設定します。
+
+1. 「Authentication」→「始める」→「Sign-in method」を開く。
+2. 「メール/パスワード」を有効にして保存する。
+3. 「Firestore Database」→「データベースの作成」を選ぶ。
+4. 利用者に近いリージョンを選び、本番モードで作成する。
+
+Web公開後は「Authentication」→「Settings」→「Authorized domains」を開き、実際に使用するHostingドメインが登録されていることも確認します。
+
+### 3. PCへFirebase設定を入れる
+
+テンプレートをコピーします。
 
 ```powershell
 Copy-Item .env.example .env.local
+```
+
+`.env.local` を開き、手順1で控えた値を入力します。値を囲む引用符は不要です。
+
+```dotenv
+EXPO_PUBLIC_FIREBASE_API_KEY=取得したapiKey
+EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=取得したauthDomain
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=取得したprojectId
+EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=取得したstorageBucket
+EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=取得したmessagingSenderId
+EXPO_PUBLIC_FIREBASE_APP_ID=取得したappId
+```
+
+`.env.local` はGit管理対象外です。設定後に開発サーバーを再起動してください。
+
+```powershell
+npm run web
+```
+
+アプリの「設定」→「クラウド同期」を開き、「未設定」ではなくログイン欄が表示されれば読み込み成功です。
+
+### 4. EASへAndroidビルド用の設定を入れる
+
+`.env.local` はGitへ送られないため、EASのクラウドビルドには別途登録が必要です。次の6コマンドを実行し、各 `VALUE` をFirebaseの値へ置き換えます。
+
+```powershell
+npx eas-cli@latest env:set --environment preview --visibility plaintext --name EXPO_PUBLIC_FIREBASE_API_KEY --value "VALUE"
+npx eas-cli@latest env:set --environment preview --visibility plaintext --name EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN --value "VALUE"
+npx eas-cli@latest env:set --environment preview --visibility plaintext --name EXPO_PUBLIC_FIREBASE_PROJECT_ID --value "VALUE"
+npx eas-cli@latest env:set --environment preview --visibility plaintext --name EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET --value "VALUE"
+npx eas-cli@latest env:set --environment preview --visibility plaintext --name EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID --value "VALUE"
+npx eas-cli@latest env:set --environment preview --visibility plaintext --name EXPO_PUBLIC_FIREBASE_APP_ID --value "VALUE"
+```
+
+登録内容を確認します。
+
+```powershell
+npx eas-cli@latest env:list --environment preview
+```
+
+`EXPO_PUBLIC_` の値は完成したアプリから閲覧可能なので、Secret指定にしても秘密にはできません。データ保護は後述のFirestore Security Rulesで行います。
+
+開発クライアントも使う場合は、同じ6項目を `--environment development` にも登録してください。ローカルのExpo Goは `.env.local` を使用します。
+
+### 5. Firestore Security Rulesを配布する
+
+Firebase CLIへログインし、このリポジトリを手順1のFirebaseプロジェクトへ関連付けます。
+
+```powershell
 npx firebase-tools login
 npx firebase-tools use --add
 npx firebase-tools deploy --only firestore:rules
 ```
 
-`firestore.rules` は `users/{uid}` 以下を本人だけが読み書きできる構成です。FirebaseのWeb設定値は公開識別子であり、アクセス制御はSecurity Rulesで行います。サービスアカウント鍵などの秘密情報は `.env.local` にも入れないでください。
+`use --add` では対象プロジェクトを選び、エイリアス名は `default` で構いません。生成される `.firebaserc` に正しいプロジェクトIDが入っていることを確認します。
+
+`firestore.rules` は `users/{uid}` 以下をログイン中の本人だけが読み書きできる構成です。Rulesを配布する前に実データを保存しないでください。
+
+### 6. Web/PWAとAndroidを作る
+
+Web/PWAは `.env.local` の値をJavaScriptへ埋め込んでから公開します。
+
+```powershell
+npm run web:export
+npx firebase-tools deploy --only hosting
+```
+
+完了時に表示されたHosting URLをiPhone Safariで開き、「共有」→「ホーム画面に追加」を選びます。Firebase設定値を変更したときは、必ず再度exportして公開してください。
+
+Xperiaの日常利用用APKは、EASの `preview` 環境に登録した値を使ってビルドします。
+
+```powershell
+npx eas-cli@latest build --platform android --profile preview
+```
+
+ビルド完了後に表示されるURLをXperiaで開き、APKをインストールします。Firebase設定値を変更した場合はAPKの再ビルドが必要です。
+
+### 7. 初回ログインとローカルデータ移行
+
+1. 念のため、両端末で「設定」→「データを書き出す」を実行する。
+2. データをクラウドへ上げたい側の端末で「設定」→「クラウド同期」を開く。
+3. メールアドレスと6文字以上のパスワードを入力し、「新規登録」を選ぶ。
+4. 画面に「クラウド同期: 同期済み」と表示されることを確認する。
+5. もう一方の端末で、同じメールアドレスとパスワードを使って「ログイン」する。
+
+既存ローカルデータとクラウドデータはNode単位で統合されます。初回同期中はアプリやブラウザーを閉じず、両端末で「同期済み」になるまで待ってください。
+
+### 普段の更新コマンド
+
+初回設定後、コードを更新してXperiaとiPhoneへ反映するときは次の3コマンドです。
+
+```powershell
+npx eas-cli@latest build --platform android --profile preview
+npm run web:export
+npx firebase-tools deploy --only hosting
+```
+
+Androidは新しいAPKをXperiaへインストールします。iPhone PWAは公開後にSafariまたはホーム画面版を再読み込みします。
 
 ### 利用量と運用
 
@@ -246,3 +379,14 @@ npx firebase-tools deploy --only firestore:rules
 4. Webで削除・復元・完全削除し、Xperiaへ反映されることを確認する。
 5. 一方をオフラインにして編集し、再接続後に同期されることを確認する。
 6. 別アカウントでログインし、他ユーザーのデータが見えないことを確認する。
+
+すべて確認できるまでGitHub Issue #21はcloseしません。
+
+### 問題が起きたとき
+
+- 「クラウド同期: 未設定」: `.env.local` またはEAS環境変数の6項目を確認し、再起動・再ビルドする。
+- `auth/operation-not-allowed`: Firebase Authenticationでメール/パスワードを有効にする。
+- `permission-denied`: ログイン状態と `firestore.rules` の配布先プロジェクトを確認する。
+- Webだけログインできない: AuthenticationのAuthorized domainsと、公開中のドメインを確認する。
+- Androidだけ未設定になる: `eas env:list --environment preview` を確認してAPKを再ビルドする。
+- 同期できないときもローカルデータは消さず、先にJSONを書き出してから設定を見直す。
