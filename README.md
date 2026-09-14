@@ -47,6 +47,118 @@ npm run web
 
 Windows上でiOSネイティブビルドはできません。iPhone実機のExpo GoまたはEAS Buildを利用してください。
 
+## 起動・ビルド手順早見表
+
+コマンドはすべて、このREADMEがある `TaskMemoApp` ディレクトリで実行します。Firebase同期を使う場合は、先に後述の手順で `.env.local` を設定してください。
+
+### 初回準備
+
+```powershell
+npm install
+npx eas-cli@latest login
+```
+
+EAS Buildを初めて使う場合は、続けてプロジェクトを初期設定します。
+
+```powershell
+npx eas-cli@latest init
+```
+
+### PCブラウザーでWeb版をデバッグする
+
+```powershell
+npm run web
+```
+
+ブラウザーが自動的に開きます。`w` キーでWeb版を開く操作は、PCで `npm start` を実行しているターミナル上の操作です。
+
+### XperiaでExpo Goを使ってデバッグする
+
+PCとXperiaを同じWi-Fiへ接続し、PCで次を実行します。
+
+```powershell
+npm start
+```
+
+XperiaでExpo Goを起動し、表示されたQRコードを読み取ります。接続できない場合は、PCのファイアウォール設定を確認するか、トンネル接続を使用します。
+
+```powershell
+npx expo start --tunnel
+```
+
+この方法は開発用なので、利用中はPCと開発サーバーが必要です。
+
+### Xperiaの日常利用版APKを作る
+
+```powershell
+npx eas-cli@latest build --platform android --profile preview
+```
+
+ビルド完了後、表示されたURLをXperiaで開いてAPKをダウンロードし、インストールします。`preview` はJavaScriptをアプリ内に含むため、インストール後はPCやMetroを起動しなくても使用できます。Androidから警告された場合は、ダウンロードに使ったブラウザーに対して「不明なアプリのインストール」を一時的に許可します。
+
+### Android開発クライアントを作る
+
+```powershell
+npx eas-cli@latest build --platform android --profile development
+```
+
+完成した開発クライアントをXperiaへインストールした後、PCでMetroを起動します。
+
+```powershell
+npx expo start --dev-client
+```
+
+これはネイティブ機能を含むデバッグ向けです。日常利用には `preview` を使用してください。
+
+### iPhone Safari/PWAの日常利用版を作る
+
+```powershell
+npm run web:export
+```
+
+公開用ファイルが `dist` に生成されます。Firebase HostingなどのHTTPS対応ホスティングへ公開し、iPhone Safariで公開URLを開きます。その後、Safariの共有ボタンから「ホーム画面に追加」を選びます。ローカル開発サーバーのURLは日常利用には適しません。
+
+Firebase Hostingを設定済みの場合の公開コマンドは次のとおりです。
+
+```powershell
+npx firebase-tools deploy --only hosting
+```
+
+### iPhoneのインストール型日常利用版を作る
+
+初回または新しいiPhoneを追加するときは、端末を登録します。
+
+```powershell
+npx eas-cli@latest device:create
+```
+
+続いて内部配布ビルドを作成します。
+
+```powershell
+npx eas-cli@latest build --platform ios --profile preview
+```
+
+Apple Developer Programへの加入が必要です。ビルド完了後、EASのURLをiPhoneで開いてインストールします。
+
+### コード変更後の確認
+
+```powershell
+npm test
+npx tsc --noEmit
+npm run lint
+npm run web:export
+npx expo-doctor
+```
+
+| 目的 | コマンド | PC/Metro |
+| --- | --- | --- |
+| PCでWebデバッグ | `npm run web` | 必要 |
+| XperiaでExpo Goデバッグ | `npm start` | 必要 |
+| Xperiaの日常利用APK | `npx eas-cli@latest build --platform android --profile preview` | インストール後は不要 |
+| Android開発クライアント | `npx eas-cli@latest build --platform android --profile development` | 実行時に必要 |
+| iPhone Safari/PWA | `npm run web:export` → HTTPSで公開 | 公開後は不要 |
+| iPhoneインストール版 | `npx eas-cli@latest build --platform ios --profile preview` | インストール後は不要 |
+
 ## Web / PWA
 
 開発サーバーは `npm run web`、配布用の静的ファイルは `npm run web:export` で生成します。成果物は `dist` に出力され、HTTPS対応の静的ホスティングへそのまま配置できます。データはブラウザ内に保存されるため、ブラウザのサイトデータを消す前や端末移行前には「設定 > データを書き出す」でバックアップしてください。
