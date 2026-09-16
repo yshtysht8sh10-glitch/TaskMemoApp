@@ -173,6 +173,17 @@ export function createRoutineCategories(nodes: Node[], now = new Date()) {
   return [...nodes, root, daily, weekly];
 }
 
+export function ensureRoutineCategories(nodes: Node[], now = new Date()) {
+  // A deleted/purged routine root is an intentional user action and must not be
+  // resurrected behind the tombstone. Only seed data that has never had one.
+  if (nodes.some((node) => node.type === 'category' && node.categoryKind === 'routineRoot')) return nodes;
+  const rootId = 'system-routine'; const rootKey = nextSortKey(nodes, null);
+  const root: CategoryNode = { id: rootId, type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: rootKey, title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null };
+  const daily: CategoryNode = { id: `${rootId}-daily`, type: 'category', categoryKind: 'routineDaily', parentId: rootId, sortKey: 'a0', title: '毎日', createdAt: now, updatedAt: now, deletedAt: null };
+  const weekly: CategoryNode = { id: `${rootId}-weekly`, type: 'category', categoryKind: 'routineWeekly', routineWeekday: now.getDay(), parentId: rootId, sortKey: 'a1', title: '毎週', createdAt: now, updatedAt: now, deletedAt: null };
+  return [...nodes, root, daily, weekly];
+}
+
 export function completeMemo(nodes: Node[], id: string, now = new Date()) {
   const memo = nodes.find((node): node is MemoNode => node.id === id && node.type === 'memo');
   if (memo && routineCategoryForMemo(nodes, memo)) return isRoutineCompletedOn(memo, now) ? nodes : toggleRoutineCompletion(nodes, id, now);

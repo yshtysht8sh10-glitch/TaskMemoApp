@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 
 import type { Node } from '@/models/node';
-import { compareNodes } from '@/domain/nodeOperations';
+import { compareNodes, ensureRoutineCategories } from '@/domain/nodeOperations';
 
 const STORAGE_KEY = '@taskmemo/nodes/v1';
 const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt'] as const;
@@ -22,7 +22,7 @@ export function normalizeLegacyRanks(nodes: Node[]) {
       result = result.map((node) => replacements.has(node.id) ? { ...node, sortKey: replacements.get(node.id)! } : node);
     }
   }
-  return result;
+  return ensureRoutineCategories(result);
 }
 
 export async function loadNodes(fallback: Node[]) {

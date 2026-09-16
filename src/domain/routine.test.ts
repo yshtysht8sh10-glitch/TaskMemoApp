@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CategoryNode, MemoNode, Node } from '@/models/node';
-import { completeMemo, createRoutineCategories, moveNode, restoreMemo } from './nodeOperations';
+import { completeMemo, createRoutineCategories, ensureRoutineCategories, hardDeleteNode, moveNode, restoreMemo } from './nodeOperations';
 import { isRoutineDueOn, localDateKey, routineCategoryForMemo, routineHistoryDays, toggleRoutineCompletion } from './routine';
 
 const now = new Date(2026, 8, 16, 10);
@@ -9,6 +9,8 @@ const memo = (parentId: string | null): MemoNode => ({ id: 'm', type: 'memo', pa
 
 describe('routine', () => {
   it('特殊Category一式を重複なく作成する', () => { const created = createRoutineCategories([], now); expect(created.filter((node) => node.type === 'category').map((node) => node.categoryKind)).toEqual(['routineRoot', 'routineDaily', 'routineWeekly']); expect(createRoutineCategories(created, now)).toBe(created); });
+  it('既存データへ固定IDのルーティーン一式を一度だけ補う', () => { const seeded = ensureRoutineCategories([], now); expect(seeded.map((node) => node.id)).toEqual(['system-routine', 'system-routine-daily', 'system-routine-weekly']); expect(ensureRoutineCategories(seeded, now)).toBe(seeded); });
+  it('削除済みルーティーンを自動初期化で復活させない', () => { const seeded = ensureRoutineCategories([], now); const purged = hardDeleteNode(seeded, 'system-routine', now); expect(ensureRoutineCategories(purged, new Date(now.getTime() + 1))).toBe(purged); });
   it('Category名ではなく内部属性と祖先でルールを判定する', () => { const nodes: Node[] = [category('daily', 'routineDaily', null), category('nested', undefined, 'daily'), memo('nested')]; expect(routineCategoryForMemo(nodes, nodes[2] as MemoNode)?.categoryKind).toBe('routineDaily'); });
   it('毎日と指定曜日の毎週だけ対象日に表示する', () => { expect(isRoutineDueOn([category('daily', 'routineDaily', null), memo('daily')], memo('daily'), now)).toBe(true); expect(isRoutineDueOn([category('weekly', 'routineWeekly', null, 1), memo('weekly')], memo('weekly'), now)).toBe(false); });
   it('完了を日付キー履歴へ記録し翌日も失わず、復元で当日だけ解除する', () => { const source: Node[] = [category('daily', 'routineDaily', null), memo('daily')]; const done = completeMemo(source, 'm', now); const nextDay = new Date(2026, 8, 17, 10); expect((done[1] as MemoNode).routineHistory?.[localDateKey(now)]).toBeTruthy(); expect((done[1] as MemoNode).status).toBe('active'); expect(routineHistoryDays(done[1] as MemoNode, nextDay, 2).map((day) => day.completed)).toEqual([false, true]); expect((restoreMemo(done, 'm', now)[1] as MemoNode).routineHistory).toEqual({}); });
