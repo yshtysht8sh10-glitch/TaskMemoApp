@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '../models/node';
-import { canMoveNode, compareNodes, compareSortKeys, completeMemo, createNode, duplicateMemo, hardDeleteNode, moveNode, restoreMemo, restoreNode, softDeleteNode, tryMoveNode, visibleNodes } from './nodeOperations';
+import { canMoveNode, compareNodes, compareSortKeys, completeMemo, createNode, duplicateMemo, hardDeleteNode, moveMemos, moveNode, restoreMemo, restoreNode, softDeleteNode, tryMoveNode, visibleNodes } from './nodeOperations';
 
 const now = new Date('2026-09-12T00:00:00Z');
 const base = (id: string, type: 'category' | 'memo', parentId: string | null, sortKey: string): Node => type === 'category'
@@ -14,6 +14,8 @@ describe('node operations', () => {
   it('Memoを同じ親の直後へ独立した未完了Memoとして複製する', () => { const source = { ...base('source', 'memo', 'b', 'a0'), body: '本文', duePreset: 'tomorrow' as const, dueAt: new Date('2026-09-13T14:59:00Z'), status: 'completed' as const, completedAt: now }; const after = base('after', 'memo', 'b', 'a1'); const duplicated = duplicateMemo([base('b', 'category', null, 'a0'), source, after], 'source', now, 'copy'); const copy = duplicated.find((node) => node.id === 'copy'); expect(copy).toMatchObject({ parentId: 'b', title: 'source', body: '本文', duePreset: 'tomorrow', dueAt: source.dueAt, status: 'active', completedAt: null, createdAt: now, updatedAt: now }); if (copy?.type !== 'memo') throw new Error('memo expected'); expect(copy.dueAt).not.toBe(source.dueAt); expect(duplicated.filter((node) => node.parentId === 'b').sort(compareNodes).map((node) => node.id)).toEqual(['source', 'copy', 'after']); });
   it('fractional keyをlocale非依存のコード単位順で比較する', () => { expect(compareSortKeys('Zz', 'a0')).toBeLessThan(0); });
   it('別Categoryへ移動する', () => { const result = moveNode(tree(), 'm2', 'b'); expect(result.find((n) => n.id === 'm2')?.parentId).toBe('b'); });
+  it('複数Memoを選択順ではなく表示順を保ってCategory末尾へ移動する', () => { const source = [...tree(), base('m3', 'memo', null, 'a2')]; const result = moveMemos(source, ['m3', 'm2'], 'b', now); expect(result.filter((node) => node.parentId === 'b').sort(compareNodes).map((node) => node.id)).toEqual(['m1', 'm2', 'm3']); expect(result.filter((node) => ['m2', 'm3'].includes(node.id)).every((node) => node.updatedAt === now)).toBe(true); });
+  it('削除済み・存在しないMemoを含む一括移動を拒否して孤児化させない', () => { const source = tree(); expect(() => moveMemos(source, ['m2', 'missing'], 'b', now)).toThrow(/見つかりません/); expect(source.find((node) => node.id === 'm2')?.parentId).toBeNull(); });
   it('Categoryの循環移動を拒否する', () => expect(() => moveNode(tree(), 'a', 'b')).toThrow(/移動/));
   it('完了してもツリー表示対象に残り、未完了へ戻せる', () => { const done = completeMemo(tree(), 'm2', now); expect(visibleNodes(done).some((n) => n.id === 'm2')).toBe(true); expect(restoreMemo(done, 'm2').find((n) => n.id === 'm2')).toMatchObject({ status: 'active', completedAt: null }); });
   it('完了とUndoで元のCategory・sortKeyを保持する', () => { const original = tree().find((node) => node.id === 'm1')!; const restored = restoreMemo(completeMemo(tree(), 'm1', now), 'm1', new Date(now.getTime() + 1000)).find((node) => node.id === 'm1'); expect(restored).toMatchObject({ parentId: original.parentId, sortKey: original.sortKey, status: 'active', completedAt: null }); });

@@ -137,6 +137,24 @@ export function moveNode(
   return nodes.map((node) => node.id === id ? { ...node, parentId, sortKey, updatedAt: now } : node);
 }
 
+export function moveMemos(nodes: Node[], ids: readonly string[], parentId: string | null, now = new Date()) {
+  assertParent(nodes, parentId);
+  const selectedIds = new Set(ids);
+  const selected = nodes
+    .filter((node): node is MemoNode => selectedIds.has(node.id) && node.type === 'memo' && node.deletedAt === null && !node.purgedAt)
+    .sort(compareNodes);
+  if (selected.length !== selectedIds.size) throw new Error('移動するMemoが見つかりません。');
+  if (selected.length === 0) return nodes;
+
+  const destinationSiblings = siblingsOf(nodes, parentId).filter((node) => !selectedIds.has(node.id));
+  const keys = generateNKeysBetween(destinationSiblings.at(-1)?.sortKey ?? null, null, selected.length);
+  const moved = new Map(selected.map((memo, index) => [memo.id, keys[index]]));
+  return nodes.map((node) => {
+    const sortKey = moved.get(node.id);
+    return sortKey ? { ...node, parentId, sortKey, updatedAt: now } : node;
+  });
+}
+
 export function tryMoveNode(
   nodes: Node[], id: string, parentId: string | null, beforeId?: string, now = new Date(),
 ) {
