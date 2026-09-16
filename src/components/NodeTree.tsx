@@ -15,13 +15,14 @@ export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
 type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onEdit: (node: Node) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (memoIds: string[]) => void };
 const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
+let retainedExpandedCategoryIds = new Set(INITIAL_EXPANDED_CATEGORY_IDS);
 
 export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, onAddMemo, onEdit, onComplete, onMenu, onDrop, onBulkMove }: Props) {
   const { colors } = useAppTheme(); const styles = createStyles(colors);
   const [mountId] = useState(nextTreeMountId);
   const viewportRef = useRef<View>(null); const scrollOffsetRef = useRef(0);
   const [renderedAt] = useState(() => Date.now());
-  const [expanded, setExpanded] = useState(() => new Set(INITIAL_EXPANDED_CATEGORY_IDS));
+  const [expanded, setExpanded] = useState(() => new Set(retainedExpandedCategoryIds));
   const [candidate, setCandidate] = useState<DropCandidate | null>(null);
   const [selectionMode, setSelectionMode] = useState(false); const [selectedMemoIds, setSelectedMemoIds] = useState(() => new Set<string>());
   const movingId = useRef<string | null>(null);
@@ -31,6 +32,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
   const orderedKeys = useMemo(() => rows.map((row) => row.node.id), [rows]);
   const revision = useMemo(() => nodesRevision(nodes), [nodes]);
   useEffect(() => { treeDiagnosticLog('tree-render', { mountId, nodesRevision: revision, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys, expanded: [...expanded] }); }, [expanded, mountId, nodes, orderedKeys, revision, rows]);
+  useEffect(() => () => { retainedExpandedCategoryIds = new Set(expanded); }, [expanded]);
   useEffect(() => { treeDiagnosticLog('tree-mount', { mountId }); return () => treeDiagnosticLog('tree-unmount', { mountId }); }, [mountId]);
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const toggleSelected = (id: string) => setSelectedMemoIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
