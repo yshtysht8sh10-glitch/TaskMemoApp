@@ -9,6 +9,7 @@ dist/
 dist-native-check/
 web-build/
 .firebase/
+firebase-debug.log*
 expo-env.d.ts
 
 # Native
