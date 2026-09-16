@@ -1,5 +1,5 @@
 import { Timestamp } from 'firebase/firestore';
-import type { Node } from '@/models/node';
+import type { MemoNode, Node } from '@/models/node';
 
 const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt'] as const;
 
@@ -28,8 +28,10 @@ export function mergeNodesByUpdatedAt(local: Node[], remote: Node[]) {
   const merged = new Map(remote.map((node) => [node.id, node]));
   for (const node of local) {
     const cloud = merged.get(node.id);
-    if (!cloud || (!!node.purgedAt && !cloud.purgedAt) ||
-      (!!node.purgedAt === !!cloud.purgedAt && node.updatedAt.getTime() > cloud.updatedAt.getTime())) merged.set(node.id, node);
+    if (!cloud) { merged.set(node.id, node); continue; }
+    const chosen = (!!node.purgedAt && !cloud.purgedAt) || (!!node.purgedAt === !!cloud.purgedAt && node.updatedAt.getTime() > cloud.updatedAt.getTime()) ? node : cloud;
+    if (node.type === 'memo' && cloud.type === 'memo' && !chosen.purgedAt) merged.set(node.id, { ...(chosen as MemoNode), routineHistory: { ...cloud.routineHistory, ...node.routineHistory } });
+    else merged.set(node.id, chosen);
   }
   return [...merged.values()];
 }

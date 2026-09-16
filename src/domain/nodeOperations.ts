@@ -1,6 +1,7 @@
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 
 import type { CategoryNode, DuePreset, MemoNode, Node } from '@/models/node';
+import { isRoutineCompletedOn, routineCategoryForMemo, toggleRoutineCompletion } from './routine';
 
 export type NodeDraft = {
   title: string;
@@ -145,12 +146,25 @@ export function tryMoveNode(
 
 export const reorderNode = moveNode;
 
+export function createRoutineCategories(nodes: Node[], now = new Date()) {
+  if (nodes.some((node) => node.type === 'category' && node.categoryKind === 'routineRoot' && node.deletedAt === null)) return nodes;
+  const rootId = `routine-${now.getTime()}`; const rootKey = nextSortKey(nodes, null);
+  const root: CategoryNode = { id: rootId, type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: rootKey, title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null };
+  const daily: CategoryNode = { id: `${rootId}-daily`, type: 'category', categoryKind: 'routineDaily', parentId: rootId, sortKey: 'a0', title: '毎日', createdAt: now, updatedAt: now, deletedAt: null };
+  const weekly: CategoryNode = { id: `${rootId}-weekly`, type: 'category', categoryKind: 'routineWeekly', routineWeekday: now.getDay(), parentId: rootId, sortKey: 'a1', title: '毎週', createdAt: now, updatedAt: now, deletedAt: null };
+  return [...nodes, root, daily, weekly];
+}
+
 export function completeMemo(nodes: Node[], id: string, now = new Date()) {
+  const memo = nodes.find((node): node is MemoNode => node.id === id && node.type === 'memo');
+  if (memo && routineCategoryForMemo(nodes, memo)) return isRoutineCompletedOn(memo, now) ? nodes : toggleRoutineCompletion(nodes, id, now);
   return nodes.map((node) => node.id === id && node.type === 'memo'
     ? { ...node, status: 'completed' as const, completedAt: now, updatedAt: now } : node);
 }
 
 export function restoreMemo(nodes: Node[], id: string, now = new Date()) {
+  const memo = nodes.find((node): node is MemoNode => node.id === id && node.type === 'memo');
+  if (memo && routineCategoryForMemo(nodes, memo)) return isRoutineCompletedOn(memo, now) ? toggleRoutineCompletion(nodes, id, now) : nodes;
   return nodes.map((node) => node.id === id && node.type === 'memo'
     ? { ...node, status: 'active' as const, completedAt: null, updatedAt: now } : node);
 }

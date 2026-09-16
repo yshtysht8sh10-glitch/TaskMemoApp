@@ -1,6 +1,7 @@
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import type { DuePreset, MemoNode, Node } from '@/models/node';
 import { compareSortKeys } from './nodeOperations';
+import { isRoutineCompletedOn, isRoutineDueOn, routineCategoryForMemo } from './routine';
 
 export type TodayGranularity = 'today' | 'dayNight' | 'amPm' | 'threePart';
 export const TODAY_GRANULARITIES: readonly { id: TodayGranularity; label: string }[] = [{ id: 'today', label: '今日' }, { id: 'dayNight', label: '昼間/夜' }, { id: 'amPm', label: '午前/午後' }, { id: 'threePart', label: '朝/昼/夜' }];
@@ -50,8 +51,8 @@ export function deadlineCreateContext(definition: DeadlineGroupDefinition, now =
 export function deadlineDraftForCreateContext(context: DeadlineCreateContext, editableDueAt?: Date | null, now = new Date()) { const dueAt = context.dueEditable ? editableDueAt ?? null : context.initialDueAt; if (context.dueEditable && deadlineGroupForDueAt(dueAt, now, context.granularity) !== context.targetGroup) throw new Error(`「${context.label}」に入る期限を指定してください。`); return { duePreset: context.initialDuePreset, dueAt }; }
 export function deadlineGroups(nodes: Node[], now = new Date(), visibleGroupIds?: ReadonlySet<DeadlineGroupKey>, granularity: TodayGranularity = 'amPm'): DeadlineGroup[] {
   const definitions = deadlineGroupDefinitions(granularity); const visible = visibleGroupIds ?? new Set(definitions.map((group) => group.id)); const grouped = new Map<DeadlineGroupKey, MemoNode[]>();
-  const memos = nodes.filter((node): node is MemoNode => node.type === 'memo' && node.status === 'active' && node.deletedAt === null).sort((a, b) => a.deadlineSortKey && b.deadlineSortKey ? compareSortKeys(a.deadlineSortKey, b.deadlineSortKey) || a.id.localeCompare(b.id) : (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity) || compareSortKeys(a.sortKey, b.sortKey) || a.id.localeCompare(b.id));
-  for (const memo of memos) { const key = visibleDeadlineGroup(deadlineGroupForMemo(memo, now, granularity), visible, granularity); if (key) grouped.set(key, [...(grouped.get(key) ?? []), memo]); }
+  const memos = nodes.filter((node): node is MemoNode => node.type === 'memo' && node.status === 'active' && node.deletedAt === null && (!routineCategoryForMemo(nodes, node) || (isRoutineDueOn(nodes, node, now) && !isRoutineCompletedOn(node, now)))).sort((a, b) => a.deadlineSortKey && b.deadlineSortKey ? compareSortKeys(a.deadlineSortKey, b.deadlineSortKey) || a.id.localeCompare(b.id) : (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity) || compareSortKeys(a.sortKey, b.sortKey) || a.id.localeCompare(b.id));
+  for (const memo of memos) { const source = routineCategoryForMemo(nodes, memo) ? deadlineGroupForDueAt(dayEnd(now, 0), now, granularity) : deadlineGroupForMemo(memo, now, granularity); const key = visibleDeadlineGroup(source, visible, granularity); if (key) grouped.set(key, [...(grouped.get(key) ?? []), memo]); }
   return definitions.filter((definition) => visible.has(definition.id)).map((definition) => ({ ...definition, key: definition.id, memos: grouped.get(definition.id) ?? [] }));
 }
 export function updateMemoDeadline(nodes: Node[], memoId: string, targetId: DeadlineGroupKey, now = new Date(), granularity: TodayGranularity = 'amPm') { const target = deadlineGroupDefinitions(granularity).find((group) => group.id === targetId); const memo = nodes.find((node) => node.id === memoId); if (!target?.create || target.create.editable || !memo || memo.type !== 'memo' || memo.deletedAt !== null || memo.status !== 'active') return nodes; return nodes.map((node) => node.id === memoId ? { ...node, duePreset: target.create!.preset, dueAt: target.create!.dueAt(now), updatedAt: now } : node); }

@@ -20,6 +20,8 @@ export type BaseNode = {
 
 export type CategoryNode = BaseNode & {
   type: 'category';
+  categoryKind?: 'routineRoot' | 'routineDaily' | 'routineWeekly';
+  routineWeekday?: number;
 };
 
 export type DuePreset =
@@ -46,6 +48,8 @@ export type MemoNode = BaseNode & {
   duePreset: DuePreset;
   status: MemoStatus;
   completedAt: Date | null;
+  /** Completion timestamps keyed by the local calendar date (YYYY-MM-DD). */
+  routineHistory?: Record<string, string>;
 };
 
 export type Node = CategoryNode | MemoNode;
