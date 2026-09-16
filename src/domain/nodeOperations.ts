@@ -33,6 +33,12 @@ function assertParent(nodes: Node[], parentId: string | null) {
   if (!parent || parent.type !== 'category') throw new Error('移動先のCategoryが見つかりません。');
 }
 
+export function canContainMemo(nodes: Node[], parentId: string | null) {
+  if (parentId === null) return true;
+  const parent = nodes.find((node) => node.id === parentId);
+  return parent?.type === 'category' && parent.deletedAt === null && !parent.purgedAt && parent.categoryKind !== 'routineRoot';
+}
+
 export function canMoveNode(nodes: Node[], nodeId: string, destinationParentId: string | null) {
   const moving = nodes.find((node) => node.id === nodeId && node.deletedAt === null);
   if (!moving) return false;
@@ -42,6 +48,7 @@ export function canMoveNode(nodes: Node[], nodeId: string, destinationParentId: 
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const destination = byId.get(destinationParentId);
   if (!destination || destination.type !== 'category' || destination.deletedAt !== null) return false;
+  if (moving.type === 'memo' && destination.categoryKind === 'routineRoot') return false;
 
   let current: Node | undefined = destination;
   const visited = new Set<string>();
@@ -69,6 +76,7 @@ export function createNode(
   const title = draft.title.trim();
   if (!title) throw new Error('タイトルは必須です。');
   assertParent(nodes, draft.parentId);
+  if (type === 'memo' && !canContainMemo(nodes, draft.parentId)) throw new Error('ルーティーン直下にはMemoを作成できません。毎日または毎週を選んでください。');
   const base = {
     id, type, title, parentId: draft.parentId, sortKey: nextSortKey(nodes, draft.parentId),
     createdAt: now, updatedAt: now, deletedAt: null, deletionBatchId: null,
@@ -139,6 +147,7 @@ export function moveNode(
 
 export function moveMemos(nodes: Node[], ids: readonly string[], parentId: string | null, now = new Date()) {
   assertParent(nodes, parentId);
+  if (!canContainMemo(nodes, parentId)) throw new Error('ルーティーン直下にはMemoを移動できません。毎日または毎週を選んでください。');
   const selectedIds = new Set(ids);
   const selected = nodes
     .filter((node): node is MemoNode => selectedIds.has(node.id) && node.type === 'memo' && node.deletedAt === null && !node.purgedAt)

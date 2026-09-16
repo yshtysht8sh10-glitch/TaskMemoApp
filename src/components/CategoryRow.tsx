@@ -3,9 +3,9 @@ import type { CategoryNode } from '@/models/node';
 import { TREE_LAYOUT, TreeRowLayout } from '@/components/TreeRowLayout';
 import { useAppTheme, type ThemeColors } from '@/theme/theme';
 
-type Props = { category: CategoryNode; depth: number; ancestorContinuation: boolean[]; hasNextSibling: boolean; isExpanded: boolean; isActive?: boolean; isDropInside?: boolean; showInsertBefore?: boolean; virtual?: boolean; onToggle: () => void; onAddMemo: () => void; onMenu: () => void; onLongPress: () => void };
+type Props = { category: CategoryNode; depth: number; ancestorContinuation: boolean[]; hasNextSibling: boolean; isExpanded: boolean; isActive?: boolean; isDropInside?: boolean; showInsertBefore?: boolean; virtual?: boolean; allowAddMemo?: boolean; onToggle: () => void; onAddMemo: () => void; onMenu: () => void; onLongPress: () => void };
 
-export function CategoryRow({ category, depth, ancestorContinuation, hasNextSibling, isExpanded, isActive, isDropInside, showInsertBefore, virtual, onToggle, onAddMemo, onMenu, onLongPress }: Props) {
+export function CategoryRow({ category, depth, ancestorContinuation, hasNextSibling, isExpanded, isActive, isDropInside, showInsertBefore, virtual, allowAddMemo = true, onToggle, onAddMemo, onMenu, onLongPress }: Props) {
   const styles = createStyles(useAppTheme().colors);
   const routine = !!category.categoryKind;
   return <TreeRowLayout depth={depth} ancestorContinuation={ancestorContinuation} hasNextSibling={hasNextSibling}>
@@ -14,7 +14,7 @@ export function CategoryRow({ category, depth, ancestorContinuation, hasNextSibl
       style={({ pressed }) => [styles.row, routine && styles.routine, virtual && styles.virtual, showInsertBefore && styles.insertBefore, isDropInside && styles.dropInside, (pressed || isActive) && styles.active]}>
       <Text style={styles.icon}>{virtual ? '◇' : routine ? '🔁' : isExpanded ? '▼' : '▶'}</Text>
       <Text style={styles.title} numberOfLines={2}>{category.title}</Text>
-      <Pressable hitSlop={8} onPress={(event) => { event.stopPropagation(); onAddMemo(); }} accessibilityLabel={`${category.title}にMemoを追加`} style={styles.add}><Text style={styles.addText}>＋</Text></Pressable>
+      {allowAddMemo && <Pressable hitSlop={8} onPress={(event) => { event.stopPropagation(); onAddMemo(); }} accessibilityLabel={`${category.title}にMemoを追加`} style={styles.add}><Text style={styles.addText}>＋</Text></Pressable>}
       {!virtual && <Pressable hitSlop={8} onPress={(event) => { event.stopPropagation(); onMenu(); }} accessibilityLabel={`${category.title}のメニュー`} style={styles.menu}><Text style={styles.menuText}>•••</Text></Pressable>}
     </Pressable>
   </TreeRowLayout>;
