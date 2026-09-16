@@ -14,7 +14,7 @@ import { mockNodes } from '@/data/mockNodes';
 import type { DuePreset, MemoNode, Node } from '@/models/node';
 import { loadNodes, normalizeLegacyRanks, resetNodes, saveNodes } from '@/services/nodeStorage';
 import { exportNodesToFile, pickAndParseNodeBackup } from '@/services/nodeTransfer';
-import { DEFAULT_LIST_DISPLAY_PREFERENCES, loadListDisplayPreferences, loadShowCompleted, saveListDisplayPreferences, saveShowCompleted } from '@/services/viewPreferences';
+import { DEFAULT_LIST_DISPLAY_PREFERENCES, loadListDisplayPreferences, saveListDisplayPreferences } from '@/services/viewPreferences';
 import { loadPinnedNote, savePinnedNote } from '@/services/pinnedNoteStorage';
 import { dueDateForPreset, formatDateTimeInput, parseLocalDateTime } from '@/utils/dueDates';
 import { useAppTheme, type ThemeColors, type ThemeMode } from '@/theme/theme';
@@ -31,7 +31,6 @@ const presets: { key: DuePreset; label: string }[] = [{ key: 'none', label: '期
 export default function HomeScreen() {
   const { colors, resolved, mode, setMode } = useAppTheme(); const styles = createStyles(colors);
   const [history, setHistory] = useState(() => createNodeHistory(mockNodes)); const nodes = history.nodes; const [ready, setReady] = useState(false);
-  const [showCompleted, setShowCompleted] = useState(false);
   const [pinnedNote, setPinnedNote] = useState(''); const pinnedSaveQueue = useRef(Promise.resolve());
   const [visibleGroupIds, setVisibleGroupIds] = useState<Set<DeadlineGroupKey>>(() => new Set(DEFAULT_LIST_DISPLAY_PREFERENCES.visibleGroupIds)); const [showPinnedNote, setShowPinnedNote] = useState(true); const listDisplaySaveQueue = useRef(Promise.resolve());
   const [view, setView] = useState<MainView>('deadline'); const [deadlineExpanded, setDeadlineExpanded] = useState<Set<DeadlineGroupKey>>(() => new Set(DEADLINE_GROUPS.map((group) => group.id))); const [settingsOpen, setSettingsOpen] = useState(false); const [syncOpen, setSyncOpen] = useState(false);
@@ -41,9 +40,9 @@ export default function HomeScreen() {
   const sync = useFirebaseSync(nodes, ready, (cloudNodes) => { setHistory((current) => replaceNodeHistory(current, normalizeLegacyRanks(cloudNodes))); saveNodes(cloudNodes).catch(() => {}); });
   useEffect(() => {
     const traceId = currentTreeTraceId(); treeDiagnosticLog('hydrate/reload-start', { traceId, source: 'initial-mount' });
-    Promise.all([loadNodes(mockNodes), loadShowCompleted(), loadPinnedNote(), loadListDisplayPreferences()]).then(([loaded, preference, note, listDisplay]) => {
+    Promise.all([loadNodes(mockNodes), loadPinnedNote(), loadListDisplayPreferences()]).then(([loaded, note, listDisplay]) => {
       treeDiagnosticLog('hydrate/reload-result', { traceId, source: 'initial-mount', nodesRevision: nodesRevision(loaded), nodes: summarizeNodes(loaded) });
-      setHistory((current) => replaceNodeHistory(current, loaded)); setShowCompleted(preference); setPinnedNote(note.body); setVisibleGroupIds(new Set(listDisplay.visibleGroupIds)); setShowPinnedNote(listDisplay.showPinnedNote);
+      setHistory((current) => replaceNodeHistory(current, loaded)); setPinnedNote(note.body); setVisibleGroupIds(new Set(listDisplay.visibleGroupIds)); setShowPinnedNote(listDisplay.showPinnedNote);
     }).catch((error) => { treeDiagnosticLog('hydrate/reload-error', { traceId, message: error instanceof Error ? error.message : String(error) }); appAlert('読み込みエラー', '保存データを読み込めませんでした。'); }).finally(() => setReady(true));
   }, []);
   useEffect(() => {
@@ -58,7 +57,6 @@ export default function HomeScreen() {
   const displayNodes = useMemo(() => nodes.map((node) => exitingMemos.get(node.id) ?? node), [exitingMemos, nodes]);
   const apply = (label: string, operation: (current: Node[]) => Node[]) => { try { setHistory((current) => commitNodeHistory(current, label, operation)); } catch (error) { appAlert('操作できません', error instanceof Error ? error.message : '不明なエラー'); } };
   const replaceNodes = (operation: (current: Node[]) => Node[]) => { try { setHistory((current) => replaceNodeHistory(current, operation(current.nodes))); } catch (error) { appAlert('操作できません', error instanceof Error ? error.message : '不明なエラー'); } };
-  const changeShowCompleted = (value: boolean) => { setShowCompleted(value); saveShowCompleted(value).catch(() => {}); };
   const changePinnedNote = (body: string) => { setPinnedNote(body); pinnedSaveQueue.current = pinnedSaveQueue.current.then(() => savePinnedNote(body)).then(() => undefined).catch(() => undefined); };
   const changeListDisplay = (groups: Set<DeadlineGroupKey>, pinned: boolean) => { setVisibleGroupIds(groups); setShowPinnedNote(pinned); const value = { visibleGroupIds: DEADLINE_GROUPS.filter((group) => groups.has(group.id)).map((group) => group.id), showPinnedNote: pinned }; listDisplaySaveQueue.current = listDisplaySaveQueue.current.then(() => saveListDisplayPreferences(value)).catch(() => undefined); };
   const completeWithUndo = (memo: MemoNode) => { if (exitingMemos.has(memo.id)) return; setExitingMemos((current) => new Map(current).set(memo.id, memo)); apply('Memoを完了', (current) => completeMemo(current, memo.id)); };
@@ -78,7 +76,7 @@ export default function HomeScreen() {
   return <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}><StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
     <View style={styles.header}><View><Text style={styles.title}>TaskMemo</Text><Text style={styles.subtitle}>メモとタスク</Text></View><View style={styles.headerActions}><HistoryButton label="↶" accessibilityLabel="元に戻す" disabled={!history.past.length} onPress={() => setHistory(undoNodeHistory)} /><HistoryButton label="↷" accessibilityLabel="やり直す" disabled={!history.future.length} onPress={() => setHistory(redoNodeHistory)} /><TopButton label="設定" onPress={() => setSettingsOpen(true)} /></View></View>
     <View style={styles.tabs}><Tab label="一覧" active={view === 'deadline'} onPress={() => setView('deadline')} /><Tab label="ツリー" active={view === 'tree'} onPress={() => setView('tree')} /><Tab label="完了" onPress={() => setPanel('completed')} /><Tab label="ゴミ箱" onPress={() => setPanel('trash')} /></View>
-    <View style={styles.tree} pointerEvents={ready ? 'auto' : 'none'}>{view === 'tree' ? <NodeTree nodes={displayNodes} completingIds={new Set(exitingMemos.keys())} onCompletionAnimationFinished={finishCompletionAnimation} showCompleted={showCompleted} onShowCompletedChange={changeShowCompleted} onAddMemo={(parentId) => setEditor({ type: 'memo', parentId })} onEdit={(node) => setEditor({ type: node.type, node, parentId: node.parentId })} onComplete={completeWithUndo} onMenu={setMenuNode} onDrop={onDrop} /> : <DeadlineView nodes={displayNodes} visibleGroupIds={visibleGroupIds} completingIds={new Set(exitingMemos.keys())} onCompletionAnimationFinished={finishCompletionAnimation} showPinnedNote={showPinnedNote} pinnedNote={pinnedNote} onPinnedNoteChange={changePinnedNote} expandedGroups={deadlineExpanded} onExpandedGroupsChange={setDeadlineExpanded} onQuickAdd={(title, deadline) => apply('Memoをクイック追加', (current) => createNode(current, 'memo', { title, parentId: null, ...deadline }))} onEdit={(node) => setEditor({ type: 'memo', node, parentId: node.parentId })} onComplete={completeWithUndo} onMenu={setMenuNode} onDueDrop={(id, group, beforeId) => apply('一覧でMemoを移動', (current) => moveMemoInDeadlineList(current, id, group, beforeId))} />}</View>
+    <View style={styles.tree} pointerEvents={ready ? 'auto' : 'none'}>{view === 'tree' ? <NodeTree nodes={displayNodes} completingIds={new Set(exitingMemos.keys())} onCompletionAnimationFinished={finishCompletionAnimation} onAddMemo={(parentId) => setEditor({ type: 'memo', parentId })} onEdit={(node) => setEditor({ type: node.type, node, parentId: node.parentId })} onComplete={completeWithUndo} onMenu={setMenuNode} onDrop={onDrop} /> : <DeadlineView nodes={displayNodes} visibleGroupIds={visibleGroupIds} completingIds={new Set(exitingMemos.keys())} onCompletionAnimationFinished={finishCompletionAnimation} showPinnedNote={showPinnedNote} pinnedNote={pinnedNote} onPinnedNoteChange={changePinnedNote} expandedGroups={deadlineExpanded} onExpandedGroupsChange={setDeadlineExpanded} onQuickAdd={(title, deadline) => apply('Memoをクイック追加', (current) => createNode(current, 'memo', { title, parentId: null, ...deadline }))} onEdit={(node) => setEditor({ type: 'memo', node, parentId: node.parentId })} onComplete={completeWithUndo} onMenu={setMenuNode} onDueDrop={(id, group, beforeId) => apply('一覧でMemoを移動', (current) => moveMemoInDeadlineList(current, id, group, beforeId))} />}</View>
     <Pressable disabled={!ready} style={[styles.fab, !ready && { opacity: 0.4 }]} onPress={() => { setCreateParentId(null); setCreateOpen(true); }} accessibilityLabel="新規作成"><Text style={styles.fabText}>＋</Text></Pressable>
     <Sheet visible={createOpen} title="新規作成" onClose={() => setCreateOpen(false)}><Action label="Memo" onPress={() => openCreate('memo')} /><Action label="Category" onPress={() => openCreate('category')} /></Sheet>
     <Sheet visible={!!menuNode} title={menuNode?.title ?? ''} onClose={() => setMenuNode(null)}>
@@ -126,7 +124,7 @@ function FullScreenModalPage({ children }: { children: React.ReactNode }) {
 function ListPanel({ type, nodes, parentName, onClose, onRestore, onHardDelete, onReset }: { type: Panel; nodes: Node[]; parentName: (id: string | null) => string; onClose: () => void; onRestore: (id: string, completed: boolean) => void; onHardDelete: (id: string) => void; onReset: () => void }) {
   const styles = useStyles(); const [criterion, setCriterion] = useState<CompletionHistoryCriterion>('completedAt');
   const historyGroups = useMemo(() => completionHistoryGroups(nodes, criterion), [criterion, nodes]);
-  const trashItems = useMemo(() => nodes.filter((node) => node.deletedAt).sort((a, b) => b.deletedAt!.getTime() - a.deletedAt!.getTime()), [nodes]);
+  const trashItems = useMemo(() => nodes.filter((node) => node.deletedAt && !node.purgedAt).sort((a, b) => b.deletedAt!.getTime() - a.deletedAt!.getTime()), [nodes]);
   return <Modal visible={!!type} animationType="slide" onRequestClose={onClose}>
     <FullScreenModalPage>
       <View style={styles.panelHeader}><Text style={styles.modalTitle}>{type === 'completed' ? '完了一覧' : 'ゴミ箱'}</Text><Pressable onPress={onClose} style={styles.close} accessibilityRole="button" accessibilityLabel={`${type === 'completed' ? '完了一覧' : 'ゴミ箱'}を閉じる`}><Text style={styles.buttonText}>閉じる</Text></Pressable></View>

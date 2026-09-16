@@ -5,7 +5,7 @@ import type { Node } from '@/models/node';
 import { compareNodes } from '@/domain/nodeOperations';
 
 const STORAGE_KEY = '@taskmemo/nodes/v1';
-const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'dueAt', 'completedAt'] as const;
+const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt'] as const;
 
 export function normalizeLegacyRanks(nodes: Node[]) {
   const parents = new Set(nodes.map((node) => node.parentId));

@@ -199,7 +199,7 @@ export function deleteCategoryOnly(nodes: Node[], id: string, now = new Date()) 
 
 export function restoreNode(nodes: Node[], id: string, now = new Date()) {
   const target = nodes.find((node) => node.id === id);
-  if (!target) return nodes;
+  if (!target || target.purgedAt) return nodes;
   const restoreIds = target.deletionBatchId
     ? new Set(nodes.filter((node) => node.deletionBatchId === target.deletionBatchId).map((node) => node.id))
     : new Set([id]);
@@ -213,15 +213,18 @@ export function restoreNode(nodes: Node[], id: string, now = new Date()) {
   });
 }
 
-export function hardDeleteNode(nodes: Node[], id: string) {
+export function hardDeleteNode(nodes: Node[], id: string, now = new Date()) {
   const target = nodes.find((node) => node.id === id);
   if (!target) return nodes;
   const ids = target.type === 'category' ? descendantIds(nodes, id) : new Set([id]);
-  return nodes.filter((node) => !ids.has(node.id));
+  const purgedAt = now;
+  return nodes.map((node) => ids.has(node.id)
+    ? { ...node, deletedAt: node.deletedAt ?? purgedAt, purgedAt, deletionBatchId: null, updatedAt: purgedAt }
+    : node);
 }
 
-export function visibleNodes(nodes: Node[], showCompleted = false) {
-  return nodes.filter((node) => node.deletedAt === null && (node.type === 'category' || showCompleted || node.status === 'active'));
+export function visibleNodes(nodes: Node[]) {
+  return nodes.filter((node) => node.deletedAt === null);
 }
 
 export function completedMemos(nodes: Node[]) {

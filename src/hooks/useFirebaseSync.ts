@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
-import { collection, deleteDoc, doc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, onSnapshot, writeBatch } from 'firebase/firestore';
 
 import type { Node } from '@/models/node';
 import { getFirebaseClient } from '@/services/firebaseClient';
 import { isFirebaseConfigured } from '@/services/firebaseConfig';
-import { mergeNodesByUpdatedAt, nodeFromFirestore, nodeSyncFingerprint, nodeToFirestore } from '@/services/firebaseNodeCodec';
+import { applyRemoteDeletionsAsTombstones, mergeNodesByUpdatedAt, nodeFromFirestore, nodeSyncFingerprint, nodeToFirestore, withRemoteTombstones } from '@/services/firebaseNodeCodec';
 
 export type FirebaseSyncStatus = 'disabled' | 'signed-out' | 'connecting' | 'synced' | 'offline' | 'error';
 
@@ -28,6 +28,7 @@ export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloud
   const latestNodes = useRef(localNodes);
   const onCloudNodesRef = useRef(onCloudNodes);
   const remoteFingerprints = useRef(new Map<string, string>());
+  const remoteNodes = useRef(new Map<string, Node>());
   const stopSnapshot = useRef<null | (() => void)>(null);
   const syncReady = useRef(false);
   const writeQueue = useRef(Promise.resolve());
@@ -38,11 +39,15 @@ export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloud
   const pushNodes = (uid: string, nodes: Node[]) => {
     writeQueue.current = writeQueue.current.then(async () => {
       const { db } = getFirebaseClient();
-      const next = new Map(nodes.map((node) => [node.id, nodeSyncFingerprint(node)]));
-      const writes: Promise<void>[] = [];
-      for (const node of nodes) if (remoteFingerprints.current.get(node.id) !== next.get(node.id)) writes.push(setDoc(doc(db, 'users', uid, 'nodes', node.id), nodeToFirestore(node)));
-      for (const id of remoteFingerprints.current.keys()) if (!next.has(id)) writes.push(deleteDoc(doc(db, 'users', uid, 'nodes', id)));
-      await Promise.all(writes);
+      const synchronized = withRemoteTombstones(nodes, [...remoteNodes.current.values()]);
+      const next = new Map(synchronized.map((node) => [node.id, nodeSyncFingerprint(node)]));
+      const changed = synchronized.filter((node) => remoteFingerprints.current.get(node.id) !== next.get(node.id));
+      if (changed.length) {
+        const batch = writeBatch(db);
+        for (const node of changed) batch.set(doc(db, 'users', uid, 'nodes', node.id), nodeToFirestore(node));
+        await batch.commit();
+      }
+      remoteNodes.current = new Map(synchronized.map((node) => [node.id, node]));
       remoteFingerprints.current = next;
     }).catch((reason) => { setStatus('offline'); setError(authMessage(reason)); });
     return writeQueue.current;
@@ -53,12 +58,13 @@ export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloud
     const { auth } = getFirebaseClient();
     return onAuthStateChanged(auth, async (nextUser) => {
       stopSnapshot.current?.(); stopSnapshot.current = null; syncReady.current = false; setUser(nextUser); setAuthReady(true); setError(null);
-      if (!nextUser) { remoteFingerprints.current.clear(); setStatus('signed-out'); return; }
+      if (!nextUser) { remoteFingerprints.current.clear(); remoteNodes.current.clear(); setStatus('signed-out'); return; }
       setStatus('connecting');
       try {
         const { db } = getFirebaseClient(); const nodesRef = collection(db, 'users', nextUser.uid, 'nodes');
         const initial = await getDocs(nodesRef);
         const remote = initial.docs.map((item) => nodeFromFirestore(item.id, item.data()));
+        remoteNodes.current = new Map(remote.map((node) => [node.id, node]));
         remoteFingerprints.current = new Map(remote.map((node) => [node.id, nodeSyncFingerprint(node)]));
         const merged = mergeNodesByUpdatedAt(latestNodes.current, remote);
         onCloudNodesRef.current(merged);
@@ -67,10 +73,11 @@ export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloud
         stopSnapshot.current = onSnapshot(nodesRef, { includeMetadataChanges: true }, (snapshot) => {
           const cloud = snapshot.docs.map((item) => nodeFromFirestore(item.id, item.data()));
           const previousRemoteIds = new Set(remoteFingerprints.current.keys());
+          remoteNodes.current = new Map(cloud.map((node) => [node.id, node]));
           remoteFingerprints.current = new Map(cloud.map((node) => [node.id, nodeSyncFingerprint(node)]));
           const remotelyDeletedIds = new Set([...previousRemoteIds].filter((id) => !remoteFingerprints.current.has(id)));
-          const localWithoutRemoteDeletes = latestNodes.current.filter((node) => !remotelyDeletedIds.has(node.id));
-          const mergedNodes = mergeNodesByUpdatedAt(localWithoutRemoteDeletes, cloud);
+          const localWithRemoteTombstones = applyRemoteDeletionsAsTombstones(latestNodes.current, remotelyDeletedIds);
+          const mergedNodes = mergeNodesByUpdatedAt(localWithRemoteTombstones, cloud);
           const currentPrint = latestNodes.current.map(nodeSyncFingerprint).sort().join('|');
           const mergedPrint = mergedNodes.map(nodeSyncFingerprint).sort().join('|');
           if (currentPrint !== mergedPrint) onCloudNodesRef.current(mergedNodes);

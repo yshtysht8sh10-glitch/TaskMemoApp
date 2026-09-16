@@ -15,12 +15,12 @@ describe('node operations', () => {
   it('fractional keyをlocale非依存のコード単位順で比較する', () => { expect(compareSortKeys('Zz', 'a0')).toBeLessThan(0); });
   it('別Categoryへ移動する', () => { const result = moveNode(tree(), 'm2', 'b'); expect(result.find((n) => n.id === 'm2')?.parentId).toBe('b'); });
   it('Categoryの循環移動を拒否する', () => expect(() => moveNode(tree(), 'a', 'b')).toThrow(/移動/));
-  it('完了で通常一覧から消え、未完了へ戻せる', () => { const done = completeMemo(tree(), 'm2', now); expect(visibleNodes(done).some((n) => n.id === 'm2')).toBe(false); expect(restoreMemo(done, 'm2').find((n) => n.id === 'm2')).toMatchObject({ status: 'active', completedAt: null }); });
+  it('完了してもツリー表示対象に残り、未完了へ戻せる', () => { const done = completeMemo(tree(), 'm2', now); expect(visibleNodes(done).some((n) => n.id === 'm2')).toBe(true); expect(restoreMemo(done, 'm2').find((n) => n.id === 'm2')).toMatchObject({ status: 'active', completedAt: null }); });
   it('完了とUndoで元のCategory・sortKeyを保持する', () => { const original = tree().find((node) => node.id === 'm1')!; const restored = restoreMemo(completeMemo(tree(), 'm1', now), 'm1', new Date(now.getTime() + 1000)).find((node) => node.id === 'm1'); expect(restored).toMatchObject({ parentId: original.parentId, sortKey: original.sortKey, status: 'active', completedAt: null }); });
   it('Memoを論理削除して復元する', () => { const deleted = softDeleteNode(tree(), 'm2', false, now); expect(deleted.find((n) => n.id === 'm2')?.deletedAt).toEqual(now); expect(restoreNode(deleted, 'm2').find((n) => n.id === 'm2')?.deletedAt).toBeNull(); });
   it('Categoryのみ削除すると子が親へ昇格する', () => { const result = softDeleteNode(tree(), 'b', false, now); expect(result.find((n) => n.id === 'm1')).toMatchObject({ parentId: 'a' }); expect(result.find((n) => n.id === 'b')?.deletedAt).toEqual(now); });
   it('Categoryを子ごと削除し、サブツリーで復元する', () => { const deleted = softDeleteNode(tree(), 'a', true, now); expect(deleted.filter((n) => ['a', 'b', 'm1'].includes(n.id)).every((n) => n.deletedAt)).toBe(true); const restored = restoreNode(deleted, 'a'); expect(restored.filter((n) => ['a', 'b', 'm1'].includes(n.id)).every((n) => n.deletedAt === null)).toBe(true); });
-  it('Categoryを完全削除すると子孫も残さない', () => expect(hardDeleteNode(tree(), 'a').map((n) => n.id)).toEqual(['m2']));
+  it('Categoryを完全削除すると完了済みの子を含む親子を復元不能なtombstoneにする', () => { const source = completeMemo(tree(), 'm1', new Date(now.getTime() - 1)); const purged = hardDeleteNode(source, 'a', now); expect(purged.filter((node) => ['a', 'b', 'm1'].includes(node.id)).every((node) => node.purgedAt === now && node.deletedAt !== null)).toBe(true); expect(visibleNodes(purged).map((node) => node.id)).toEqual(['m2']); expect(restoreNode(purged, 'a')).toBe(purged); });
 });
 
 describe('move validation', () => {

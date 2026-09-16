@@ -1,7 +1,7 @@
 import { Timestamp } from 'firebase/firestore';
 import type { Node } from '@/models/node';
 
-const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'dueAt', 'completedAt'] as const;
+const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt'] as const;
 
 export function nodeToFirestore(node: Node): Record<string, unknown> {
   const value: Record<string, unknown> = { ...node };
@@ -28,9 +28,32 @@ export function mergeNodesByUpdatedAt(local: Node[], remote: Node[]) {
   const merged = new Map(remote.map((node) => [node.id, node]));
   for (const node of local) {
     const cloud = merged.get(node.id);
-    if (!cloud || node.updatedAt.getTime() > cloud.updatedAt.getTime()) merged.set(node.id, node);
+    if (!cloud || (!!node.purgedAt && !cloud.purgedAt) ||
+      (!!node.purgedAt === !!cloud.purgedAt && node.updatedAt.getTime() > cloud.updatedAt.getTime())) merged.set(node.id, node);
   }
   return [...merged.values()];
+}
+
+export function withRemoteTombstones(nodes: Node[], remote: Node[], now = new Date()) {
+  const next = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of remote) if (!next.has(node.id)) next.set(node.id, {
+    ...node,
+    deletedAt: node.deletedAt ?? now,
+    purgedAt: node.purgedAt ?? now,
+    deletionBatchId: null,
+    updatedAt: now,
+  });
+  return [...next.values()];
+}
+
+export function applyRemoteDeletionsAsTombstones(nodes: Node[], deletedIds: ReadonlySet<string>, now = new Date()) {
+  return nodes.map((node) => deletedIds.has(node.id) ? {
+    ...node,
+    deletedAt: node.deletedAt ?? now,
+    purgedAt: node.purgedAt ?? now,
+    deletionBatchId: null,
+    updatedAt: now,
+  } : node);
 }
 
 export function nodeSyncFingerprint(node: Node) {

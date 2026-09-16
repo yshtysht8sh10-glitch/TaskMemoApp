@@ -14,6 +14,8 @@ export type BaseNode = {
   deletedAt: Date | null;
   /** Groups nodes removed by one cascade operation so the subtree can be restored. */
   deletionBatchId?: string | null;
+  /** Permanent-deletion tombstone. Purged nodes stay in sync storage but never appear in the UI. */
+  purgedAt?: Date | null;
 };
 
 export type CategoryNode = BaseNode & {

@@ -1,7 +1,7 @@
 import type { DuePreset, MemoStatus, Node } from '@/models/node';
 
 export const BACKUP_SCHEMA_VERSION = 1;
-const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'dueAt', 'completedAt'] as const;
+const DATE_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt'] as const;
 const DUE_PRESETS = new Set<DuePreset>(['none', 'today', 'tomorrow', 'morning', 'afternoon', 'thisWeek', 'thisMonth', 'thisYear', 'custom']);
 const MEMO_STATUSES = new Set<MemoStatus>(['active', 'completed']);
 
@@ -28,7 +28,8 @@ export function parseNodeBackup(raw: string): Node[] {
     if (value.type !== 'category' && value.type !== 'memo') throw new Error(`${value.id}のtypeが不正です。`);
     if (value.parentId !== null && typeof value.parentId !== 'string') throw new Error(`${value.id}のparentIdが不正です。`);
     if (typeof value.sortKey !== 'string' || !value.sortKey || typeof value.title !== 'string') throw new Error(`${value.id}の基本項目が不正です。`);
-    if (!validDateString(value.createdAt) || !validDateString(value.updatedAt) || !validDateString(value.deletedAt, true)) throw new Error(`${value.id}の日付が不正です。`);
+    if (!validDateString(value.createdAt) || !validDateString(value.updatedAt) || !validDateString(value.deletedAt, true) ||
+      (value.purgedAt !== undefined && !validDateString(value.purgedAt, true))) throw new Error(`${value.id}の日付が不正です。`);
     if (value.type === 'memo') {
       if (typeof value.body !== 'string' || !DUE_PRESETS.has(value.duePreset as DuePreset) || !MEMO_STATUSES.has(value.status as MemoStatus)) throw new Error(`${value.id}のMemo項目が不正です。`);
       if (!validDateString(value.dueAt, true) || !validDateString(value.completedAt, true)) throw new Error(`${value.id}のMemo日付が不正です。`);

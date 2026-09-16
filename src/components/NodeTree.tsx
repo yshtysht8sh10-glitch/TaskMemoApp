@@ -13,10 +13,10 @@ import { WebSortableScrollList } from '@/components/WebSortableScrollList';
 
 export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
-type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; showCompleted: boolean; onShowCompletedChange: (value: boolean) => void; onAddMemo: (parentId: string | null) => void; onEdit: (node: Node) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void };
+type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onEdit: (node: Node) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void };
 const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
 
-export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, showCompleted, onShowCompletedChange, onAddMemo, onEdit, onComplete, onMenu, onDrop }: Props) {
+export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, onAddMemo, onEdit, onComplete, onMenu, onDrop }: Props) {
   const styles = createStyles(useAppTheme().colors);
   const [mountId] = useState(nextTreeMountId);
   const viewportRef = useRef<View>(null); const scrollOffsetRef = useRef(0);
@@ -25,11 +25,11 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
   const [candidate, setCandidate] = useState<DropCandidate | null>(null);
   const movingId = useRef<string | null>(null);
   const candidateRef = useRef<DropCandidate | null>(null);
-  const rows = useMemo(() => flattenVisibleNodes(nodes, expanded, showCompleted), [nodes, expanded, showCompleted]);
+  const rows = useMemo(() => flattenVisibleNodes(nodes, expanded), [nodes, expanded]);
   const categoryIds = useMemo(() => [UNASSIGNED_GROUP_ID, ...nodes.filter((node) => node.type === 'category' && node.deletedAt === null).map((node) => node.id)], [nodes]);
   const orderedKeys = useMemo(() => rows.map((row) => row.node.id), [rows]);
   const revision = useMemo(() => nodesRevision(nodes), [nodes]);
-  useEffect(() => { treeDiagnosticLog('tree-render', { mountId, nodesRevision: revision, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys, expanded: [...expanded], showCompleted }); }, [expanded, mountId, nodes, orderedKeys, revision, rows, showCompleted]);
+  useEffect(() => { treeDiagnosticLog('tree-render', { mountId, nodesRevision: revision, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys, expanded: [...expanded] }); }, [expanded, mountId, nodes, orderedKeys, revision, rows]);
   useEffect(() => { treeDiagnosticLog('tree-mount', { mountId }); return () => treeDiagnosticLog('tree-unmount', { mountId }); }, [mountId]);
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const updateCandidate = (index: number, data = rows) => { const target = data[index]?.node; const next = movingId.current ? dropCandidateFor(nodes, movingId.current, target) : null; candidateRef.current = next; setCandidate(next); treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next }); };
@@ -46,7 +46,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
     if (id && finalCandidate) onDrop(id, finalCandidate);
   };
   if (Platform.OS === 'web') return <View style={styles.container}>
-    <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable><Pressable style={styles.tool} onPress={() => onShowCompletedChange(!showCompleted)} accessibilityRole="switch" accessibilityState={{ checked: showCompleted }}><Text style={styles.toolText}>{showCompleted ? '完了を隠す' : '完了を表示'}</Text></Pressable></View>
+    <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></View>
     <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !row.virtual}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 110 }}
       onHover={(active, target) => { movingId.current = active.node.id; const next = dropCandidateFor(nodes, active.node.id, target.node); candidateRef.current = next; setCandidate(next); }}
@@ -57,7 +57,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
       }} />
   </View>;
   return <View style={styles.container}>
-    <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable><Pressable style={styles.tool} onPress={() => onShowCompletedChange(!showCompleted)} accessibilityRole="switch" accessibilityState={{ checked: showCompleted }}><Text style={styles.toolText}>{showCompleted ? '完了を隠す' : '完了を表示'}</Text></Pressable></View>
+    <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></View>
     <View ref={viewportRef} collapsable={false} style={styles.listViewport}>
       <DraggableFlatList data={rows} keyExtractor={(row) => row.node.id}
         onDragBegin={(index) => { movingId.current = rows[index]?.virtual ? null : rows[index]?.node.id ?? null; if (movingId.current) beginTreeDragTrace(movingId.current); treeDiagnosticLog('drag-begin', { mountId, index, movingId: movingId.current, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys }); updateCandidate(index); }}

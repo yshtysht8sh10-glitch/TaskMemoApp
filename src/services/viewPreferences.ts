@@ -1,18 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEADLINE_GROUPS, type DeadlineGroupKey } from '@/domain/deadlineView';
 
-const SHOW_COMPLETED_KEY = '@taskmemo/view/show-completed/v1';
 const LIST_DISPLAY_KEY = '@taskmemo/view/list-display/v1';
 export type ListDisplayPreferences = { visibleGroupIds: DeadlineGroupKey[]; showPinnedNote: boolean };
 export const DEFAULT_LIST_DISPLAY_PREFERENCES: ListDisplayPreferences = { visibleGroupIds: DEADLINE_GROUPS.map((group) => group.id), showPinnedNote: true };
-
-export async function loadShowCompleted() {
-  return (await AsyncStorage.getItem(SHOW_COMPLETED_KEY)) === 'true';
-}
-
-export async function saveShowCompleted(value: boolean) {
-  await AsyncStorage.setItem(SHOW_COMPLETED_KEY, String(value));
-}
 
 export async function loadListDisplayPreferences(): Promise<ListDisplayPreferences> {
   const raw = await AsyncStorage.getItem(LIST_DISPLAY_KEY); if (!raw) return DEFAULT_LIST_DISPLAY_PREFERENCES;
