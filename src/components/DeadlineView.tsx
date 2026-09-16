@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import DraggableFlatList, { ScaleDecorator, type DragEndParams } from 'react-native-draggable-flatlist';
 
-import { categoryPath, deadlineCreateContext, deadlineDraftForCreateContext, deadlineGroups, type DeadlineCreateContext, type DeadlineGroupKey } from '@/domain/deadlineView';
+import { categoryPath, deadlineCreateContext, deadlineDraftForCreateContext, deadlineGroups, type DeadlineCreateContext, type DeadlineGroupKey, type TodayGranularity } from '@/domain/deadlineView';
 import type { NodeDraft } from '@/domain/nodeOperations';
 import type { MemoNode, Node } from '@/models/node';
 import { formatDateTimeInput, parseLocalDateTime } from '@/utils/dueDates';
@@ -17,25 +17,25 @@ type DeadlineRow =
   | { id: string; groupKey: DeadlineGroupKey; kind: 'memo'; memo: MemoNode }
   | { id: string; groupKey: DeadlineGroupKey; kind: 'quickAdd'; context: DeadlineCreateContext };
 
-type Props = { nodes: Node[]; visibleGroupIds: ReadonlySet<DeadlineGroupKey>; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; showPinnedNote: boolean; pinnedNote: string; onPinnedNoteChange: (body: string) => void; expandedGroups: ReadonlySet<DeadlineGroupKey>; onExpandedGroupsChange: (groups: Set<DeadlineGroupKey>) => void; onQuickAdd: (title: string, deadline: Pick<NodeDraft, 'duePreset' | 'dueAt'>) => void; onEdit: (memo: MemoNode) => void; onComplete: (memo: MemoNode) => void; onMenu: (memo: MemoNode) => void; onDueDrop: (id: string, group: DeadlineGroupKey, beforeId?: string) => void };
+type Props = { nodes: Node[]; visibleGroupIds: ReadonlySet<DeadlineGroupKey>; todayGranularity: TodayGranularity; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; showPinnedNote: boolean; pinnedNote: string; onPinnedNoteChange: (body: string) => void; expandedGroups: ReadonlySet<DeadlineGroupKey>; onExpandedGroupsChange: (groups: Set<DeadlineGroupKey>) => void; onQuickAdd: (title: string, deadline: Pick<NodeDraft, 'duePreset' | 'dueAt'>) => void; onEdit: (memo: MemoNode) => void; onComplete: (memo: MemoNode) => void; onMenu: (memo: MemoNode) => void; onDueDrop: (id: string, group: DeadlineGroupKey, beforeId?: string) => void };
 
 function DragScale({ children }: { children: React.ReactNode }) {
   return Platform.OS === 'web' ? children : <ScaleDecorator activeScale={1.02}>{children}</ScaleDecorator>;
 }
 
-export function DeadlineView({ nodes, visibleGroupIds, completingIds, onCompletionAnimationFinished, showPinnedNote, pinnedNote, onPinnedNoteChange, expandedGroups, onExpandedGroupsChange, onQuickAdd, onEdit, onComplete, onMenu, onDueDrop }: Props) {
+export function DeadlineView({ nodes, visibleGroupIds, todayGranularity, completingIds, onCompletionAnimationFinished, showPinnedNote, pinnedNote, onPinnedNoteChange, expandedGroups, onExpandedGroupsChange, onQuickAdd, onEdit, onComplete, onMenu, onDueDrop }: Props) {
   const { colors } = useAppTheme(); const styles = createStyles(colors);
-  const groups = useMemo(() => deadlineGroups(nodes, new Date(), visibleGroupIds), [nodes, visibleGroupIds]);
+  const groups = useMemo(() => deadlineGroups(nodes, new Date(), visibleGroupIds, todayGranularity), [nodes, todayGranularity, visibleGroupIds]);
   const [quickAdd, setQuickAdd] = useState<DeadlineCreateContext | null>(null); const [quickTitle, setQuickTitle] = useState(''); const [quickDueAt, setQuickDueAt] = useState(''); const [quickError, setQuickError] = useState<string | null>(null);
   const [targetGroup, setTargetGroup] = useState<DeadlineGroupKey | null>(null); const moving = useRef<{ id: string; sourceGroup: DeadlineGroupKey } | null>(null); const targetRef = useRef<DeadlineGroupKey | null>(null);
   const rows = useMemo<DeadlineRow[]>(() => groups.flatMap((group) => {
-    const context = deadlineCreateContext(group); const children: DeadlineRow[] = expandedGroups.has(group.key) ? [...group.memos.map((memo): DeadlineRow => ({ id: memo.id, groupKey: group.key, kind: 'memo', memo })), ...(quickAdd?.targetGroup === group.key && context ? [{ id: `quick-${group.key}`, groupKey: group.key, kind: 'quickAdd' as const, context }] : [])] : [];
+    const context = deadlineCreateContext(group, new Date(), todayGranularity); const children: DeadlineRow[] = expandedGroups.has(group.key) ? [...group.memos.map((memo): DeadlineRow => ({ id: memo.id, groupKey: group.key, kind: 'memo', memo })), ...(quickAdd?.targetGroup === group.key && context ? [{ id: `quick-${group.key}`, groupKey: group.key, kind: 'quickAdd' as const, context }] : [])] : [];
     return [{ id: `group-${group.key}`, groupKey: group.key, kind: 'heading', label: group.label, createContext: context, dropLabel: group.dropLabel }, ...children];
-  }), [expandedGroups, groups, quickAdd]);
+  }), [expandedGroups, groups, quickAdd, todayGranularity]);
   const setExpanded = (groupKey: DeadlineGroupKey, value: boolean) => { const next = new Set(expandedGroups); if (value) next.add(groupKey); else next.delete(groupKey); onExpandedGroupsChange(next); if (!value && quickAdd?.targetGroup === groupKey) setQuickAdd(null); };
   const beginQuickAdd = (context: DeadlineCreateContext) => { setExpanded(context.targetGroup, true); setQuickAdd(context); setQuickTitle(''); setQuickDueAt(context.initialDueAt ? formatDateTimeInput(context.initialDueAt) : ''); setQuickError(null); };
   const submitQuickAdd = () => { if (!quickAdd || !quickTitle.trim()) return; try { const editableDueAt = quickAdd.dueEditable ? parseLocalDateTime(quickDueAt) : undefined; if (quickAdd.dueEditable && !editableDueAt) throw new Error('日時を YYYY/MM/DD HH:mm 形式で入力してください。'); onQuickAdd(quickTitle, deadlineDraftForCreateContext(quickAdd, editableDueAt)); setQuickAdd(null); setQuickTitle(''); setQuickError(null); } catch (error) { setQuickError(error instanceof Error ? error.message : '入力内容を確認してください。'); } };
-  const setCandidate = (index: number) => { const groupKey = rows[index]?.groupKey; const group = groups.find((item) => item.key === groupKey); const next = group?.create?.kind === 'fixed' ? group.key : null; targetRef.current = next; setTargetGroup(next); };
+  const setCandidate = (index: number) => { const groupKey = rows[index]?.groupKey; const group = groups.find((item) => item.key === groupKey); const next = group?.create && !group.create.editable ? group.key : null; targetRef.current = next; setTargetGroup(next); };
   const finish = (_params: DragEndParams<DeadlineRow>) => { const active = moving.current; const target = targetRef.current; moving.current = null; targetRef.current = null; setTargetGroup(null); if (active && target && target !== active.sourceGroup) onDueDrop(active.id, target); };
   const renderRow = (item: DeadlineRow, isActive: boolean, drag: () => void) => item.kind === 'heading'
     ? <View style={[styles.heading, targetGroup === item.groupKey && styles.dropTarget]}><Pressable onPress={() => setExpanded(item.groupKey, !expandedGroups.has(item.groupKey))} accessibilityRole="button" accessibilityState={{ expanded: expandedGroups.has(item.groupKey) }} style={styles.headingToggle}><Text style={styles.disclosure}>{expandedGroups.has(item.groupKey) ? '▼' : '▶'}</Text><Text style={[styles.headingText, item.groupKey === 'overdue' && styles.overdue]}>{targetGroup === item.groupKey ? item.dropLabel : item.label}</Text></Pressable>{item.createContext && <Pressable onPress={() => beginQuickAdd(item.createContext!)} accessibilityLabel={`${item.label}のMemoを追加`} style={styles.add}><Text style={styles.addText}>＋</Text></Pressable>}</View>
@@ -45,7 +45,7 @@ export function DeadlineView({ nodes, visibleGroupIds, completingIds, onCompleti
     {showPinnedNote && <View style={styles.pinned}><Text style={styles.pinnedLabel}>常設メモ</Text><TextInput multiline value={pinnedNote} onChangeText={onPinnedNoteChange} placeholder="いつも確認したいことを書く…" placeholderTextColor={colors.textSecondary} style={styles.pinnedInput} /></View>}
     <View style={styles.toolbar}><Pressable style={styles.tool} onPress={() => onExpandedGroupsChange(new Set(groups.map((group) => group.key)))}><Text style={styles.toolText}>全表示</Text></Pressable><Pressable style={styles.tool} onPress={() => { onExpandedGroupsChange(new Set()); setQuickAdd(null); }}><Text style={styles.toolText}>全非表示</Text></Pressable></View>
     <WebSortableScrollList data={rows} keyFor={(row) => row.id} canDrag={(row) => row.kind === 'memo'} contentContainerStyle={styles.list}
-      onHover={(active, target) => { if (active.kind !== 'memo') return; moving.current = { id: active.memo.id, sourceGroup: active.groupKey }; const group = groups.find((item) => item.key === target.groupKey); const next = group?.create?.kind === 'fixed' ? group.key : null; targetRef.current = next; setTargetGroup(next); }}
+      onHover={(active, target) => { if (active.kind !== 'memo') return; moving.current = { id: active.memo.id, sourceGroup: active.groupKey }; const group = groups.find((item) => item.key === target.groupKey); const next = group?.create && !group.create.editable ? group.key : null; targetRef.current = next; setTargetGroup(next); }}
       onDrop={(active, target) => { setTargetGroup(null); targetRef.current = null; if (active.kind === 'memo') onDueDrop(active.memo.id, target.groupKey, target.kind === 'memo' ? target.memo.id : undefined); }}
       renderItem={(item, active) => renderRow(item, active, () => {})} />
   </View>;
