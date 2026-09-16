@@ -173,24 +173,39 @@ export function tryMoveNode(
 
 export const reorderNode = moveNode;
 
+function addMissingRoutinePeriodCategories(nodes: Node[], root: CategoryNode, now: Date) {
+  let result = nodes;
+  const definitions: { suffix: string; kind: CategoryNode['categoryKind']; title: string; extra?: Partial<CategoryNode> }[] = [
+    { suffix: 'monthly', kind: 'routineMonthly', title: '毎月', extra: { routineDayOfMonth: now.getDate() } },
+    { suffix: 'yearly', kind: 'routineYearly', title: '毎年', extra: { routineMonth: now.getMonth(), routineDayOfMonth: now.getDate() } },
+  ];
+  for (const definition of definitions) {
+    if (result.some((node) => node.type === 'category' && node.categoryKind === definition.kind)) continue;
+    result = [...result, { id: `${root.id}-${definition.suffix}`, type: 'category', categoryKind: definition.kind, parentId: root.id, sortKey: nextSortKey(result, root.id), title: definition.title, createdAt: now, updatedAt: now, deletedAt: null, ...definition.extra } as CategoryNode];
+  }
+  return result;
+}
+
 export function createRoutineCategories(nodes: Node[], now = new Date()) {
-  if (nodes.some((node) => node.type === 'category' && node.categoryKind === 'routineRoot' && node.deletedAt === null)) return nodes;
+  const existingRoot = nodes.find((node): node is CategoryNode => node.type === 'category' && node.categoryKind === 'routineRoot' && node.deletedAt === null);
+  if (existingRoot) return addMissingRoutinePeriodCategories(nodes, existingRoot, now);
   const rootId = `routine-${now.getTime()}`; const rootKey = nextSortKey(nodes, null);
   const root: CategoryNode = { id: rootId, type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: rootKey, title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null };
   const daily: CategoryNode = { id: `${rootId}-daily`, type: 'category', categoryKind: 'routineDaily', parentId: rootId, sortKey: 'a0', title: '毎日', createdAt: now, updatedAt: now, deletedAt: null };
   const weekly: CategoryNode = { id: `${rootId}-weekly`, type: 'category', categoryKind: 'routineWeekly', routineWeekday: now.getDay(), parentId: rootId, sortKey: 'a1', title: '毎週', createdAt: now, updatedAt: now, deletedAt: null };
-  return [...nodes, root, daily, weekly];
+  return addMissingRoutinePeriodCategories([...nodes, root, daily, weekly], root, now);
 }
 
 export function ensureRoutineCategories(nodes: Node[], now = new Date()) {
   // A deleted/purged routine root is an intentional user action and must not be
   // resurrected behind the tombstone. Only seed data that has never had one.
-  if (nodes.some((node) => node.type === 'category' && node.categoryKind === 'routineRoot')) return nodes;
+  const existingRoot = nodes.find((node): node is CategoryNode => node.type === 'category' && node.categoryKind === 'routineRoot');
+  if (existingRoot) return existingRoot.deletedAt === null && !existingRoot.purgedAt ? addMissingRoutinePeriodCategories(nodes, existingRoot, now) : nodes;
   const rootId = 'system-routine'; const rootKey = nextSortKey(nodes, null);
   const root: CategoryNode = { id: rootId, type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: rootKey, title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null };
   const daily: CategoryNode = { id: `${rootId}-daily`, type: 'category', categoryKind: 'routineDaily', parentId: rootId, sortKey: 'a0', title: '毎日', createdAt: now, updatedAt: now, deletedAt: null };
   const weekly: CategoryNode = { id: `${rootId}-weekly`, type: 'category', categoryKind: 'routineWeekly', routineWeekday: now.getDay(), parentId: rootId, sortKey: 'a1', title: '毎週', createdAt: now, updatedAt: now, deletedAt: null };
-  return [...nodes, root, daily, weekly];
+  return addMissingRoutinePeriodCategories([...nodes, root, daily, weekly], root, now);
 }
 
 export function completeMemo(nodes: Node[], id: string, now = new Date()) {

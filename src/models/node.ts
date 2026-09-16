@@ -20,8 +20,11 @@ export type BaseNode = {
 
 export type CategoryNode = BaseNode & {
   type: 'category';
-  categoryKind?: 'routineRoot' | 'routineDaily' | 'routineWeekly';
+  categoryKind?: 'routineRoot' | 'routineDaily' | 'routineWeekly' | 'routineMonthly' | 'routineYearly';
   routineWeekday?: number;
+  routineDayOfMonth?: number;
+  /** JavaScript month index (0-11) used with routineDayOfMonth. */
+  routineMonth?: number;
 };
 
 export type DuePreset =
