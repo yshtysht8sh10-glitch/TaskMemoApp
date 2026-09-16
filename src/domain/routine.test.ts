@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CategoryNode, MemoNode, Node } from '@/models/node';
 import { completeMemo, createRoutineCategories, ensureRoutineCategories, hardDeleteNode, moveNode, restoreMemo } from './nodeOperations';
-import { isRoutineDueOn, localDateKey, routineCategoryForMemo, routineHistoryDays, toggleRoutineCompletion } from './routine';
+import { isRoutineDueOn, localDateKey, routineCategoryForMemo, routineCategoryForParent, routineHistoryDays, routineOccurrenceDueAt, toggleRoutineCompletion } from './routine';
 
 const now = new Date(2026, 8, 16, 10);
 const category = (id: string, kind: CategoryNode['categoryKind'], parentId: string | null, weekday?: number): CategoryNode => ({ id, type: 'category', categoryKind: kind, routineWeekday: weekday, parentId, sortKey: id, title: id, createdAt: now, updatedAt: now, deletedAt: null });
@@ -12,7 +12,9 @@ describe('routine', () => {
   it('既存データへ固定IDのルーティーン一式を一度だけ補う', () => { const seeded = ensureRoutineCategories([], now); expect(seeded.map((node) => node.id)).toEqual(['system-routine', 'system-routine-daily', 'system-routine-weekly']); expect(ensureRoutineCategories(seeded, now)).toBe(seeded); });
   it('削除済みルーティーンを自動初期化で復活させない', () => { const seeded = ensureRoutineCategories([], now); const purged = hardDeleteNode(seeded, 'system-routine', now); expect(ensureRoutineCategories(purged, new Date(now.getTime() + 1))).toBe(purged); });
   it('Category名ではなく内部属性と祖先でルールを判定する', () => { const nodes: Node[] = [category('daily', 'routineDaily', null), category('nested', undefined, 'daily'), memo('nested')]; expect(routineCategoryForMemo(nodes, nodes[2] as MemoNode)?.categoryKind).toBe('routineDaily'); });
+  it('新規Memoの追加先からも祖先のルーティーン種別を判定する', () => { const nodes: Node[] = [category('weekly', 'routineWeekly', null, 3), category('nested', undefined, 'weekly')]; expect(routineCategoryForParent(nodes, 'nested')?.categoryKind).toBe('routineWeekly'); });
   it('毎日と指定曜日の毎週だけ対象日に表示する', () => { expect(isRoutineDueOn([category('daily', 'routineDaily', null), memo('daily')], memo('daily'), now)).toBe(true); expect(isRoutineDueOn([category('weekly', 'routineWeekly', null, 1), memo('weekly')], memo('weekly'), now)).toBe(false); });
+  it('毎日は今日、毎週は次の対象曜日をOccurrence期限として返す', () => { const dailyNodes: Node[] = [category('daily', 'routineDaily', null), memo('daily')]; const weeklyNodes: Node[] = [category('weekly', 'routineWeekly', null, 5), memo('weekly')]; expect(routineOccurrenceDueAt(dailyNodes, dailyNodes[1] as MemoNode, now)).toEqual(new Date(2026, 8, 16, 23, 59, 59, 999)); expect(routineOccurrenceDueAt(weeklyNodes, weeklyNodes[1] as MemoNode, now)).toEqual(new Date(2026, 8, 18, 23, 59, 59, 999)); });
   it('完了を日付キー履歴へ記録し翌日も失わず、復元で当日だけ解除する', () => { const source: Node[] = [category('daily', 'routineDaily', null), memo('daily')]; const done = completeMemo(source, 'm', now); const nextDay = new Date(2026, 8, 17, 10); expect((done[1] as MemoNode).routineHistory?.[localDateKey(now)]).toBeTruthy(); expect((done[1] as MemoNode).status).toBe('active'); expect(routineHistoryDays(done[1] as MemoNode, nextDay, 2).map((day) => day.completed)).toEqual([false, true]); expect((restoreMemo(done, 'm', now)[1] as MemoNode).routineHistory).toEqual({}); });
   it('通常Categoryへ移動しても履歴を保持する', () => { const source: Node[] = [category('daily', 'routineDaily', null), category('normal', undefined, null), ...toggleRoutineCompletion([category('daily2', 'routineDaily', null), memo('daily2')], 'm', now).slice(1)]; const moved = moveNode(source, 'm', 'normal'); expect((moved.find((node) => node.id === 'm') as MemoNode).routineHistory?.[localDateKey(now)]).toBeTruthy(); });
 });
