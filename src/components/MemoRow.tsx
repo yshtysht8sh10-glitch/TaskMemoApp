@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { dragActivationDelay } from '@/domain/dragActivation';
 import type { MemoNode } from '@/models/node';
 import { formatDueLabel } from '@/utils/formatDueLabel';
 import { TREE_LAYOUT, TreeRowLayout } from '@/components/TreeRowLayout';
@@ -11,7 +12,7 @@ export function MemoRow({ memo, depth, ancestorContinuation, hasNextSibling, now
   const styles = createStyles(useAppTheme().colors);
   const dueLabel = formatDueLabel(memo); const completed = memo.status === 'completed'; const overdue = !completed && !!memo.dueAt && memo.dueAt.getTime() < now;
   return <CompletionMotion completing={completing} onFinished={onCompletionAnimationFinished}><TreeRowLayout depth={depth} ancestorContinuation={ancestorContinuation} hasNextSibling={hasNextSibling}>
-    <View style={styles.spacing}><Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={320} style={({ pressed }) => [styles.note, completed && styles.completedNote, showInsertBefore && styles.insertBefore, (pressed || isActive) && styles.active]}>
+    <View style={styles.spacing}><Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={dragActivationDelay(Platform.OS === 'web')} style={({ pressed }) => [styles.note, completed && styles.completedNote, showInsertBefore && styles.insertBefore, (pressed || isActive) && styles.active]}>
       <View style={styles.icon}><View style={styles.bullet} /></View>
       <View style={styles.content}><Text style={[styles.title, completed && styles.completedTitle]} numberOfLines={1}>{completed ? `✓ ${memo.title}` : memo.title}</Text>{dueLabel ? <Text style={[styles.due, overdue && styles.overdue]}>{overdue ? `期限切れ · ${dueLabel}` : dueLabel}</Text> : null}</View>
       <MemoRowActions title={memo.title} completed={completed} completing={completing} onComplete={onComplete} onMenu={onMenu} />
