@@ -6,6 +6,11 @@ const now = new Date(2026, 8, 13, 8);
 const base = (id: string, dueAt: Date | null, parentId: string | null = null): Node => ({ id, type: 'memo', parentId, sortKey: id, title: id, body: '', dueAt, duePreset: dueAt ? 'custom' : 'none', status: 'active', completedAt: null, createdAt: now, updatedAt: now, deletedAt: null });
 
 describe('deadline view', () => {
+  it('今日を細分化した見出しに今日と区切り時刻を表示する', () => {
+    expect(deadlineGroupDefinitions('dayNight').filter((group) => ['daytime', 'night'].includes(group.id)).map((group) => group.label)).toEqual(['今日-昼間（～19:00）', '今日-夜（～24:00）']);
+    expect(deadlineGroupDefinitions('amPm').filter((group) => ['am', 'pm'].includes(group.id)).map((group) => group.label)).toEqual(['今日-午前（～12:00）', '今日-午後（～24:00）']);
+    expect(deadlineGroupDefinitions('threePart').filter((group) => ['morning', 'day', 'evening'].includes(group.id)).map((group) => group.label)).toEqual(['今日-朝（～10:00）', '今日-昼（～17:00）', '今日-夜（～24:00）']);
+  });
   it.each([
     ['today', 9, 'today'], ['dayNight', 18, 'daytime'], ['dayNight', 20, 'night'],
     ['amPm', 12, 'am'], ['amPm', 12.01, 'pm'], ['threePart', 10, 'morning'],

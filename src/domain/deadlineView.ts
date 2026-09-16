@@ -19,9 +19,9 @@ const custom = (dueAt: (now: Date) => Date, editable = false): CreateRule => ({ 
 
 const todayDefinitions: Record<TodayGranularity, readonly DeadlineGroupDefinition[]> = {
   today: [{ id: 'today', label: '今日', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日までに変更' }],
-  dayNight: [{ id: 'daytime', label: '昼間', create: custom((now) => at(now, 19)), fallbackGroupId: 'night', dropLabel: '今日19時までに変更' }, { id: 'night', label: '夜', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日中に変更' }],
-  amPm: [{ id: 'am', label: '午前', create: custom((now) => at(now, 12)), fallbackGroupId: 'pm', dropLabel: '今日12時までに変更' }, { id: 'pm', label: '午後', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日中に変更' }],
-  threePart: [{ id: 'morning', label: '朝', create: custom((now) => at(now, 10)), fallbackGroupId: 'day', dropLabel: '今日10時までに変更' }, { id: 'day', label: '昼', create: custom((now) => at(now, 17)), fallbackGroupId: 'evening', dropLabel: '今日17時までに変更' }, { id: 'evening', label: '夜', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日中に変更' }],
+  dayNight: [{ id: 'daytime', label: '今日-昼間（～19:00）', create: custom((now) => at(now, 19)), fallbackGroupId: 'night', dropLabel: '今日19時までに変更' }, { id: 'night', label: '今日-夜（～24:00）', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日中に変更' }],
+  amPm: [{ id: 'am', label: '今日-午前（～12:00）', create: custom((now) => at(now, 12)), fallbackGroupId: 'pm', dropLabel: '今日12時までに変更' }, { id: 'pm', label: '今日-午後（～24:00）', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日中に変更' }],
+  threePart: [{ id: 'morning', label: '今日-朝（～10:00）', create: custom((now) => at(now, 10)), fallbackGroupId: 'day', dropLabel: '今日10時までに変更' }, { id: 'day', label: '今日-昼（～17:00）', create: custom((now) => at(now, 17)), fallbackGroupId: 'evening', dropLabel: '今日17時までに変更' }, { id: 'evening', label: '今日-夜（～24:00）', create: fixed('today', (now) => dayEnd(now, 0)), fallbackGroupId: 'tomorrow', dropLabel: '今日中に変更' }],
 };
 const common: readonly DeadlineGroupDefinition[] = [
   { id: 'overdue', label: '期限切れ', create: null, fallbackGroupId: null },
