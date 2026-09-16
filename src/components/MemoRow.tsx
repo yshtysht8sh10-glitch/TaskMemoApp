@@ -7,15 +7,15 @@ import { useAppTheme, type ThemeColors } from '@/theme/theme';
 import { MemoRowActions } from '@/components/MemoRowActions';
 import { CompletionMotion } from '@/components/CompletionMotion';
 
-type Props = { memo: MemoNode; depth: number; ancestorContinuation: boolean[]; hasNextSibling: boolean; now: number; isActive?: boolean; showInsertBefore?: boolean; completing?: boolean; selectionMode?: boolean; selected?: boolean; onToggleSelected?: () => void; onCompletionAnimationFinished: () => void; onPress: () => void; onComplete: () => void; onMenu: () => void; onLongPress: () => void };
-export function MemoRow({ memo, depth, ancestorContinuation, hasNextSibling, now, isActive, showInsertBefore, completing = false, selectionMode = false, selected = false, onToggleSelected, onCompletionAnimationFinished, onPress, onComplete, onMenu, onLongPress }: Props) {
+type Props = { memo: MemoNode; depth: number; ancestorContinuation: boolean[]; hasNextSibling: boolean; now: number; isActive?: boolean; showInsertBefore?: boolean; completing?: boolean; routine?: boolean; selectionMode?: boolean; selected?: boolean; onToggleSelected?: () => void; onCompletionAnimationFinished: () => void; onPress: () => void; onComplete: () => void; onMenu: () => void; onLongPress: () => void };
+export function MemoRow({ memo, depth, ancestorContinuation, hasNextSibling, now, isActive, showInsertBefore, completing = false, routine = false, selectionMode = false, selected = false, onToggleSelected, onCompletionAnimationFinished, onPress, onComplete, onMenu, onLongPress }: Props) {
   const styles = createStyles(useAppTheme().colors);
   const dueLabel = formatDueLabel(memo); const completed = memo.status === 'completed'; const overdue = !completed && !!memo.dueAt && memo.dueAt.getTime() < now;
   return <CompletionMotion completing={completing} onFinished={onCompletionAnimationFinished}><TreeRowLayout depth={depth} ancestorContinuation={ancestorContinuation} hasNextSibling={hasNextSibling}>
     <View style={styles.spacing}><Pressable onPress={selectionMode ? onToggleSelected : onPress} onLongPress={selectionMode ? undefined : onLongPress} delayLongPress={dragActivationDelay(Platform.OS === 'web')} style={({ pressed }) => [styles.note, completed && styles.completedNote, selected && styles.selectedNote, showInsertBefore && styles.insertBefore, (pressed || isActive) && styles.active]}>
       {selectionMode && <View accessibilityRole="checkbox" accessibilityState={{ checked: selected }} style={[styles.checkbox, selected && styles.checkboxOn]}><Text style={styles.checkmark}>{selected ? '✓' : ''}</Text></View>}
       <View style={styles.icon}><View style={styles.bullet} /></View>
-      <View style={styles.content}><Text style={[styles.title, completed && styles.completedTitle]} numberOfLines={1}>{completed ? `✓ ${memo.title}` : memo.title}</Text>{dueLabel ? <Text style={[styles.due, overdue && styles.overdue]}>{overdue ? `期限切れ · ${dueLabel}` : dueLabel}</Text> : null}</View>
+      <View style={styles.content}><Text style={[styles.title, completed && styles.completedTitle]} numberOfLines={1}>{routine ? '🔁 ' : ''}{completed ? `✓ ${memo.title}` : memo.title}</Text>{dueLabel ? <Text style={[styles.due, overdue && styles.overdue]}>{overdue ? `期限切れ · ${dueLabel}` : dueLabel}</Text> : null}</View>
       {!selectionMode && <MemoRowActions title={memo.title} completed={completed} completing={completing} onComplete={onComplete} onMenu={onMenu} />}
     </Pressable></View>
   </TreeRowLayout></CompletionMotion>;
