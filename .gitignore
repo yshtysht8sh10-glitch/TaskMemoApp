@@ -8,6 +8,7 @@ node_modules/
 dist/
 dist-native-check/
 web-build/
+.firebase/
 expo-env.d.ts
 
 # Native
