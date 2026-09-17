@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import DraggableFlatList, { type DragEndParams, ScaleDecorator } from 'react-native-draggable-flatlist';
-import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, type VisibleTreeRow } from '@/domain/treeView';
+import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, visibleDescendantNodeCount, visibleUnassignedMemoCount, type VisibleTreeRow } from '@/domain/treeView';
 import { dropCandidateFor, resolveDropCandidate, type DropCandidate } from '@/domain/treeDrop';
 import type { Node } from '@/models/node';
 import { CategoryRow } from '@/components/CategoryRow';
@@ -12,14 +12,15 @@ import { useAppTheme, type ThemeColors } from '@/theme/theme';
 import { WebSortableScrollList } from '@/components/WebSortableScrollList';
 import { routineCategoryForMemo } from '@/domain/routine';
 import { completableSelectedMemoIds, normalizeSelectedNodeIds, selectedNodeState } from '@/domain/nodeSelection';
+import { useInlineTitleEdit } from '@/hooks/useInlineTitleEdit';
 
 export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
-type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onEdit: (node: Node) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
+type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
 const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
 let retainedExpandedCategoryIds = new Set(INITIAL_EXPANDED_CATEGORY_IDS);
 
-export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, onAddMemo, onEdit, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
+export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
   const { colors } = useAppTheme(); const styles = createStyles(colors);
   const [mountId] = useState(nextTreeMountId);
   const viewportRef = useRef<View>(null); const scrollOffsetRef = useRef(0);
@@ -27,10 +28,12 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
   const [expanded, setExpanded] = useState(() => new Set(retainedExpandedCategoryIds));
   const [candidate, setCandidate] = useState<DropCandidate | null>(null);
   const [selectionMode, setSelectionMode] = useState(false); const [selectedNodeIds, setSelectedNodeIds] = useState(() => new Set<string>());
+  const titleEdit = useInlineTitleEdit(onRenameMemo);
   const movingId = useRef<string | null>(null);
   const candidateRef = useRef<DropCandidate | null>(null);
   const rows = useMemo(() => flattenVisibleNodes(nodes, expanded), [nodes, expanded]);
   const categoryIds = useMemo(() => [UNASSIGNED_GROUP_ID, ...nodes.filter((node) => node.type === 'category' && node.deletedAt === null).map((node) => node.id)], [nodes]);
+  const categoryChildCounts = useMemo(() => new Map(categoryIds.map((id) => [id, id === UNASSIGNED_GROUP_ID ? visibleUnassignedMemoCount(nodes) : visibleDescendantNodeCount(nodes, id)])), [categoryIds, nodes]);
   const orderedKeys = useMemo(() => rows.map((row) => row.node.id), [rows]);
   const revision = useMemo(() => nodesRevision(nodes), [nodes]);
   useEffect(() => { treeDiagnosticLog('tree-render', { mountId, nodesRevision: revision, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys, expanded: [...expanded] }); }, [expanded, mountId, nodes, orderedKeys, revision, rows]);
@@ -65,7 +68,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
       renderItem={(item, isActive) => {
         const isTarget = candidate?.targetId === item.node.id; const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
         const selectionState = selectedNodeState(nodes, selectedNodeIds, item.node.id);
-        return item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} onPress={() => onEdit(item.node)} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} />;
+        return item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} collapsedChildCount={categoryChildCounts.get(item.node.id) ?? 0} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} titleEdit={titleEdit} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} />;
       }} />
     {actionBar}
   </View>;
@@ -81,7 +84,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
     const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
     const selectionState = selectedNodeState(nodes, selectedNodeIds, item.node.id);
     return <TreeRowDiagnostics rowKey={item.node.id} index={getIndex() ?? -1} orderedKeys={orderedKeys} viewportRef={viewportRef} scrollOffsetRef={scrollOffsetRef} revision={revision}>
-      <ScaleDecorator activeScale={1.025}>{item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode || item.virtual ? () => {} : drag} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} onPress={() => onEdit(item.node)} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode ? () => {} : drag} />}</ScaleDecorator>
+      <ScaleDecorator activeScale={1.025}>{item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} collapsedChildCount={categoryChildCounts.get(item.node.id) ?? 0} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode || item.virtual ? () => {} : drag} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} titleEdit={titleEdit} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode ? () => {} : drag} />}</ScaleDecorator>
     </TreeRowDiagnostics>;
       }} />
     </View>

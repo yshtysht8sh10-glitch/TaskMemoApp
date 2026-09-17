@@ -8,6 +8,12 @@ const root = (): CategoryNode => ({ id: 'routine', type: 'category', categoryKin
 const memo = (rule: RepeatRule | null, parentId = 'routine'): MemoNode => ({ id: 'm', type: 'memo', parentId, sortKey: 'm', title: 'm', body: '', dueAt: null, duePreset: 'none', status: 'active', completedAt: null, repeatRule: rule, createdAt: now, updatedAt: now, deletedAt: null });
 
 describe('routine', () => {
+  it('日付境界の直前には発生せず、開始日の0時以降に発生する', () => {
+    const task = memo({ frequency: 'day', interval: 1, startsOn: '2026-09-17' });
+    const nodes = [root(), task];
+    expect(routineOccurrenceDueAt(nodes, task, new Date(2026, 8, 16, 23, 59, 59, 999))).toBeNull();
+    expect(routineOccurrenceDueAt(nodes, task, new Date(2026, 8, 17, 0, 0, 0, 0))).toEqual(new Date(2026, 8, 17, 23, 59, 59, 999));
+  });
   it('特殊Categoryはルーティーンだけを重複なく作成する', () => { const created = ensureRoutineCategories([], now); expect(created.map((node) => node.type === 'category' && node.categoryKind)).toEqual(['routineRoot']); expect(ensureRoutineCategories(created, now)).toBe(created); });
   it('既存データには固定IDのルーティーンだけを一度補う', () => { const seeded = ensureRoutineCategories([], now); expect(seeded.map((node) => node.id)).toEqual(['system-routine']); expect(ensureRoutineCategories(seeded, now)).toBe(seeded); });
   it('過去に削除されたルーティーンも常設Categoryとして復元する', () => { const seeded = ensureRoutineCategories([], now); const deleted = seeded.map((node) => ({ ...node, deletedAt: now, purgedAt: now })); expect(ensureRoutineCategories(deleted, new Date(now.getTime() + 1))[0]).toMatchObject({ title: 'ルーティーン', parentId: null, deletedAt: null, purgedAt: null }); });

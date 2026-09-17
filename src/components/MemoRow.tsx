@@ -1,4 +1,4 @@
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { dragActivationDelay } from "@/domain/dragActivation";
 import type { MemoNode } from "@/models/node";
 import { formatDueLabel } from "@/utils/formatDueLabel";
@@ -8,6 +8,7 @@ import { MemoRowActions } from "@/components/MemoRowActions";
 import { CompletionMotion } from "@/components/CompletionMotion";
 import { repeatRuleLabel } from "@/domain/routine";
 import { isIdea } from "@/domain/memoType";
+import type { InlineTitleEditController } from "@/hooks/useInlineTitleEdit";
 
 type Props = {
   memo: MemoNode;
@@ -23,7 +24,7 @@ type Props = {
   selectionState?: "selected" | "contained" | "none";
   onToggleSelected?: () => void;
   onCompletionAnimationFinished: () => void;
-  onPress: () => void;
+  titleEdit: InlineTitleEditController;
   onComplete: () => void;
   onMenu: () => void;
   onLongPress: () => void;
@@ -42,7 +43,7 @@ export function MemoRow({
   selectionState = "none",
   onToggleSelected,
   onCompletionAnimationFinished,
-  onPress,
+  titleEdit,
   onComplete,
   onMenu,
   onLongPress,
@@ -74,7 +75,7 @@ export function MemoRow({
                 ? selectionState === "contained"
                   ? undefined
                   : onToggleSelected
-                : onPress
+                : () => titleEdit.begin(memo.id, memo.title)
             }
             onLongPress={selectionMode ? undefined : onLongPress}
             delayLongPress={dragActivationDelay(Platform.OS === "web")}
@@ -118,22 +119,50 @@ export function MemoRow({
               </View>
             )}
             <View style={styles.icon}>
-              <Text style={idea ? styles.ideaIcon : styles.taskIcon}>
-                {idea ? "💡" : "☑"}
-              </Text>
+              {idea ? <Text style={styles.ideaIcon}>💡</Text> : <View style={styles.bullet} />}
             </View>
             <View style={styles.content}>
-              <Text
-                style={[
-                  styles.title,
-                  idea && styles.ideaTitle,
-                  completed && styles.completedTitle,
-                ]}
-                numberOfLines={1}
-              >
-                {routine ? "🔁 " : ""}
-                {completed ? `✓ ${memo.title}` : memo.title}
-              </Text>
+              {titleEdit.editing ? (
+                <View nativeID={titleEdit.nativeID}>
+                  <View style={styles.titleEditRow}>
+                    <TextInput
+                      autoFocus
+                      value={titleEdit.draft}
+                      onChangeText={titleEdit.changeDraft}
+                      onBlur={titleEdit.blur}
+                      onSubmitEditing={titleEdit.submit}
+                      onKeyPress={({ nativeEvent }) => {
+                        if (nativeEvent.key === "Escape") titleEdit.cancel();
+                      }}
+                      returnKeyType="done"
+                      selectTextOnFocus
+                      style={[styles.title, styles.titleInput]}
+                    />
+                    <Pressable
+                      accessibilityLabel="タイトル編集をキャンセル"
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        titleEdit.cancel();
+                      }}
+                      style={styles.titleCancel}
+                    >
+                      <Text style={styles.titleCancelText}>×</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Text
+                  style={[
+                    styles.title,
+                    idea && styles.ideaTitle,
+                    completed && styles.completedTitle,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {routine ? "🔁 " : ""}
+                  {completed ? `✓ ${memo.title}` : memo.title}
+                </Text>
+              )}
               {detailLabel ? (
                 <Text
                   style={[
@@ -147,8 +176,8 @@ export function MemoRow({
                     : routine
                       ? detailLabel
                       : overdue
-                        ? `📅 期限切れ · ${detailLabel}`
-                        : `📅 ${detailLabel}`}
+                        ? `期限切れ · ${detailLabel}`
+                        : detailLabel}
                 </Text>
               ) : null}
             </View>
@@ -233,7 +262,6 @@ const createStyles = (colors: ThemeColors) =>
     insertBefore: { borderTopWidth: 3, borderTopColor: colors.accent },
     active: { opacity: 0.82, backgroundColor: colors.accentSoft },
     icon: { width: TREE_LAYOUT.iconWidth, alignItems: "center" },
-    taskIcon: { color: colors.accent, fontSize: 15, fontWeight: "800" },
     ideaIcon: { fontSize: 15 },
     bullet: {
       width: 5,
@@ -243,6 +271,26 @@ const createStyles = (colors: ThemeColors) =>
     },
     content: { flex: 1, paddingVertical: 5 },
     title: { color: colors.memoText, fontSize: 15, lineHeight: 19 },
+    titleInput: {
+      flex: 1,
+      minHeight: 30,
+      paddingVertical: 3,
+      paddingHorizontal: 6,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      borderRadius: 4,
+      backgroundColor: colors.surface,
+    },
+    titleEditRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+    titleCancel: {
+      width: 30,
+      height: 30,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: 15,
+      backgroundColor: colors.surfaceAlt,
+    },
+    titleCancelText: { color: colors.textSecondary, fontSize: 18 },
     due: {
       marginTop: 1,
       color: colors.textSecondary,

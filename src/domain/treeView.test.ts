@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '../models/node';
-import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, visibleAncestorGuides } from './treeView';
+import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, visibleAncestorGuides, visibleDescendantNodeCount, visibleUnassignedMemoCount } from './treeView';
 
 const now = new Date('2026-09-13T00:00:00Z');
 const category = (id: string, parentId: string | null, sortKey: string): Node => ({ id, type: 'category', parentId, sortKey, title: id, createdAt: now, updatedAt: now, deletedAt: null });
@@ -16,4 +16,6 @@ describe('tree row layout metadata', () => {
   it('開閉で子を除外しても兄弟情報を維持する', () => { const nodes = [category('a', null, 'a0'), category('b', 'a', 'a0'), memo('m', 'a', 'a1')]; expect(flattenVisibleNodes(nodes, new Set()).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'a']); expect(flattenVisibleNodes(nodes, new Set(['a'])).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'a', 'b', 'm']); });
   it('完了済みroot Memoも元のsortKey位置で無所属配下に置く', () => { const active = memo('active', null, 'a1'); const done = { ...memo('done', null, 'a0'), status: 'completed' as const, completedAt: now }; expect(flattenVisibleNodes([active, done], new Set([UNASSIGNED_GROUP_ID])).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'done', 'active']); });
   it('完了済みMemoも元のCategoryとsortKey位置に置き、削除済みMemoだけを除外する', () => { const done = { ...memo('done', 'a', 'a0'), status: 'completed' as const, completedAt: now }; const active = memo('active', 'a', 'a1'); const deleted = { ...memo('deleted', 'a', 'a2'), deletedAt: now }; expect(flattenVisibleNodes([category('a', null, 'a0'), active, deleted, done], new Set(['a'])).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'a', 'done', 'active']); });
+  it('折りたたみ表示用に全子孫Nodeを数え、削除済みNodeを除外する', () => { const deleted = { ...memo('deleted', 'b', 'a1'), deletedAt: now }; const nodes = [category('a', null, 'a0'), category('b', 'a', 'a0'), memo('deep', 'b', 'a0'), deleted]; expect(visibleDescendantNodeCount(nodes, 'a')).toBe(2); expect(visibleDescendantNodeCount(nodes, 'b')).toBe(1); });
+  it('無所属件数にはroot Memoだけを含める', () => { expect(visibleUnassignedMemoCount([category('a', null, 'a0'), memo('root', null, 'a1'), memo('child', 'a', 'a0')])).toBe(1); });
 });

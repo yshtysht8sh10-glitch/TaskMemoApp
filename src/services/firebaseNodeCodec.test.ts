@@ -5,6 +5,18 @@ import { applyRemoteDeletionsAsTombstones, mergeNodesByUpdatedAt, nodeFromFirest
 const memo = (id: string, updatedAt: Date): MemoNode => ({ id, type: 'memo', parentId: null, sortKey: id, title: id, body: '', dueAt: null, duePreset: 'none', status: 'active', completedAt: null, createdAt: new Date(0), updatedAt, deletedAt: null });
 
 describe('Firebase Node boundary', () => {
+  it('端末A→cloud→端末B→cloud→端末Aの更新を新しいupdatedAt順に往復する', () => {
+    const original = memo('shared', new Date(10));
+    const deviceA = { ...original, title: 'Aで変更', updatedAt: new Date(20) };
+    const cloudAfterA = mergeNodesByUpdatedAt([original], [deviceA]);
+    const deviceBReceived = mergeNodesByUpdatedAt([original], cloudAfterA);
+    expect(deviceBReceived[0]).toMatchObject({ title: 'Aで変更', updatedAt: new Date(20) });
+
+    const deviceB = { ...deviceBReceived[0], title: 'Bで変更', updatedAt: new Date(30) };
+    const cloudAfterB = mergeNodesByUpdatedAt(cloudAfterA, [deviceB]);
+    const deviceAReceived = mergeNodesByUpdatedAt([deviceA], cloudAfterB);
+    expect(deviceAReceived[0]).toMatchObject({ title: 'Bで変更', updatedAt: new Date(30) });
+  });
   it('Task/Idea種別をFirestore境界で往復し、旧MemoはTaskへ正規化する', () => { const idea = nodeFromFirestore('idea', nodeToFirestore({ ...memo('idea', new Date(1)), memoType: 'idea' })); const task = nodeFromFirestore('task', nodeToFirestore({ ...memo('task', new Date(1)), memoType: 'task' })); const legacy = nodeFromFirestore('legacy', nodeToFirestore(memo('legacy', new Date(1)))); expect(idea.type === 'memo' && idea.memoType).toBe('idea'); expect(task.type === 'memo' && task.memoType).toBe('task'); expect(legacy.type === 'memo' && legacy.memoType).toBe('task'); });
   it('Dateとrepeat ruleをFirestore境界で往復する', () => { const source = { ...memo('a', new Date('2026-01-02T03:04:05Z')), repeatRule: { frequency: 'week' as const, interval: 2, startsOn: '2026-01-02' } }; const encoded = nodeToFirestore(source); const decoded = nodeFromFirestore('a', encoded); expect(decoded.updatedAt).toEqual(source.updatedAt); expect(decoded.type).toBe('memo'); if (decoded.type === 'memo') expect(decoded.repeatRule).toEqual(source.repeatRule); });
   it('同じIDはupdatedAtが新しい側を採用し、片側だけのNodeを保持する', () => { const local = [memo('shared', new Date(20)), memo('local', new Date(10))]; const remote = [memo('shared', new Date(30)), memo('remote', new Date(10))]; const merged = mergeNodesByUpdatedAt(local, remote); expect(merged.map((node) => node.id).sort()).toEqual(['local', 'remote', 'shared']); expect(merged.find((node) => node.id === 'shared')?.updatedAt).toEqual(new Date(30)); });

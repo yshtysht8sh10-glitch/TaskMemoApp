@@ -29,6 +29,16 @@ export function sameNodes(a: Node[], b: Node[]) {
   return a === b || (a.length === b.length && a.every((node, index) => sameValue(node, b[index])));
 }
 
+export function sameNodeSet(a: Node[], b: Node[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  const bById = new Map(b.map((node) => [node.id, node]));
+  return a.every((node) => {
+    const other = bById.get(node.id);
+    return !!other && sameValue(node, other);
+  });
+}
+
 export function commitNodeHistory(history: NodeHistory, label: string, operation: (nodes: Node[]) => Node[]): NodeHistory {
   const next = operation(history.nodes);
   if (sameNodes(history.nodes, next)) return history;
@@ -50,4 +60,9 @@ export function redoNodeHistory(history: NodeHistory): NodeHistory {
 
 export function replaceNodeHistory(history: NodeHistory, nodes: Node[]): NodeHistory {
   return { nodes, past: [], future: [] };
+}
+
+export function reconcileSyncedNodeHistory(history: NodeHistory, nodes: Node[]): NodeHistory {
+  if (sameNodeSet(history.nodes, nodes)) return history;
+  return replaceNodeHistory(history, nodes);
 }

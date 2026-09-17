@@ -9,6 +9,7 @@ type Props = {
   ancestorContinuation: boolean[];
   hasNextSibling: boolean;
   isExpanded: boolean;
+  collapsedChildCount?: number;
   isActive?: boolean;
   isDropInside?: boolean;
   showInsertBefore?: boolean;
@@ -29,6 +30,7 @@ export function CategoryRow({
   ancestorContinuation,
   hasNextSibling,
   isExpanded,
+  collapsedChildCount = 0,
   isActive,
   isDropInside,
   showInsertBefore,
@@ -103,13 +105,18 @@ export function CategoryRow({
             </Text>
           </View>
         )}
-        <Text style={styles.icon}>{isExpanded ? "▼" : "▶"}</Text>
+        <Text style={styles.icon}>
+          {collapsedChildCount === 0 ? "•" : isExpanded ? "▼" : "▶"}
+        </Text>
         <Text style={styles.kindIcon}>
           {virtual ? "◇" : routine ? "🔁" : "📁"}
         </Text>
         <Text style={styles.title} numberOfLines={2}>
           {category.title}
         </Text>
+        {!isExpanded && collapsedChildCount > 0 && (
+          <Text style={styles.childCount}>{collapsedChildCount}件</Text>
+        )}
         {!selectionMode && allowAddMemo && (
           <Pressable
             hitSlop={8}
@@ -191,6 +198,12 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: 15,
       fontWeight: "700",
       lineHeight: 20,
+    },
+    childCount: {
+      marginHorizontal: 6,
+      color: colors.textSecondary,
+      fontSize: 11,
+      fontWeight: "600",
     },
     menu: {
       width: 38,

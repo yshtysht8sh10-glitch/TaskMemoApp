@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commitNodeHistory, createNodeHistory, NODE_HISTORY_LIMIT, redoNodeHistory, replaceNodeHistory, undoNodeHistory } from './nodeHistory';
+import { commitNodeHistory, createNodeHistory, NODE_HISTORY_LIMIT, reconcileSyncedNodeHistory, redoNodeHistory, replaceNodeHistory, undoNodeHistory } from './nodeHistory';
 import type { Node } from '@/models/node';
 
 const node = (title = 'A'): Node => ({ id: 'a', type: 'category', parentId: null, sortKey: 'a0', title, createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null });
@@ -25,5 +25,26 @@ describe('node history', () => {
     for (let i = 0; i < NODE_HISTORY_LIMIT + 5; i += 1) history = commitNodeHistory(history, '編集', (nodes) => nodes.map((item) => ({ ...item, title: String(i) })));
     expect(history.past).toHaveLength(NODE_HISTORY_LIMIT);
     expect(replaceNodeHistory(history, [node('reset')]).past).toHaveLength(0);
+  });
+
+  it('keeps undo and redo history when Firebase echoes the same nodes in another order', () => {
+    const second = { ...node('second'), id: 'b', sortKey: 'b0' };
+    const initial = createNodeHistory([node(), second]);
+    const changed = commitNodeHistory(initial, 'タイトル編集', (nodes) =>
+      nodes.map((item) => item.id === 'a' ? { ...item, title: 'edited' } : item),
+    );
+    const echoed = reconcileSyncedNodeHistory(changed, [...changed.nodes].reverse());
+    expect(echoed).toBe(changed);
+    expect(undoNodeHistory(echoed).nodes.find((item) => item.id === 'a')?.title).toBe('A');
+  });
+
+  it('clears local history for a genuinely different external node set', () => {
+    const changed = commitNodeHistory(createNodeHistory([node()]), '編集', (nodes) =>
+      nodes.map((item) => ({ ...item, title: 'local' })),
+    );
+    const reconciled = reconcileSyncedNodeHistory(changed, [node('remote')]);
+    expect(reconciled.nodes[0].title).toBe('remote');
+    expect(reconciled.past).toHaveLength(0);
+    expect(reconciled.future).toHaveLength(0);
   });
 });

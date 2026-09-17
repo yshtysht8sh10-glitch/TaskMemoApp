@@ -5,6 +5,30 @@ export const UNASSIGNED_GROUP_ID = '__unassigned__';
 const UNASSIGNED_GROUP: CategoryNode = { id: UNASSIGNED_GROUP_ID, type: 'category', parentId: null, sortKey: '', title: '無所属', createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null };
 export type VisibleTreeRow = { node: Node; depth: number; ancestorContinuation: boolean[]; hasNextSibling: boolean; virtual?: 'unassigned' };
 
+export function visibleDescendantNodeCount(nodes: Node[], categoryId: string) {
+  const byParent = new Map<string, Node[]>();
+  for (const node of visibleNodes(nodes)) {
+    if (node.parentId === null) continue;
+    byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]);
+  }
+  let count = 0;
+  const visited = new Set<string>([categoryId]);
+  const walk = (parentId: string) => {
+    for (const child of byParent.get(parentId) ?? []) {
+      if (visited.has(child.id)) continue;
+      visited.add(child.id);
+      count += 1;
+      if (child.type === 'category') walk(child.id);
+    }
+  };
+  walk(categoryId);
+  return count;
+}
+
+export function visibleUnassignedMemoCount(nodes: Node[]) {
+  return visibleNodes(nodes).filter((node) => node.type === 'memo' && node.parentId === null).length;
+}
+
 export function visibleAncestorGuides(depth: number, ancestorContinuation: boolean[], maxVisibleDepth: number) {
   const hiddenLevels = Math.max(0, depth - maxVisibleDepth);
   const visibleDepth = Math.min(depth, maxVisibleDepth);

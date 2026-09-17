@@ -28,6 +28,8 @@ import type { MemoNode, Node } from "@/models/node";
 import { formatDateTimeInput, parseLocalDateTime } from "@/utils/dueDates";
 import { formatDueLabel } from "@/utils/formatDueLabel";
 import { useAppTheme, type ThemeColors } from "@/theme/theme";
+import { useInlineTitleEdit } from "@/hooks/useInlineTitleEdit";
+import { CountBadge } from "@/components/CountBadge";
 import { MemoRowActions } from "@/components/MemoRowActions";
 import { CompletionMotion } from "@/components/CompletionMotion";
 import { WebSortableScrollList } from "@/components/WebSortableScrollList";
@@ -45,6 +47,7 @@ type DeadlineRow =
       groupKey: DeadlineGroupKey;
       kind: "heading";
       label: string;
+      memoCount: number;
       createContext: DeadlineCreateContext | null;
       dropLabel?: string;
     }
@@ -73,7 +76,7 @@ type Props = {
     title: string,
     deadline: Pick<NodeDraft, "duePreset" | "dueAt">,
   ) => void;
-  onEdit: (memo: MemoNode) => void;
+  onRenameMemo: (id: string, title: string) => void;
   onComplete: (memo: MemoNode) => void;
   onMenu: (memo: MemoNode) => void;
   onDueDrop: (id: string, group: DeadlineGroupKey, beforeId?: string) => void;
@@ -97,6 +100,7 @@ function WebPinnedNote({
   onHeightChange,
   colors,
   styles,
+  embedded = false,
 }: {
   body: string;
   height: number;
@@ -104,6 +108,7 @@ function WebPinnedNote({
   onHeightChange: (height: number) => void;
   colors: ThemeColors;
   styles: ReturnType<typeof createStyles>;
+  embedded?: boolean;
 }) {
   const [draftHeight, setDraftHeight] = useState(height);
   const startY = useRef(0);
@@ -134,7 +139,13 @@ function WebPinnedNote({
     onHeightChange(currentHeight.current);
   };
   return (
-    <View style={[styles.pinned, { height: draftHeight, paddingBottom: 18 }]}>
+    <View
+      style={[
+        styles.pinned,
+        embedded && styles.pinnedInList,
+        { height: draftHeight, paddingBottom: 18 },
+      ]}
+    >
       <Text style={styles.pinnedLabel}>常設メモ</Text>
       <TextInput
         multiline
@@ -203,7 +214,7 @@ export function DeadlineView({
   expandedGroups,
   onExpandedGroupsChange,
   onQuickAdd,
-  onEdit,
+  onRenameMemo,
   onComplete,
   onMenu,
   onDueDrop,
@@ -295,6 +306,33 @@ export function DeadlineView({
   const [quickTitle, setQuickTitle] = useState("");
   const [quickDueAt, setQuickDueAt] = useState("");
   const [quickError, setQuickError] = useState<string | null>(null);
+  const titleEdit = useInlineTitleEdit(onRenameMemo);
+  const quickBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quickPointerTarget = useRef<"inside" | "outside" | null>(null);
+  useEffect(
+    () => () => {
+      if (quickBlurTimer.current) clearTimeout(quickBlurTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      !quickAdd ||
+      typeof document === "undefined"
+    )
+      return;
+    const rememberPointerTarget = (event: PointerEvent) => {
+      quickPointerTarget.current =
+        event.target instanceof Element &&
+        !!event.target.closest("#deadline-quick-add")
+          ? "inside"
+          : "outside";
+    };
+    document.addEventListener("pointerdown", rememberPointerTarget, true);
+    return () =>
+      document.removeEventListener("pointerdown", rememberPointerTarget, true);
+  }, [quickAdd]);
   const [targetGroup, setTargetGroup] = useState<DeadlineGroupKey | null>(null);
   const moving = useRef<{ id: string; sourceGroup: DeadlineGroupKey } | null>(
     null,
@@ -334,6 +372,7 @@ export function DeadlineView({
             groupKey: group.key,
             kind: "heading",
             label: group.label,
+            memoCount: group.memos.length,
             createContext: context,
             dropLabel: group.dropLabel,
           },
@@ -358,8 +397,24 @@ export function DeadlineView({
     );
     setQuickError(null);
   };
+  const keepQuickAddOpen = () => {
+    if (!quickBlurTimer.current) return;
+    clearTimeout(quickBlurTimer.current);
+    quickBlurTimer.current = null;
+  };
+  const focusQuickAdd = () => {
+    keepQuickAddOpen();
+    quickPointerTarget.current = null;
+  };
+  const cancelQuickAdd = () => {
+    keepQuickAddOpen();
+    setQuickAdd(null);
+    setQuickTitle("");
+    setQuickError(null);
+  };
   const submitQuickAdd = () => {
     if (!quickAdd || !quickTitle.trim()) return;
+    keepQuickAddOpen();
     try {
       const editableDueAt = quickAdd.dueEditable
         ? parseLocalDateTime(quickDueAt)
@@ -379,6 +434,20 @@ export function DeadlineView({
       );
     }
   };
+  const handleQuickAddBlur = () => {
+    keepQuickAddOpen();
+    const pointerTarget = quickPointerTarget.current;
+    quickPointerTarget.current = null;
+    quickBlurTimer.current = setTimeout(() => {
+      quickBlurTimer.current = null;
+      if (Platform.OS === "web" && pointerTarget === null) {
+        if (quickTitle.trim()) submitQuickAdd();
+        else cancelQuickAdd();
+        return;
+      }
+      if (pointerTarget !== "inside") cancelQuickAdd();
+    }, 0);
+  };
   const setCandidate = (index: number) => {
     const groupKey = rows[index]?.groupKey;
     const group = groups.find((item) => item.key === groupKey);
@@ -397,7 +466,7 @@ export function DeadlineView({
   };
   const memoMeta = (memo: MemoNode) => {
     if (!routineCategoryForMemo(nodes, memo))
-      return `📅 ${formatDueLabel(memo) ?? (memo.dueAt ? memo.dueAt.toLocaleString() : "期限なし")} · ${categoryPath(nodes, memo.parentId)}`;
+      return `${formatDueLabel(memo) ?? (memo.dueAt ? memo.dueAt.toLocaleString() : "期限なし")} · ${categoryPath(nodes, memo.parentId)}`;
     const occurrence = routineOccurrenceDueAt(nodes, memo, currentDate);
     return `🔁 ${repeatRuleLabel(memo.repeatRule)} · ${occurrence ? "今日分" : "本日の発生なし"} · ${categoryPath(nodes, memo.parentId)}`;
   };
@@ -418,7 +487,11 @@ export function DeadlineView({
           style={styles.headingToggle}
         >
           <Text style={styles.disclosure}>
-            {expandedGroups.has(item.groupKey) ? "▼" : "▶"}
+            {item.memoCount === 0
+              ? "•"
+              : expandedGroups.has(item.groupKey)
+                ? "▼"
+                : "▶"}
           </Text>
           <Text
             style={[
@@ -428,6 +501,7 @@ export function DeadlineView({
           >
             📅 {targetGroup === item.groupKey ? item.dropLabel : item.label}
           </Text>
+          <CountBadge count={item.memoCount} />
         </Pressable>
         {item.createContext && (
           <Pressable
@@ -440,11 +514,13 @@ export function DeadlineView({
         )}
       </View>
     ) : item.kind === "quickAdd" ? (
-      <View style={styles.quickAdd}>
+      <View nativeID="deadline-quick-add" style={styles.quickAdd}>
         <TextInput
           autoFocus
           value={quickTitle}
           onChangeText={setQuickTitle}
+          onFocus={focusQuickAdd}
+          onBlur={handleQuickAddBlur}
           onSubmitEditing={submitQuickAdd}
           returnKeyType="done"
           placeholder="タイトルを入力…"
@@ -455,6 +531,8 @@ export function DeadlineView({
           <TextInput
             value={quickDueAt}
             onChangeText={setQuickDueAt}
+            onFocus={focusQuickAdd}
+            onBlur={handleQuickAddBlur}
             onSubmitEditing={submitQuickAdd}
             returnKeyType="done"
             placeholder="YYYY/MM/DD HH:mm"
@@ -463,13 +541,29 @@ export function DeadlineView({
           />
         )}
         {quickError && <Text style={styles.quickError}>{quickError}</Text>}
-        <Pressable
-          onPress={() => setQuickAdd(null)}
-          accessibilityLabel="クイック追加をキャンセル"
-          style={styles.cancel}
-        >
-          <Text style={styles.cancelText}>×</Text>
-        </Pressable>
+        <View style={styles.quickActions}>
+          <Pressable
+            onPress={submitQuickAdd}
+            disabled={!quickTitle.trim()}
+            accessibilityRole="button"
+            accessibilityLabel="Memoを追加"
+            accessibilityState={{ disabled: !quickTitle.trim() }}
+            style={[
+              styles.quickSubmit,
+              !quickTitle.trim() && styles.quickSubmitDisabled,
+            ]}
+          >
+            <Text style={styles.quickSubmitText}>追加</Text>
+          </Pressable>
+          <Pressable
+            onPress={cancelQuickAdd}
+            accessibilityRole="button"
+            accessibilityLabel="クイック追加をキャンセル"
+            style={styles.cancel}
+          >
+            <Text style={styles.cancelText}>×</Text>
+          </Pressable>
+        </View>
       </View>
     ) : (
       <CompletionMotion
@@ -480,7 +574,9 @@ export function DeadlineView({
           <View style={styles.rowSpacing}>
             <Pressable
               onPress={() =>
-                selectionMode ? toggleSelected(item.memo.id) : onEdit(item.memo)
+                selectionMode
+                  ? toggleSelected(item.memo.id)
+                  : titleEdit.begin(item.memo.id, item.memo.title)
               }
               onLongPress={selectionMode ? undefined : drag}
               delayLongPress={dragActivationDelay(Platform.OS === "web")}
@@ -507,10 +603,38 @@ export function DeadlineView({
                 </View>
               )}
               <View style={styles.content}>
-                <Text style={styles.title} numberOfLines={1}>
-                  {routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "☑ "}
-                  {item.memo.title}
-                </Text>
+                {titleEdit.activeId === item.memo.id ? (
+                  <View nativeID={titleEdit.nativeID}>
+                    <TextInput
+                      autoFocus
+                      value={titleEdit.draft}
+                      onChangeText={titleEdit.changeDraft}
+                      onBlur={titleEdit.blur}
+                      onSubmitEditing={titleEdit.submit}
+                      onKeyPress={({ nativeEvent }) => {
+                        if (nativeEvent.key === "Escape") titleEdit.cancel();
+                      }}
+                      returnKeyType="done"
+                      selectTextOnFocus
+                      style={[styles.title, styles.inlineTitleInput]}
+                    />
+                    <Pressable
+                      accessibilityLabel="タイトル編集をキャンセル"
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        titleEdit.cancel();
+                      }}
+                      style={styles.inlineTitleCancel}
+                    >
+                      <Text style={styles.inlineTitleCancelText}>×</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Text style={styles.title} numberOfLines={1}>
+                    {routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}
+                    {item.memo.title}
+                  </Text>
+                )}
                 <Text style={styles.meta} numberOfLines={1}>
                   {memoMeta(item.memo)}
                 </Text>
@@ -602,23 +726,60 @@ export function DeadlineView({
       </Pressable>
     </View>
   );
+  const nativePinnedNote = showPinnedNote && (
+    <View
+      style={[
+        styles.pinned,
+        styles.pinnedInList,
+        { height: draftPinnedHeight, paddingBottom: 18 },
+      ]}
+    >
+      <Text style={styles.pinnedLabel}>常設メモ</Text>
+      <TextInput
+        multiline
+        value={pinnedNote}
+        onChangeText={onPinnedNoteChange}
+        placeholder="いつも確認したいことを書く…"
+        placeholderTextColor={colors.textSecondary}
+        style={[
+          styles.pinnedInput,
+          {
+            height: Math.max(36, draftPinnedHeight - 46),
+            maxHeight: Math.max(36, draftPinnedHeight - 46),
+          },
+        ]}
+      />
+      <View
+        accessibilityRole="adjustable"
+        accessibilityLabel="常設メモの高さを変更"
+        {...resize.panHandlers}
+        style={styles.pinnedResizeHandle}
+      >
+        <Text style={{ color: colors.textSecondary, fontSize: 12 }}>↕</Text>
+      </View>
+    </View>
+  );
   if (Platform.OS === "web")
     return (
       <View style={styles.container}>
-        {showPinnedNote && (
-          <WebPinnedNote
-            key={pinnedNoteHeight}
-            body={pinnedNote}
-            height={pinnedNoteHeight}
-            onBodyChange={onPinnedNoteChange}
-            onHeightChange={onPinnedNoteHeightChange}
-            colors={colors}
-            styles={styles}
-          />
-        )}
         {toolbar}
         <WebSortableScrollList
           data={rows}
+          header={
+            showPinnedNote ? (
+              <WebPinnedNote
+                key={pinnedNoteHeight}
+                body={pinnedNote}
+                height={pinnedNoteHeight}
+                onBodyChange={onPinnedNoteChange}
+                onHeightChange={onPinnedNoteHeightChange}
+                colors={colors}
+                styles={styles}
+                embedded
+              />
+            ) : null
+          }
+          showDropIndicator={(_active, target) => target.kind === "memo"}
           keyFor={(row) => row.id}
           canDrag={(row) => !selectionMode && row.kind === "memo"}
           contentContainerStyle={[
@@ -633,7 +794,11 @@ export function DeadlineView({
             };
             const group = groups.find((item) => item.key === target.groupKey);
             const next =
-              group?.create && !group.create.editable ? group.key : null;
+              target.kind === "heading" &&
+              group?.create &&
+              !group.create.editable
+                ? group.key
+                : null;
             targetRef.current = next;
             setTargetGroup(next);
           }}
@@ -654,51 +819,10 @@ export function DeadlineView({
     );
   return (
     <View style={styles.container}>
-      {showPinnedNote && (
-        <View
-          style={[
-            styles.pinned,
-            { height: draftPinnedHeight, paddingBottom: 18 },
-          ]}
-        >
-          <Text style={styles.pinnedLabel}>常設メモ</Text>
-          <TextInput
-            multiline
-            value={pinnedNote}
-            onChangeText={onPinnedNoteChange}
-            placeholder="いつも確認したいことを書く…"
-            placeholderTextColor={colors.textSecondary}
-            style={[
-              styles.pinnedInput,
-              {
-                height: Math.max(36, draftPinnedHeight - 46),
-                maxHeight: Math.max(36, draftPinnedHeight - 46),
-              },
-            ]}
-          />
-          <View
-            accessibilityRole="adjustable"
-            accessibilityLabel="常設メモの高さを変更"
-            {...resize.panHandlers}
-            style={{
-              position: "absolute",
-              height: 20,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              alignItems: "center",
-              justifyContent: "center",
-              borderTopWidth: StyleSheet.hairlineWidth,
-              borderTopColor: colors.border,
-            }}
-          >
-            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>↕</Text>
-          </View>
-        </View>
-      )}
       {toolbar}
       <DraggableFlatList
         data={rows}
+        ListHeaderComponent={nativePinnedNote || null}
         keyExtractor={(row) => row.id}
         onDragBegin={(index) => {
           const row = rows[index];
@@ -740,6 +864,18 @@ const createStyles = (colors: ThemeColors) =>
       borderColor: colors.border,
       borderRadius: 10,
       backgroundColor: colors.surface,
+    },
+    pinnedInList: { marginHorizontal: 0 },
+    pinnedResizeHandle: {
+      position: "absolute",
+      height: 20,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: "center",
+      justifyContent: "center",
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
     },
     pinnedLabel: {
       color: colors.textSecondary,
@@ -815,7 +951,7 @@ const createStyles = (colors: ThemeColors) =>
     quickAdd: {
       position: "relative",
       marginVertical: 5,
-      paddingRight: 38,
+      paddingRight: 104,
       paddingLeft: 8,
       paddingVertical: 7,
       gap: 6,
@@ -834,10 +970,30 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: 13,
     },
     quickError: { color: colors.danger, fontSize: 11 },
-    cancel: {
+    quickActions: {
       position: "absolute",
       top: 7,
       right: 4,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 2,
+    },
+    quickSubmit: {
+      minWidth: 58,
+      height: 34,
+      paddingHorizontal: 10,
+      borderRadius: 17,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.accent,
+    },
+    quickSubmitDisabled: { opacity: 0.35 },
+    quickSubmitText: {
+      color: colors.surface,
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    cancel: {
       width: 34,
       height: 34,
       alignItems: "center",
@@ -877,6 +1033,28 @@ const createStyles = (colors: ThemeColors) =>
     pressed: { opacity: 0.82, backgroundColor: colors.accentSoft },
     content: { flex: 1, paddingVertical: 7 },
     title: { color: colors.memoText, fontSize: 15 },
+    inlineTitleInput: {
+      minHeight: 34,
+      paddingRight: 36,
+      paddingVertical: 4,
+      paddingHorizontal: 6,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      borderRadius: 4,
+      backgroundColor: colors.surface,
+    },
+    inlineTitleCancel: {
+      position: "absolute",
+      top: 2,
+      right: 2,
+      width: 30,
+      height: 30,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: 15,
+      backgroundColor: colors.surfaceAlt,
+    },
+    inlineTitleCancelText: { color: colors.textSecondary, fontSize: 18 },
     meta: { marginTop: 2, color: colors.textSecondary, fontSize: 11 },
     complete: {
       minHeight: 44,

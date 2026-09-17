@@ -52,6 +52,7 @@ import {
   commitNodeHistory,
   createNodeHistory,
   redoNodeHistory,
+  reconcileSyncedNodeHistory,
   replaceNodeHistory,
   undoNodeHistory,
 } from "@/domain/nodeHistory";
@@ -94,6 +95,10 @@ import {
 } from "@/domain/completionHistory";
 import { appAlert } from "@/utils/appAlert";
 import { useFirebaseSync } from "@/hooks/useFirebaseSync";
+import {
+  useWebFocusedInputVisibility,
+  useWebVisualViewportHeight,
+} from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
@@ -158,6 +163,7 @@ const initialExternalAiAuthorization = () =>
     : null;
 
 export default function HomeScreen() {
+  useWebFocusedInputVisibility();
   const { colors, resolved, mode, setMode } = useAppTheme();
   const styles = createStyles(colors);
   const [history, setHistory] = useState(() => createNodeHistory(mockNodes));
@@ -204,7 +210,10 @@ export default function HomeScreen() {
     nodeIds: string[];
     onSuccess: () => void;
   } | null>(null);
-  const [bulkDeadlineMove, setBulkDeadlineMove] = useState<{ nodeIds: string[]; onSuccess: () => void } | null>(null);
+  const [bulkDeadlineMove, setBulkDeadlineMove] = useState<{
+    nodeIds: string[];
+    onSuccess: () => void;
+  } | null>(null);
   const [exitingMemos, setExitingMemos] = useState<Map<string, MemoNode>>(
     () => new Map(),
   );
@@ -220,7 +229,7 @@ export default function HomeScreen() {
   );
   const sync = useFirebaseSync(nodes, ready, (cloudNodes) => {
     setHistory((current) =>
-      replaceNodeHistory(current, normalizeLegacyRanks(cloudNodes)),
+      reconcileSyncedNodeHistory(current, normalizeLegacyRanks(cloudNodes)),
     );
     saveNodes(cloudNodes).catch(() => {});
   });
@@ -600,18 +609,10 @@ export default function HomeScreen() {
               setCreateParentId(parentId);
               setCreateOpen(true);
             }}
-            onEdit={(node) =>
-              setEditor({
-                type: node.type,
-                node,
-                memoType:
-                  node.type === "memo"
-                    ? isIdea(node)
-                      ? "idea"
-                      : "task"
-                    : undefined,
-                parentId: node.parentId,
-              })
+            onRenameMemo={(id, title) =>
+              apply("Memoタイトルを変更", (current) =>
+                updateNode(current, id, { title }),
+              )
             }
             onComplete={completeWithUndo}
             onMenu={setMenuNode}
@@ -681,8 +682,10 @@ export default function HomeScreen() {
                 }),
               )
             }
-            onEdit={(node) =>
-              setEditor({ type: "memo", node, parentId: node.parentId })
+            onRenameMemo={(id, title) =>
+              apply("Memoタイトルを変更", (current) =>
+                updateNode(current, id, { title }),
+              )
             }
             onComplete={completeWithUndo}
             onMenu={setMenuNode}
@@ -698,9 +701,35 @@ export default function HomeScreen() {
                 ),
               )
             }
-            onBulkMove={(ids, onSuccess) => setBulkDeadlineMove({ nodeIds: ids, onSuccess })}
-            onBulkComplete={(ids) => applyBatch("選択Memoを完了", (current) => completeSelectedNodes(current, ids))}
-            onBulkDelete={(ids, onSuccess) => appAlert(`${ids.length}件を削除`, "選択したTaskをゴミ箱へ移動します。", [{ text: "キャンセル", style: "cancel" }, { text: "削除", style: "destructive", onPress: () => { if (applyBatch("選択Taskを削除", (current) => deleteSelectedNodes(current, ids))) onSuccess(); } }])}
+            onBulkMove={(ids, onSuccess) =>
+              setBulkDeadlineMove({ nodeIds: ids, onSuccess })
+            }
+            onBulkComplete={(ids) =>
+              applyBatch("選択Memoを完了", (current) =>
+                completeSelectedNodes(current, ids),
+              )
+            }
+            onBulkDelete={(ids, onSuccess) =>
+              appAlert(
+                `${ids.length}件を削除`,
+                "選択したTaskをゴミ箱へ移動します。",
+                [
+                  { text: "キャンセル", style: "cancel" },
+                  {
+                    text: "削除",
+                    style: "destructive",
+                    onPress: () => {
+                      if (
+                        applyBatch("選択Taskを削除", (current) =>
+                          deleteSelectedNodes(current, ids),
+                        )
+                      )
+                        onSuccess();
+                    },
+                  },
+                ],
+              )
+            }
           />
         ) : (
           <ListPanel
@@ -735,10 +764,77 @@ export default function HomeScreen() {
                 },
               ])
             }
-            onBulkRestoreCompleted={(items, onSuccess) => { if (applyBatch("選択した完了を戻す", (current) => items.reduce((next, item) => item.kind === "routineOccurrence" ? clearRoutineCompletion(next, item.memo.id, item.occurrenceDate!) : restoreMemo(next, item.memo.id), current))) onSuccess(); }}
-            onBulkDeleteCompleted={(ids, onSuccess) => appAlert(`${ids.length}件を削除`, "選択した完了Taskをゴミ箱へ移動します。", [{ text: "キャンセル", style: "cancel" }, { text: "削除", style: "destructive", onPress: () => { if (applyBatch("選択した完了Taskを削除", (current) => deleteSelectedNodes(current, ids))) onSuccess(); } }])}
-            onBulkRestoreNodes={(ids, onSuccess) => { if (applyBatch("選択Nodeを復元", (current) => ids.reduce((next, id) => restoreNode(next, id), current))) onSuccess(); }}
-            onBulkHardDelete={(ids, onSuccess) => appAlert(`${ids.length}件を完全に削除`, "選択したNodeは元に戻せません。", [{ text: "キャンセル", style: "cancel" }, { text: "完全に削除", style: "destructive", onPress: () => { if (applyBatch("選択Nodeを完全削除", (current) => ids.reduce((next, id) => hardDeleteNode(next, id), current))) onSuccess(); } }])}
+            onBulkRestoreCompleted={(items, onSuccess) => {
+              if (
+                applyBatch("選択した完了を戻す", (current) =>
+                  items.reduce(
+                    (next, item) =>
+                      item.kind === "routineOccurrence"
+                        ? clearRoutineCompletion(
+                            next,
+                            item.memo.id,
+                            item.occurrenceDate!,
+                          )
+                        : restoreMemo(next, item.memo.id),
+                    current,
+                  ),
+                )
+              )
+                onSuccess();
+            }}
+            onBulkDeleteCompleted={(ids, onSuccess) =>
+              appAlert(
+                `${ids.length}件を削除`,
+                "選択した完了Taskをゴミ箱へ移動します。",
+                [
+                  { text: "キャンセル", style: "cancel" },
+                  {
+                    text: "削除",
+                    style: "destructive",
+                    onPress: () => {
+                      if (
+                        applyBatch("選択した完了Taskを削除", (current) =>
+                          deleteSelectedNodes(current, ids),
+                        )
+                      )
+                        onSuccess();
+                    },
+                  },
+                ],
+              )
+            }
+            onBulkRestoreNodes={(ids, onSuccess) => {
+              if (
+                applyBatch("選択Nodeを復元", (current) =>
+                  ids.reduce((next, id) => restoreNode(next, id), current),
+                )
+              )
+                onSuccess();
+            }}
+            onBulkHardDelete={(ids, onSuccess) =>
+              appAlert(
+                `${ids.length}件を完全に削除`,
+                "選択したNodeは元に戻せません。",
+                [
+                  { text: "キャンセル", style: "cancel" },
+                  {
+                    text: "完全に削除",
+                    style: "destructive",
+                    onPress: () => {
+                      if (
+                        applyBatch("選択Nodeを完全削除", (current) =>
+                          ids.reduce(
+                            (next, id) => hardDeleteNode(next, id),
+                            current,
+                          ),
+                        )
+                      )
+                        onSuccess();
+                    },
+                  },
+                ],
+              )
+            }
             onReset={() =>
               appAlert(
                 "データを初期化",
@@ -970,7 +1066,26 @@ export default function HomeScreen() {
         onClose={() => setBulkDeadlineMove(null)}
         onMove={(groupId, customDueAt) => {
           if (!bulkDeadlineMove) return;
-          if (applyBatch("選択Taskの期限を移動", (current) => bulkDeadlineMove.nodeIds.reduce((next, id) => customDueAt ? updateNode(next, id, { duePreset: "custom", dueAt: customDueAt }) : updateMemoDeadline(next, id, groupId!, new Date(), todayGranularity), current))) {
+          if (
+            applyBatch("選択Taskの期限を移動", (current) =>
+              bulkDeadlineMove.nodeIds.reduce(
+                (next, id) =>
+                  customDueAt
+                    ? updateNode(next, id, {
+                        duePreset: "custom",
+                        dueAt: customDueAt,
+                      })
+                    : updateMemoDeadline(
+                        next,
+                        id,
+                        groupId!,
+                        new Date(),
+                        todayGranularity,
+                      ),
+                current,
+              ),
+            )
+          ) {
             bulkDeadlineMove.onSuccess();
             setBulkDeadlineMove(null);
           }
@@ -982,30 +1097,138 @@ export default function HomeScreen() {
         onClose={() => setSettingsOpen(false)}
       >
         <SettingsSection title="機能">
-          <ToggleSetting label="アイデア機能" description="Taskとは別に、期限や完了を持たないIdeaを利用します" value={ideasEnabled} onValueChange={(next) => { setIdeasEnabled(next); saveFeaturePreferences({ ideasEnabled: next }).catch(() => appAlert("保存エラー", "設定を保存できませんでした。")); }} />
+          <ToggleSetting
+            label="アイデア機能"
+            description="Taskとは別に、期限や完了を持たないIdeaを利用します"
+            value={ideasEnabled}
+            onValueChange={(next) => {
+              setIdeasEnabled(next);
+              saveFeaturePreferences({ ideasEnabled: next }).catch(() =>
+                appAlert("保存エラー", "設定を保存できませんでした。"),
+              );
+            }}
+          />
         </SettingsSection>
         <SettingsSection title="同期・連携">
-          <SettingsLink label="クラウド同期" value={sync.status === "synced" ? "同期済み" : sync.status === "connecting" ? "接続中…" : sync.user ? "オフライン/エラー" : sync.configured ? "未ログイン" : "未設定"} onPress={() => { setSettingsOpen(false); setSyncOpen(true); }} />
-          <SettingsLink label="外部AI連携" onPress={() => { setSettingsOpen(false); setExternalAiOpen(true); }} />
+          <SettingsLink
+            label="クラウド同期"
+            value={
+              sync.status === "synced"
+                ? "同期済み"
+                : sync.status === "connecting"
+                  ? "接続中…"
+                  : sync.user
+                    ? "オフライン/エラー"
+                    : sync.configured
+                      ? "未ログイン"
+                      : "未設定"
+            }
+            onPress={() => {
+              setSettingsOpen(false);
+              setSyncOpen(true);
+            }}
+          />
+          <SettingsLink
+            label="外部AI連携"
+            onPress={() => {
+              setSettingsOpen(false);
+              setExternalAiOpen(true);
+            }}
+          />
         </SettingsSection>
         <SettingsSection title="通知">
-          <ToggleSetting label="期限通知" value={reminders.enabled} onValueChange={(enabled) => changeReminders({ ...reminders, enabled })} />
-          <ToggleSetting label="当日に通知" value={reminders.sameDay} disabled={!reminders.enabled} onValueChange={(sameDay) => changeReminders({ ...reminders, sameDay })} />
-          <ToggleSetting label="1日前に通知" value={reminders.dayBefore} disabled={!reminders.enabled} onValueChange={(dayBefore) => changeReminders({ ...reminders, dayBefore })} />
-          <Text style={styles.settingHelp}>日時指定はその時刻、それ以外は午前9時に通知します。{Platform.OS === "web" ? " Web版はページまたはインストール済みPWAが動作中の間に通知します。" : ""}</Text>
+          <ToggleSetting
+            label="期限通知"
+            value={reminders.enabled}
+            onValueChange={(enabled) =>
+              changeReminders({ ...reminders, enabled })
+            }
+          />
+          <ToggleSetting
+            label="当日に通知"
+            value={reminders.sameDay}
+            disabled={!reminders.enabled}
+            onValueChange={(sameDay) =>
+              changeReminders({ ...reminders, sameDay })
+            }
+          />
+          <ToggleSetting
+            label="1日前に通知"
+            value={reminders.dayBefore}
+            disabled={!reminders.enabled}
+            onValueChange={(dayBefore) =>
+              changeReminders({ ...reminders, dayBefore })
+            }
+          />
+          <Text style={styles.settingHelp}>
+            日時指定はその時刻、それ以外は午前9時に通知します。
+            {Platform.OS === "web"
+              ? " Web版はページまたはインストール済みPWAが動作中の間に通知します。"
+              : ""}
+          </Text>
         </SettingsSection>
         <SettingsSection title="外観">
-          <RadioSetting options={(["system", "light", "dark"] as ThemeMode[]).map((value) => ({ id: value, label: value === "system" ? "システム" : value === "light" ? "ライト" : "ダーク" }))} value={mode} onChange={(value) => setMode(value as ThemeMode)} />
+          <RadioSetting
+            options={(["system", "light", "dark"] as ThemeMode[]).map(
+              (value) => ({
+                id: value,
+                label:
+                  value === "system"
+                    ? "システム"
+                    : value === "light"
+                      ? "ライト"
+                      : "ダーク",
+              }),
+            )}
+            value={mode}
+            onChange={(value) => setMode(value as ThemeMode)}
+          />
         </SettingsSection>
         <SettingsSection title="今日の表示">
-          <RadioSetting options={TODAY_GRANULARITIES.map((item) => ({ id: item.id, label: item.label }))} value={todayGranularity} onChange={(value) => { const next = value as TodayGranularity; setDeadlineExpanded(new Set(deadlineGroupDefinitions(next).map((group) => group.id))); changeListDisplay(new Set(visibleGroupIds), showPinnedNote, next); }} />
+          <RadioSetting
+            options={TODAY_GRANULARITIES.map((item) => ({
+              id: item.id,
+              label: item.label,
+            }))}
+            value={todayGranularity}
+            onChange={(value) => {
+              const next = value as TodayGranularity;
+              setDeadlineExpanded(
+                new Set(
+                  deadlineGroupDefinitions(next).map((group) => group.id),
+                ),
+              );
+              changeListDisplay(new Set(visibleGroupIds), showPinnedNote, next);
+            }}
+          />
         </SettingsSection>
         <SettingsSection title="一覧の表示">
-          {deadlineGroupDefinitions(todayGranularity).map((group) => <ToggleSetting key={group.id} label={group.label} value={visibleGroupIds.has(group.id)} onValueChange={(enabled) => { const next = new Set(visibleGroupIds); if (enabled) next.add(group.id); else next.delete(group.id); changeListDisplay(next, showPinnedNote); }} />)}
-          <ToggleSetting label="上部の常設メモ" value={showPinnedNote} onValueChange={(enabled) => changeListDisplay(new Set(visibleGroupIds), enabled)} />
+          {deadlineGroupDefinitions(todayGranularity).map((group) => (
+            <ToggleSetting
+              key={group.id}
+              label={group.label}
+              value={visibleGroupIds.has(group.id)}
+              onValueChange={(enabled) => {
+                const next = new Set(visibleGroupIds);
+                if (enabled) next.add(group.id);
+                else next.delete(group.id);
+                changeListDisplay(next, showPinnedNote);
+              }}
+            />
+          ))}
+          <ToggleSetting
+            label="上部の常設メモ"
+            value={showPinnedNote}
+            onValueChange={(enabled) =>
+              changeListDisplay(new Set(visibleGroupIds), enabled)
+            }
+          />
         </SettingsSection>
         <SettingsSection title="データ管理">
-          <View style={styles.settingsButtonRow}><SettingsButton label="データを書き出す" onPress={exportData} /><SettingsButton label="データを読み込む" onPress={importData} /></View>
+          <View style={styles.settingsButtonRow}>
+            <SettingsButton label="データを書き出す" onPress={exportData} />
+            <SettingsButton label="データを読み込む" onPress={importData} />
+          </View>
         </SettingsSection>
       </Sheet>
       <Sheet
@@ -1134,25 +1357,139 @@ function Action({
     </Pressable>
   );
 }
-function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+function SettingsSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   const styles = useStyles();
-  return <View style={styles.settingsSection}><Text style={styles.settingsSectionTitle}>{title}</Text><View style={styles.settingsCard}>{children}</View></View>;
+  return (
+    <View style={styles.settingsSection}>
+      <Text style={styles.settingsSectionTitle}>{title}</Text>
+      <View style={styles.settingsCard}>{children}</View>
+    </View>
+  );
 }
-function ToggleSetting({ label, description, value, disabled, onValueChange }: { label: string; description?: string; value: boolean; disabled?: boolean; onValueChange: (value: boolean) => void }) {
-  const styles = useStyles(); const { colors } = useAppTheme();
-  return <View style={[styles.settingRow, disabled && styles.settingDisabled]}><Pressable disabled={disabled} onPress={() => onValueChange(!value)} style={styles.settingLabelArea}><Text style={styles.settingLabel}>{label}</Text>{description && <Text style={styles.settingDescription}>{description}</Text>}</Pressable><Switch disabled={disabled} value={value} onValueChange={onValueChange} trackColor={{ false: colors.border, true: colors.accent }} thumbColor={colors.surface} accessibilityLabel={label} /></View>;
-}
-function RadioSetting({ options, value, onChange }: { options: { id: string; label: string }[]; value: string; onChange: (value: string) => void }) {
+function ToggleSetting({
+  label,
+  description,
+  value,
+  disabled,
+  onValueChange,
+}: {
+  label: string;
+  description?: string;
+  value: boolean;
+  disabled?: boolean;
+  onValueChange: (value: boolean) => void;
+}) {
   const styles = useStyles();
-  return <View style={styles.radioGrid}>{options.map((option) => { const selected = option.id === value; return <Pressable key={option.id} accessibilityRole="radio" accessibilityState={{ selected }} onPress={() => onChange(option.id)} style={[styles.radioCard, selected && styles.radioCardSelected]}><View style={[styles.radioCircle, selected && styles.radioCircleSelected]}>{selected && <View style={styles.radioDot} />}</View><Text style={[styles.radioLabel, selected && styles.radioLabelSelected]}>{option.label}</Text></Pressable>; })}</View>;
+  const { colors } = useAppTheme();
+  return (
+    <View style={[styles.settingRow, disabled && styles.settingDisabled]}>
+      <Pressable
+        disabled={disabled}
+        onPress={() => onValueChange(!value)}
+        style={styles.settingLabelArea}
+      >
+        <Text style={styles.settingLabel}>{label}</Text>
+        {description && (
+          <Text style={styles.settingDescription}>{description}</Text>
+        )}
+      </Pressable>
+      <Switch
+        disabled={disabled}
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ false: colors.border, true: colors.accent }}
+        thumbColor={colors.surface}
+        accessibilityLabel={label}
+      />
+    </View>
+  );
 }
-function SettingsLink({ label, value, onPress }: { label: string; value?: string; onPress: () => void }) {
+function RadioSetting({
+  options,
+  value,
+  onChange,
+}: {
+  options: { id: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
   const styles = useStyles();
-  return <Pressable onPress={onPress} style={styles.settingRow}><Text style={styles.settingLabel}>{label}</Text><View style={styles.settingLinkValue}><Text style={styles.settingValue}>{value}</Text><Text style={styles.settingChevron}>›</Text></View></Pressable>;
+  return (
+    <View style={styles.radioGrid}>
+      {options.map((option) => {
+        const selected = option.id === value;
+        return (
+          <Pressable
+            key={option.id}
+            accessibilityRole="radio"
+            accessibilityState={{ selected }}
+            onPress={() => onChange(option.id)}
+            style={[styles.radioCard, selected && styles.radioCardSelected]}
+          >
+            <View
+              style={[
+                styles.radioCircle,
+                selected && styles.radioCircleSelected,
+              ]}
+            >
+              {selected && <View style={styles.radioDot} />}
+            </View>
+            <Text
+              style={[styles.radioLabel, selected && styles.radioLabelSelected]}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
-function SettingsButton({ label, onPress }: { label: string; onPress: () => void }) {
+function SettingsLink({
+  label,
+  value,
+  onPress,
+}: {
+  label: string;
+  value?: string;
+  onPress: () => void;
+}) {
   const styles = useStyles();
-  return <Pressable onPress={onPress} style={({ pressed }) => [styles.settingsButton, pressed && styles.settingsButtonPressed]}><Text style={styles.settingsButtonText}>{label}</Text></Pressable>;
+  return (
+    <Pressable onPress={onPress} style={styles.settingRow}>
+      <Text style={styles.settingLabel}>{label}</Text>
+      <View style={styles.settingLinkValue}>
+        <Text style={styles.settingValue}>{value}</Text>
+        <Text style={styles.settingChevron}>›</Text>
+      </View>
+    </Pressable>
+  );
+}
+function SettingsButton({
+  label,
+  onPress,
+}: {
+  label: string;
+  onPress: () => void;
+}) {
+  const styles = useStyles();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.settingsButton,
+        pressed && styles.settingsButtonPressed,
+      ]}
+    >
+      <Text style={styles.settingsButtonText}>{label}</Text>
+    </Pressable>
+  );
 }
 function Sheet({
   visible,
@@ -1224,6 +1561,7 @@ function EditorModal({
 }) {
   const styles = useStyles();
   const { colors } = useAppTheme();
+  const webViewportHeight = useWebVisualViewportHeight();
   const initialMemo = editor?.node?.type === "memo" ? editor.node : null;
   const memo = initialMemo
     ? (nodes.find(
@@ -1232,7 +1570,9 @@ function EditorModal({
       ) ?? initialMemo)
     : null;
   const dueContext = editor?.dueContext;
-  const idea = editor?.type === "memo" && (editor.memoType === "idea" || (!!memo && isIdea(memo)));
+  const idea =
+    editor?.type === "memo" &&
+    (editor.memoType === "idea" || (!!memo && isIdea(memo)));
   const routineCategory =
     editor?.type === "memo" && !idea
       ? routineCategoryForParent(nodes, editor.parentId)
@@ -1262,7 +1602,17 @@ function EditorModal({
   const save = () => {
     if (!editor || !title.trim())
       return appAlert("入力エラー", "タイトルは必須です。");
-    if (idea) return onSave({ title, parentId: editor.parentId, body, memoType: "idea", duePreset: "none", dueAt: null, status: "active", repeatRule: null });
+    if (idea)
+      return onSave({
+        title,
+        parentId: editor.parentId,
+        body,
+        memoType: "idea",
+        duePreset: "none",
+        dueAt: null,
+        status: "active",
+        repeatRule: null,
+      });
     if (routineCategory) {
       const interval = Number(repeatInterval);
       const repeatRule =
@@ -1281,8 +1631,8 @@ function EditorModal({
         duePreset: memo?.duePreset ?? "none",
         dueAt: memo?.dueAt ?? null,
         status: "active",
-      repeatRule,
-      memoType: "task",
+        repeatRule,
+        memoType: "task",
       });
     }
     let dueAt =
@@ -1324,13 +1674,24 @@ function EditorModal({
       allowSwipeDismissal
       onRequestClose={onClose}
     >
-      <SafeAreaView style={styles.modalPage}>
+      <SafeAreaView
+        style={[
+          styles.modalPage,
+          webViewportHeight !== null && {
+            flex: 0,
+            height: webViewportHeight,
+            maxHeight: webViewportHeight,
+          },
+        ]}
+      >
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
           <ScrollView
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.form}
           >
             <View style={styles.grabber} />
@@ -1343,8 +1704,8 @@ function EditorModal({
                 {idea
                   ? "💡 アイデア"
                   : routineCategory
-                  ? `繰り返し: ${repeatRuleLabel(repeatFrequency === "none" ? null : { frequency: repeatFrequency, interval: Number(repeatInterval), startsOn: repeatStartsOn })}`
-                  : `期限: ${dueContext?.label ?? presets.find((item) => item.key === preset)?.label}`}
+                    ? `繰り返し: ${repeatRuleLabel(repeatFrequency === "none" ? null : { frequency: repeatFrequency, interval: Number(repeatInterval), startsOn: repeatStartsOn })}`
+                    : `期限: ${dueContext?.label ?? presets.find((item) => item.key === preset)?.label}`}
               </Text>
             )}
             <Text style={styles.label}>
@@ -1369,7 +1730,9 @@ function EditorModal({
                   textAlignVertical="top"
                 />
                 {idea ? (
-                  <Text style={styles.lockedDue}>アイデアは期限・完了・ルーティーンを持ちません。</Text>
+                  <Text style={styles.lockedDue}>
+                    アイデアは期限・完了・ルーティーンを持ちません。
+                  </Text>
                 ) : routineCategory ? (
                   <>
                     <Text style={styles.label}>繰り返し設定</Text>
@@ -1541,7 +1904,10 @@ function ListPanel({
   onRestoreNode: (id: string) => void;
   onDelete: (id: string) => void;
   onHardDelete: (id: string) => void;
-  onBulkRestoreCompleted: (items: CompletionHistoryItem[], onSuccess: () => void) => void;
+  onBulkRestoreCompleted: (
+    items: CompletionHistoryItem[],
+    onSuccess: () => void,
+  ) => void;
   onBulkDeleteCompleted: (ids: string[], onSuccess: () => void) => void;
   onBulkRestoreNodes: (ids: string[], onSuccess: () => void) => void;
   onBulkHardDelete: (ids: string[], onSuccess: () => void) => void;
@@ -1552,8 +1918,17 @@ function ListPanel({
     useState<CompletionHistoryCriterion>("completedAt");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState(() => new Set<string>());
-  const clearSelection = () => { setSelectionMode(false); setSelectedKeys(new Set()); };
-  const toggleSelected = (key: string) => setSelectedKeys((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const clearSelection = () => {
+    setSelectionMode(false);
+    setSelectedKeys(new Set());
+  };
+  const toggleSelected = (key: string) =>
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const historyGroups = useMemo(
     () => completionHistoryGroups(nodes, criterion),
     [criterion, nodes],
@@ -1565,13 +1940,39 @@ function ListPanel({
         .sort((a, b) => b.deletedAt!.getTime() - a.deletedAt!.getTime()),
     [nodes],
   );
-  const selectedHistoryItems = historyGroups.flatMap((group) => group.items).filter((item) => selectedKeys.has(item.key));
-  const selectedTrashIds = trashItems.filter((node) => selectedKeys.has(node.id)).map((node) => node.id);
-  const deletableCompletedIds = [...new Set(selectedHistoryItems.filter((item) => item.kind === "memo").map((item) => item.memo.id))];
+  const selectedHistoryItems = historyGroups
+    .flatMap((group) => group.items)
+    .filter((item) => selectedKeys.has(item.key));
+  const selectedTrashIds = trashItems
+    .filter((node) => selectedKeys.has(node.id))
+    .map((node) => node.id);
+  const deletableCompletedIds = [
+    ...new Set(
+      selectedHistoryItems
+        .filter((item) => item.kind === "memo")
+        .map((item) => item.memo.id),
+    ),
+  ];
   return (
     <View style={styles.panelContainer}>
       <View style={styles.selectionToolbar}>
-        {selectionMode ? <><Text style={styles.selectionToolbarCount}>{selectedKeys.size}件選択</Text><Pressable style={styles.smallButton} onPress={clearSelection}><Text style={styles.buttonText}>キャンセル</Text></Pressable></> : <Pressable style={styles.smallButton} onPress={() => setSelectionMode(true)}><Text style={styles.buttonText}>複数選択</Text></Pressable>}
+        {selectionMode ? (
+          <>
+            <Text style={styles.selectionToolbarCount}>
+              {selectedKeys.size}件選択
+            </Text>
+            <Pressable style={styles.smallButton} onPress={clearSelection}>
+              <Text style={styles.buttonText}>キャンセル</Text>
+            </Pressable>
+          </>
+        ) : (
+          <Pressable
+            style={styles.smallButton}
+            onPress={() => setSelectionMode(true)}
+          >
+            <Text style={styles.buttonText}>複数選択</Text>
+          </Pressable>
+        )}
       </View>
       {type === "completed" && (
         <View style={styles.historyCriteria}>
@@ -1596,7 +1997,12 @@ function ListPanel({
           ))}
         </View>
       )}
-      <ScrollView contentContainerStyle={[styles.panelList, selectionMode && styles.selectionPanelList]}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.panelList,
+          selectionMode && styles.selectionPanelList,
+        ]}
+      >
         {type === "completed" ? (
           <>
             {historyGroups.length === 0 && (
@@ -1607,7 +2013,26 @@ function ListPanel({
                 <Text style={styles.historyHeading}>{group.label}</Text>
                 {group.items.map((item) => (
                   <View key={item.key} style={styles.panelCard}>
-                    <View style={styles.selectableCardHeader}>{selectionMode && <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selectedKeys.has(item.key) }} onPress={() => toggleSelected(item.key)} style={[styles.listCheckbox, selectedKeys.has(item.key) && styles.listCheckboxOn]}><Text style={styles.listCheckmark}>{selectedKeys.has(item.key) ? "✓" : ""}</Text></Pressable>}<Text style={styles.cardTitle}>☑ {item.memo.title}</Text></View>
+                    <View style={styles.selectableCardHeader}>
+                      {selectionMode && (
+                        <Pressable
+                          accessibilityRole="checkbox"
+                          accessibilityState={{
+                            checked: selectedKeys.has(item.key),
+                          }}
+                          onPress={() => toggleSelected(item.key)}
+                          style={[
+                            styles.listCheckbox,
+                            selectedKeys.has(item.key) && styles.listCheckboxOn,
+                          ]}
+                        >
+                          <Text style={styles.listCheckmark}>
+                            {selectedKeys.has(item.key) ? "✓" : ""}
+                          </Text>
+                        </Pressable>
+                      )}
+                      <Text style={styles.cardTitle}>・{item.memo.title}</Text>
+                    </View>
                     <Text style={styles.meta}>
                       {item.kind === "routineOccurrence"
                         ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分`
@@ -1616,22 +2041,24 @@ function ListPanel({
                     <Text style={styles.meta}>
                       完了: {item.completedAt.toLocaleString()}
                     </Text>
-                    {!selectionMode && <View style={styles.cardActions}>
-                      <Pressable
-                        onPress={() => onRestoreCompleted(item)}
-                        style={styles.smallButton}
-                      >
-                        <Text style={styles.buttonText}>未完了へ戻す</Text>
-                      </Pressable>
-                      {item.kind === "memo" && (
+                    {!selectionMode && (
+                      <View style={styles.cardActions}>
                         <Pressable
-                          onPress={() => onDelete(item.memo.id)}
+                          onPress={() => onRestoreCompleted(item)}
                           style={styles.smallButton}
                         >
-                          <Text style={styles.danger}>削除</Text>
+                          <Text style={styles.buttonText}>未完了へ戻す</Text>
                         </Pressable>
-                      )}
-                    </View>}
+                        {item.kind === "memo" && (
+                          <Pressable
+                            onPress={() => onDelete(item.memo.id)}
+                            style={styles.smallButton}
+                          >
+                            <Text style={styles.danger}>削除</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    )}
                   </View>
                 ))}
               </View>
@@ -1644,34 +2071,125 @@ function ListPanel({
             )}
             {trashItems.map((node) => (
               <View key={node.id} style={styles.panelCard}>
-                <View style={styles.selectableCardHeader}>{selectionMode && <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selectedKeys.has(node.id) }} onPress={() => toggleSelected(node.id)} style={[styles.listCheckbox, selectedKeys.has(node.id) && styles.listCheckboxOn]}><Text style={styles.listCheckmark}>{selectedKeys.has(node.id) ? "✓" : ""}</Text></Pressable>}<Text style={styles.cardTitle}>{node.type === "category" ? "📁" : isIdea(node) ? "💡" : "☑"} {node.title}</Text></View>
+                <View style={styles.selectableCardHeader}>
+                  {selectionMode && (
+                    <Pressable
+                      accessibilityRole="checkbox"
+                      accessibilityState={{
+                        checked: selectedKeys.has(node.id),
+                      }}
+                      onPress={() => toggleSelected(node.id)}
+                      style={[
+                        styles.listCheckbox,
+                        selectedKeys.has(node.id) && styles.listCheckboxOn,
+                      ]}
+                    >
+                      <Text style={styles.listCheckmark}>
+                        {selectedKeys.has(node.id) ? "✓" : ""}
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Text style={styles.cardTitle}>
+                    {node.type === "category"
+                      ? "📁"
+                      : isIdea(node)
+                        ? "💡"
+                        : "・"}{" "}
+                    {node.title}
+                  </Text>
+                </View>
                 <Text style={styles.meta}>
-                  {node.type === "memo" ? (isIdea(node) ? "💡 Idea" : "Task") : "Category"} · 元:{" "}
-                  {parentName(node.parentId)}
+                  {node.type === "memo"
+                    ? isIdea(node)
+                      ? "💡 Idea"
+                      : "Task"
+                    : "Category"}{" "}
+                  · 元: {parentName(node.parentId)}
                 </Text>
                 <Text style={styles.meta}>
                   {node.deletedAt?.toLocaleString()}
                 </Text>
-                {!selectionMode && <View style={styles.cardActions}>
-                  <Pressable
-                    onPress={() => onRestoreNode(node.id)}
-                    style={styles.smallButton}
-                  >
-                    <Text style={styles.buttonText}>復元</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => onHardDelete(node.id)}
-                    style={styles.smallButton}
-                  >
-                    <Text style={styles.danger}>完全削除</Text>
-                  </Pressable>
-                </View>}
+                {!selectionMode && (
+                  <View style={styles.cardActions}>
+                    <Pressable
+                      onPress={() => onRestoreNode(node.id)}
+                      style={styles.smallButton}
+                    >
+                      <Text style={styles.buttonText}>復元</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => onHardDelete(node.id)}
+                      style={styles.smallButton}
+                    >
+                      <Text style={styles.danger}>完全削除</Text>
+                    </Pressable>
+                  </View>
+                )}
               </View>
             ))}
           </>
         )}
       </ScrollView>
-      {selectionMode && <View style={styles.listActionBar}><Text style={styles.listActionCount}>{selectedKeys.size}件選択</Text>{type === "completed" ? <><Pressable disabled={!selectedHistoryItems.length} style={[styles.listActionButton, !selectedHistoryItems.length && styles.disabled]} onPress={() => onBulkRestoreCompleted(selectedHistoryItems, clearSelection)}><Text style={styles.buttonText}>未完了へ戻す</Text></Pressable><Pressable disabled={!deletableCompletedIds.length} style={[styles.listActionButton, !deletableCompletedIds.length && styles.disabled]} onPress={() => onBulkDeleteCompleted(deletableCompletedIds, clearSelection)}><Text style={styles.danger}>削除</Text></Pressable></> : <><Pressable disabled={!selectedTrashIds.length} style={[styles.listActionButton, !selectedTrashIds.length && styles.disabled]} onPress={() => onBulkRestoreNodes(selectedTrashIds, clearSelection)}><Text style={styles.buttonText}>復元</Text></Pressable><Pressable disabled={!selectedTrashIds.length} style={[styles.listActionButton, !selectedTrashIds.length && styles.disabled]} onPress={() => onBulkHardDelete(selectedTrashIds, clearSelection)}><Text style={styles.danger}>完全削除</Text></Pressable></>}</View>}
+      {selectionMode && (
+        <View style={styles.listActionBar}>
+          <Text style={styles.listActionCount}>{selectedKeys.size}件選択</Text>
+          {type === "completed" ? (
+            <>
+              <Pressable
+                disabled={!selectedHistoryItems.length}
+                style={[
+                  styles.listActionButton,
+                  !selectedHistoryItems.length && styles.disabled,
+                ]}
+                onPress={() =>
+                  onBulkRestoreCompleted(selectedHistoryItems, clearSelection)
+                }
+              >
+                <Text style={styles.buttonText}>未完了へ戻す</Text>
+              </Pressable>
+              <Pressable
+                disabled={!deletableCompletedIds.length}
+                style={[
+                  styles.listActionButton,
+                  !deletableCompletedIds.length && styles.disabled,
+                ]}
+                onPress={() =>
+                  onBulkDeleteCompleted(deletableCompletedIds, clearSelection)
+                }
+              >
+                <Text style={styles.danger}>削除</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable
+                disabled={!selectedTrashIds.length}
+                style={[
+                  styles.listActionButton,
+                  !selectedTrashIds.length && styles.disabled,
+                ]}
+                onPress={() =>
+                  onBulkRestoreNodes(selectedTrashIds, clearSelection)
+                }
+              >
+                <Text style={styles.buttonText}>復元</Text>
+              </Pressable>
+              <Pressable
+                disabled={!selectedTrashIds.length}
+                style={[
+                  styles.listActionButton,
+                  !selectedTrashIds.length && styles.disabled,
+                ]}
+                onPress={() =>
+                  onBulkHardDelete(selectedTrashIds, clearSelection)
+                }
+              >
+                <Text style={styles.danger}>完全削除</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      )}
       {type === "trash" && !selectionMode && (
         <Pressable onPress={onReset} style={styles.reset}>
           <Text style={styles.danger}>データを初期化</Text>
@@ -1823,7 +2341,9 @@ function BulkDeadlineMovePanel({
   onMove: (groupId?: DeadlineGroupKey, customDueAt?: Date) => void;
 }) {
   const styles = useStyles();
-  const [customDue, setCustomDue] = useState(() => formatDateTimeInput(new Date()));
+  const [customDue, setCustomDue] = useState(() =>
+    formatDateTimeInput(new Date()),
+  );
   const destinations = deadlineGroupDefinitions(granularity).filter(
     (group) => group.create && !group.create.editable,
   );
@@ -1837,18 +2357,40 @@ function BulkDeadlineMovePanel({
       <View style={styles.moveBackdrop}>
         <View style={styles.moveDialog}>
           <View style={styles.panelHeader}>
-            <View><Text style={styles.sheetTitle}>期限の移動先を選択</Text><Text style={styles.meta}>{nodeIds.length}件のTask</Text></View>
+            <View>
+              <Text style={styles.sheetTitle}>期限の移動先を選択</Text>
+              <Text style={styles.meta}>{nodeIds.length}件のTask</Text>
+            </View>
             <Pressable onPress={onClose} style={styles.close}>
               <Text style={styles.actionText}>閉じる</Text>
             </Pressable>
           </View>
           <ScrollView contentContainerStyle={styles.panelList}>
             {destinations.map((group) => (
-              <Action key={group.id} label={`📅 ${group.label}`} onPress={() => onMove(group.id)} />
+              <Action
+                key={group.id}
+                label={`📅 ${group.label}`}
+                onPress={() => onMove(group.id)}
+              />
             ))}
             <Text style={styles.label}>日時を指定</Text>
             <DateTimeField value={customDue} onChange={setCustomDue} />
-            <Pressable style={styles.primary} onPress={() => { const dueAt = parseLocalDateTime(customDue); if (!dueAt) { appAlert("入力エラー", "日時を YYYY/MM/DD HH:mm 形式で入力してください。"); return; } onMove(undefined, dueAt); }}><Text style={styles.primaryText}>この日時へ移動</Text></Pressable>
+            <Pressable
+              style={styles.primary}
+              onPress={() => {
+                const dueAt = parseLocalDateTime(customDue);
+                if (!dueAt) {
+                  appAlert(
+                    "入力エラー",
+                    "日時を YYYY/MM/DD HH:mm 形式で入力してください。",
+                  );
+                  return;
+                }
+                onMove(undefined, dueAt);
+              }}
+            >
+              <Text style={styles.primaryText}>この日時へ移動</Text>
+            </Pressable>
           </ScrollView>
         </View>
       </View>
@@ -1958,28 +2500,118 @@ const createStyles = (colors: ThemeColors) =>
       fontWeight: "700",
     },
     settingsSection: { marginTop: 14 },
-    settingsSectionTitle: { marginBottom: 7, paddingHorizontal: 2, color: colors.textSecondary, fontSize: 12, fontWeight: "800" },
-    settingsCard: { overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.background },
-    settingRow: { minHeight: 58, paddingHorizontal: 14, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+    settingsSectionTitle: {
+      marginBottom: 7,
+      paddingHorizontal: 2,
+      color: colors.textSecondary,
+      fontSize: 12,
+      fontWeight: "800",
+    },
+    settingsCard: {
+      overflow: "hidden",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 14,
+      backgroundColor: colors.background,
+    },
+    settingRow: {
+      minHeight: 58,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
     settingDisabled: { opacity: 0.45 },
     settingLabelArea: { flex: 1, minHeight: 40, justifyContent: "center" },
-    settingLabel: { flex: 1, color: colors.text, fontSize: 15, fontWeight: "600" },
-    settingDescription: { marginTop: 3, color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
+    settingLabel: {
+      flex: 1,
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "600",
+    },
+    settingDescription: {
+      marginTop: 3,
+      color: colors.textSecondary,
+      fontSize: 11,
+      lineHeight: 16,
+    },
     settingLinkValue: { flexDirection: "row", alignItems: "center", gap: 8 },
     settingValue: { color: colors.textSecondary, fontSize: 12 },
-    settingChevron: { color: colors.textSecondary, fontSize: 24, lineHeight: 26 },
+    settingChevron: {
+      color: colors.textSecondary,
+      fontSize: 24,
+      lineHeight: 26,
+    },
     radioGrid: { padding: 8, flexDirection: "row", flexWrap: "wrap", gap: 8 },
-    radioCard: { minHeight: 46, minWidth: 105, flexGrow: 1, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 9, borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.surface },
-    radioCardSelected: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-    radioCircle: { width: 19, height: 19, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: colors.border, borderRadius: 10 },
+    radioCard: {
+      minHeight: 46,
+      minWidth: 105,
+      flexGrow: 1,
+      paddingHorizontal: 12,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 9,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 10,
+      backgroundColor: colors.surface,
+    },
+    radioCardSelected: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accentSoft,
+    },
+    radioCircle: {
+      width: 19,
+      height: 19,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: colors.border,
+      borderRadius: 10,
+    },
     radioCircleSelected: { borderColor: colors.accent },
-    radioDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.accent },
-    radioLabel: { color: colors.textSecondary, fontSize: 14, fontWeight: "600" },
+    radioDot: {
+      width: 9,
+      height: 9,
+      borderRadius: 5,
+      backgroundColor: colors.accent,
+    },
+    radioLabel: {
+      color: colors.textSecondary,
+      fontSize: 14,
+      fontWeight: "600",
+    },
     radioLabelSelected: { color: colors.text },
-    settingsButtonRow: { padding: 10, flexDirection: "row", flexWrap: "wrap", gap: 10 },
-    settingsButton: { minHeight: 46, minWidth: 150, flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 14, borderWidth: 1, borderColor: colors.accent, borderRadius: 10, backgroundColor: colors.surface },
-    settingsButtonPressed: { opacity: 0.72, backgroundColor: colors.accentSoft },
-    settingsButtonText: { color: colors.accent, fontSize: 14, fontWeight: "800" },
+    settingsButtonRow: {
+      padding: 10,
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 10,
+    },
+    settingsButton: {
+      minHeight: 46,
+      minWidth: 150,
+      flexGrow: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 14,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      borderRadius: 10,
+      backgroundColor: colors.surface,
+    },
+    settingsButtonPressed: {
+      opacity: 0.72,
+      backgroundColor: colors.accentSoft,
+    },
+    settingsButtonText: {
+      color: colors.accent,
+      fontSize: 14,
+      fontWeight: "800",
+    },
     settingHelp: {
       paddingVertical: 8,
       color: colors.textSecondary,
@@ -2064,8 +2696,19 @@ const createStyles = (colors: ThemeColors) =>
     },
     primaryText: { color: colors.background, fontWeight: "700" },
     panelContainer: { flex: 1 },
-    selectionToolbar: { minHeight: 48, paddingHorizontal: 16, flexDirection: "row", justifyContent: "flex-end", alignItems: "center" },
-    selectionToolbarCount: { marginRight: "auto", color: colors.text, fontSize: 13, fontWeight: "700" },
+    selectionToolbar: {
+      minHeight: 48,
+      paddingHorizontal: 16,
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      alignItems: "center",
+    },
+    selectionToolbarCount: {
+      marginRight: "auto",
+      color: colors.text,
+      fontSize: 13,
+      fontWeight: "700",
+    },
     moveBackdrop: {
       flex: 1,
       justifyContent: "flex-end",
@@ -2128,9 +2771,25 @@ const createStyles = (colors: ThemeColors) =>
       backgroundColor: colors.surface,
     },
     cardTitle: { color: colors.text, fontSize: 16, fontWeight: "700" },
-    selectableCardHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
-    listCheckbox: { width: 24, height: 24, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border, borderRadius: 5, backgroundColor: colors.surface },
-    listCheckboxOn: { borderColor: colors.accent, backgroundColor: colors.accent },
+    selectableCardHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    listCheckbox: {
+      width: 24,
+      height: 24,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 5,
+      backgroundColor: colors.surface,
+    },
+    listCheckboxOn: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accent,
+    },
     listCheckmark: { color: colors.background, fontWeight: "800" },
     meta: { marginTop: 4, color: colors.textSecondary, fontSize: 12 },
     cardActions: { marginTop: 12, flexDirection: "row", gap: 10 },
@@ -2141,9 +2800,37 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 9,
       backgroundColor: colors.surfaceAlt,
     },
-    listActionBar: { position: "absolute", left: 10, right: 10, bottom: 10, minHeight: 62, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.surface, elevation: 10, shadowOpacity: 0.2, shadowRadius: 10 },
-    listActionCount: { marginRight: "auto", color: colors.text, fontSize: 12, fontWeight: "700" },
-    listActionButton: { minHeight: 42, justifyContent: "center", paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.surfaceAlt },
+    listActionBar: {
+      position: "absolute",
+      left: 10,
+      right: 10,
+      bottom: 10,
+      minHeight: 62,
+      paddingHorizontal: 10,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+      elevation: 10,
+      shadowOpacity: 0.2,
+      shadowRadius: 10,
+    },
+    listActionCount: {
+      marginRight: "auto",
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: "700",
+    },
+    listActionButton: {
+      minHeight: 42,
+      justifyContent: "center",
+      paddingHorizontal: 10,
+      borderRadius: 10,
+      backgroundColor: colors.surfaceAlt,
+    },
     reset: {
       position: "absolute",
       bottom: 18,

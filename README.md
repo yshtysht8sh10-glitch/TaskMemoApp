@@ -144,10 +144,13 @@ Apple Developer Programへの加入が必要です。ビルド完了後、EASの
 
 ### コード変更後の確認
 
+回帰テストの作り方、領域別のテスト配置、手動確認項目は [docs/TESTING.md](docs/TESTING.md) を参照してください。バグ修正は「再現テストを先に失敗させる → 修正 → 関連テスト → 全体テスト」の順で進めます。
+
 ```powershell
 npm test
 npx tsc --noEmit
 npm run lint
+git diff --check
 npm run web:export
 npx expo-doctor
 ```

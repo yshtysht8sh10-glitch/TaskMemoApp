@@ -3,12 +3,15 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 type Props<T> = {
   data: T[];
+  header?: ReactNode;
   keyFor: (item: T) => string;
   canDrag: (item: T) => boolean;
   renderItem: (item: T, active: boolean) => ReactNode;
   onHover: (active: T, target: T) => void;
   onDrop: (active: T, target: T) => void;
   contentContainerStyle?: object;
+  /** Disable targets that supply their own drop indicator. */
+  showDropIndicator?: boolean | ((active: T, target: T) => boolean);
 };
 
 /**
@@ -17,7 +20,7 @@ type Props<T> = {
  * web drag path is broken. Native HTML drag keeps the whole card draggable
  * while leaving ordinary vertical swipes to the browser scroll container.
  */
-export function WebSortableScrollList<T>({ data, keyFor, canDrag, renderItem, onHover, onDrop, contentContainerStyle }: Props<T>) {
+export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, renderItem, onHover, onDrop, contentContainerStyle, showDropIndicator = true }: Props<T>) {
   const activeRef = useRef<T | null>(null);
   const targetRef = useRef<T | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -28,12 +31,26 @@ export function WebSortableScrollList<T>({ data, keyFor, canDrag, renderItem, on
     activeRef.current = null; targetRef.current = null; setActiveKey(null); setTargetKey(null);
     if (active && target && keyFor(active) !== keyFor(target)) onDrop(active, target);
   };
+  const activeItem =
+    activeKey === null
+      ? null
+      : (data.find((item) => keyFor(item) === activeKey) ?? null);
 
   return <ScrollView style={styles.scroll} contentContainerStyle={contentContainerStyle} keyboardShouldPersistTaps="handled">
+    {header}
     {data.map((item, index) => {
       const key = keyFor(item);
-      const opensBelow = targetKey === key && activeKey !== key;
-      const opensAbove = targetKey !== null && data[index + 1] !== undefined && keyFor(data[index + 1]) === targetKey && activeKey !== key;
+      const showForTarget =
+        typeof showDropIndicator === 'function'
+          ? !!activeItem && showDropIndicator(activeItem, item)
+          : showDropIndicator;
+      const opensBelow = showForTarget && targetKey === key && activeKey !== key;
+      const nextItem = data[index + 1];
+      const showForNextTarget =
+        nextItem && typeof showDropIndicator === 'function'
+          ? !!activeItem && showDropIndicator(activeItem, nextItem)
+          : showDropIndicator;
+      const opensAbove = showForNextTarget && targetKey !== null && nextItem !== undefined && keyFor(nextItem) === targetKey && activeKey !== key;
       const targetProps = {
         onDragEnter: (event: { preventDefault(): void }) => { event.preventDefault(); const active = activeRef.current; if (!active) return; targetRef.current = item; setTargetKey(key); onHover(active, item); },
         onDragOver: (event: { preventDefault(): void }) => event.preventDefault(),
