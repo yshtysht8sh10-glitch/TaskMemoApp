@@ -192,7 +192,7 @@ describe("user operation regression scenarios", () => {
     expect((history.nodes[1] as MemoNode).routineHistory?.[key]).toBeTruthy();
 
     history = undoNodeHistory(history);
-    expect((history.nodes[1] as MemoNode).routineHistory).toBeUndefined();
+    expect((history.nodes[1] as MemoNode).routineHistory?.[key]).toBeNull();
     expect(memoState(history.nodes)).toMatchObject({ status: "active", completedAt: null });
 
     history = redoNodeHistory(history);

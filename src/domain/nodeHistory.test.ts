@@ -60,6 +60,28 @@ describe('node history', () => {
     expect(redoNodeHistory(undone).nodes[0].title).toBe('after');
   });
 
+  it('keeps undo and redo results when the previous Firebase state arrives afterward', () => {
+    const before: Node = {
+      id: 'memo', type: 'memo', parentId: null, sortKey: 'a0', title: 'before', body: '',
+      dueAt: null, duePreset: 'none', status: 'active', completedAt: null,
+      createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null,
+    };
+    const edited = commitNodeHistory(createNodeHistory([before]), 'タイトル編集', (nodes) =>
+      nodes.map((item) => item.id === 'memo'
+        ? { ...item, title: 'after', updatedAt: new Date(10) }
+        : item),
+    );
+    const cloudAfterEdit = edited.nodes;
+
+    const undone = undoNodeHistory(edited, new Date(20));
+    const undoAfterSync = mergeNodesByUpdatedAt(undone.nodes, cloudAfterEdit);
+    expect(undoAfterSync[0].title).toBe('before');
+
+    const redone = redoNodeHistory(undone, new Date(30));
+    const redoAfterSync = mergeNodesByUpdatedAt(redone.nodes, undoAfterSync);
+    expect(redoAfterSync[0].title).toBe('after');
+  });
+
   it('clears local history for a genuinely different external node set', () => {
     const changed = commitNodeHistory(createNodeHistory([node()]), '編集', (nodes) =>
       nodes.map((item) => ({ ...item, title: 'local' })),
