@@ -72,9 +72,11 @@ visualViewport下端はOSキーボードの実測値ではない。旧ログのk
    キーボードを閉じる前のログもメモリに残るので、閉じてから取得してもよい。再読込はしない。
 5. iOS/Safari版、縦横、表示倍率、通常Safari/PWAを添える。
 
-コピーはタップ内から直接Clipboard APIを呼ぶ。失敗時は再タップする。
-HTTPSのSafariで利用する。非対応環境では失敗を表示し、入力欄をfocusするfallbackは行わない
-（診断対象のfocus・選択・keyboard状態を変えないため）。必要なら従来のconsole exportを利用する。
+コピーはタップ内から直接Clipboard APIを呼ぶ。5秒応答がなければ待機表示を終了する。
+HTTPSのSafariで利用する。失敗／応答なしの場合は「ログを表示してコピー」をタップする。
+これは取得済みJSONをreadonly欄に表示・全選択し、同期copyを試みる。未対応なら長押し→すべて選択→コピーする。
+この明示的なfallbackだけはfocusが変わり得るが、移動前のJSONを固定して保持する。
+従来のconsole exportも利用できる。ファイル出力はしない。
 診断パラメータがない／値が1以外の画面ではUIを生成しない。
 新規テストはコピー開始の同期性、export全文の受渡し、表示条件、成功・失敗・再試行、cleanupを検証する。
 イベント/DOMアダプタのテストであり、iPhoneの実clipboard権限・タップ・keyboardは保証しない。
@@ -101,3 +103,17 @@ HTTPSのSafariで利用する。非対応環境では失敗を表示し、入力
   TypeScript、Lint、git diff --check、Web production exportを確認。
 - iPhoneのコピー権限、タッチからの実コピー、キーボード表示中のボタン到達性は実機確認待ち。
   #42のkeyboard回避ロジックは変更しておらず、解決の根拠にはしない。IssueはOPENを維持する。
+
+### コピー中のまま戻らない報告への対応
+
+- ec7f0f6ではClipboard APIのPromiseが未解決だと永久に待つ。未解決Promiseを与え5秒経過させる
+  回帰テストが修正前FAIL（期待「応答がありません」、実際「コピー中…」）、修正後PASS。
+  SafariがPromiseを完了しない理由自体は未確定であり、このテストはSafariの完全再現ではない。
+- 5秒のUIタイムアウト、遅れて届く古い結果の無視、cleanup時のtimer解放を追加。
+  API自体の書き込みをキャンセルできるものではない。
+- 明示的なJSON表示・選択copyと手動長押しcopyを追加。JSON全文保持、focus移動後に再exportしないこと、
+  同期copy成功/失敗をテスト。既存の有効なassertionは維持。
+- 同期copyは非推奨APIを限定fallbackとして使用する。参考:
+  https://developer.mozilla.org/en-US/docs/Web/API/Document/execCommand
+  https://webkit.org/blog/10855/async-clipboard-api/
+- iPhoneでの実コピーと#42本体の原因は実機確認待ち。

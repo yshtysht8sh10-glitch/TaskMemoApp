@@ -25,20 +25,67 @@ export function mountDiagnosticCopyPanel(
   const status = doc.createElement('div');
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
+  const fallback = doc.createElement('button');
+  fallback.type = 'button';
+  fallback.textContent = 'ログを表示してコピー';
+  fallback.style.cssText = button.style.cssText;
+  let snapshot: string | undefined;
+  let field: HTMLTextAreaElement | undefined;
+  let attempt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const invalidate = () => {
+    attempt++;
+    clearTimeout(timer);
+    timer = undefined;
+  };
+  fallback.addEventListener('click', () => {
+    invalidate();
+    try {
+      // Freeze evidence before moving focus. Reuse the unsuccessful copy's JSON.
+      snapshot ??= exportJson();
+      if (!field) {
+        field = doc.createElement('textarea');
+        field.readOnly = true;
+        field.setAttribute('aria-label', '診断JSON全文');
+        field.style.cssText = 'display:block;width:100%;height:120px;font-size:16px;box-sizing:border-box;user-select:text;-webkit-user-select:text';
+        panel.append(field);
+      }
+      field.value = snapshot;
+      // Explicit fallback only: this may close the Memo keyboard / move focus.
+      field.focus({ preventScroll: true });
+      field.select();
+      field.setSelectionRange(0, snapshot.length);
+      let copied = false;
+      try { copied = doc.execCommand('copy'); } catch { /* Keep selectable JSON. */ }
+      status.textContent = copied ? '診断ログをコピーしました'
+        : '下のJSONを長押し→すべて選択→コピーしてください';
+    } catch {
+      status.textContent = 'ログを表示できませんでした。もう一度タップしてください';
+    }
+  });
   // Avoid blurring/committing the title just to collect evidence.
   button.addEventListener('pointerdown', (event) => event.preventDefault());
   button.addEventListener('click', () => {
-    const fail = () => { status.textContent = 'コピーに失敗しました。もう一度タップしてください'; };
+    invalidate();
+    const currentAttempt = attempt;
+    const finish = (message: string) => {
+      if (currentAttempt !== attempt) return;
+      invalidate();
+      status.textContent = message;
+    };
+    const fail = () => finish('コピーに失敗しました。再試行するか「ログを表示してコピー」をタップしてください');
     try {
       // No await or timer before writeText: Safari requires user activation.
-      const pending = copyDiagnosticText(exportJson(), clipboard);
+      snapshot = exportJson();
+      const pending = copyDiagnosticText(snapshot, clipboard);
       status.textContent = 'コピー中…';
-      pending.then(() => { status.textContent = '診断ログをコピーしました'; }).catch(fail);
+      timer = setTimeout(() => finish('コピーの応答がありません。「ログを表示してコピー」をタップしてください'), 5000);
+      pending.then(() => finish('診断ログをコピーしました')).catch(fail);
     } catch {
       fail();
     }
   });
-  panel.append(button, status);
+  panel.append(button, status, fallback);
   doc.body.append(panel);
-  return () => panel.remove();
+  return () => { invalidate(); panel.remove(); };
 }
