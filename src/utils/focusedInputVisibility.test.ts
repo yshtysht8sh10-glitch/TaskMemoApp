@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   focusedInputScrollDirection,
   focusedInputScrollOffset,
+  normalizeVisibleViewport,
+  shouldRevealFocusedInput,
 } from "./focusedInputVisibility";
 
 describe("focusedInputScrollDirection", () => {
@@ -33,5 +35,44 @@ describe("focusedInputScrollDirection", () => {
     expect(
       focusedInputScrollDirection({ top: 50, bottom: 600 }, viewport),
     ).toBeNull();
+  });
+
+  it.each([0, 1, 80, Number.NaN])(
+    "Visual Viewportの異常なheight %sをmodal配置やscroll補正へ使わない",
+    (height) => {
+      expect(
+        normalizeVisibleViewport(
+          { height, offsetTop: 900 },
+          { height: 800, offsetTop: 0 },
+        ),
+      ).toEqual({ height: 800, offsetTop: 0 });
+    },
+  );
+
+  it("keyboard未表示ならfocusだけでviewport補正を開始しない", () => {
+    expect(
+      shouldRevealFocusedInput(
+        { height: 800, offsetTop: 0 },
+        { height: 800, offsetTop: 0 },
+      ),
+    ).toBe(false);
+  });
+
+  it("一時的に異常なoffsetTopが来ても可視領域を画面外へずらさない", () => {
+    expect(
+      normalizeVisibleViewport(
+        { height: 480, offsetTop: 900 },
+        { height: 800, offsetTop: 0 },
+      ),
+    ).toEqual({ height: 480, offsetTop: 0 });
+  });
+
+  it("keyboardで可視領域が十分に縮んだ場合だけ内部scroll補正を許可する", () => {
+    expect(
+      shouldRevealFocusedInput(
+        { height: 480, offsetTop: 0 },
+        { height: 800, offsetTop: 0 },
+      ),
+    ).toBe(true);
   });
 });

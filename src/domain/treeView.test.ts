@@ -16,6 +16,21 @@ describe('tree row layout metadata', () => {
   it('開閉で子を除外しても兄弟情報を維持する', () => { const nodes = [category('a', null, 'a0'), category('b', 'a', 'a0'), memo('m', 'a', 'a1')]; expect(flattenVisibleNodes(nodes, new Set()).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'a']); expect(flattenVisibleNodes(nodes, new Set(['a'])).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'a', 'b', 'm']); });
   it('完了済みroot Memoも元のsortKey位置で無所属配下に置く', () => { const active = memo('active', null, 'a1'); const done = { ...memo('done', null, 'a0'), status: 'completed' as const, completedAt: now }; expect(flattenVisibleNodes([active, done], new Set([UNASSIGNED_GROUP_ID])).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'done', 'active']); });
   it('完了済みMemoも元のCategoryとsortKey位置に置き、削除済みMemoだけを除外する', () => { const done = { ...memo('done', 'a', 'a0'), status: 'completed' as const, completedAt: now }; const active = memo('active', 'a', 'a1'); const deleted = { ...memo('deleted', 'a', 'a2'), deletedAt: now }; expect(flattenVisibleNodes([category('a', null, 'a0'), active, deleted, done], new Set(['a'])).map((row) => row.node.id)).toEqual([UNASSIGNED_GROUP_ID, 'a', 'done', 'active']); });
+  it('完了Memo表示をOFF→ON→OFFしても元の階層・順序とNodeデータを変えない', () => {
+    const a = memo('a', 'category', 'a0');
+    const b = { ...memo('b', 'category', 'a1'), status: 'completed' as const, completedAt: now };
+    const c = memo('c', 'category', 'a2');
+    const idea = { ...memo('idea', 'category', 'a3'), memoType: 'idea' as const };
+    const routine = { ...memo('routine', 'category', 'a4'), repeatRule: { frequency: 'day' as const, interval: 1, startsOn: '2026-09-13' } };
+    const nodes = [category('category', null, 'a0'), a, b, c, idea, routine];
+    const snapshot = structuredClone(nodes);
+    const ids = (showCompleted: boolean) => flattenVisibleNodes(nodes, new Set(['category']), showCompleted).map((row) => row.node.id);
+
+    expect(ids(false)).toEqual([UNASSIGNED_GROUP_ID, 'category', 'a', 'c', 'idea', 'routine']);
+    expect(ids(true)).toEqual([UNASSIGNED_GROUP_ID, 'category', 'a', 'b', 'c', 'idea', 'routine']);
+    expect(ids(false)).toEqual([UNASSIGNED_GROUP_ID, 'category', 'a', 'c', 'idea', 'routine']);
+    expect(nodes).toEqual(snapshot);
+  });
   it('折りたたみ表示用に全子孫Nodeを数え、削除済みNodeを除外する', () => { const deleted = { ...memo('deleted', 'b', 'a1'), deletedAt: now }; const nodes = [category('a', null, 'a0'), category('b', 'a', 'a0'), memo('deep', 'b', 'a0'), deleted]; expect(visibleDescendantNodeCount(nodes, 'a')).toBe(2); expect(visibleDescendantNodeCount(nodes, 'b')).toBe(1); });
   it('無所属件数にはroot Memoだけを含める', () => { expect(visibleUnassignedMemoCount([category('a', null, 'a0'), memo('root', null, 'a1'), memo('child', 'a', 'a0')])).toBe(1); });
 });

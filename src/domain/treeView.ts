@@ -37,9 +37,12 @@ export function visibleAncestorGuides(depth: number, ancestorContinuation: boole
   return ancestorContinuation.slice(hiddenLevels + 1, hiddenLevels + visibleDepth);
 }
 
-export function flattenVisibleNodes(nodes: Node[], expanded: Set<string>) {
+export function flattenVisibleNodes(nodes: Node[], expanded: Set<string>, showCompletedMemos = true) {
   const byParent = new Map<string | null, Node[]>();
-  for (const node of visibleNodes(nodes)) byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]);
+  for (const node of visibleNodes(nodes)) {
+    if (node.type === 'memo' && node.status === 'completed' && !showCompletedMemos) continue;
+    byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]);
+  }
   for (const siblings of byParent.values()) siblings.sort(compareNodes);
   const rows: VisibleTreeRow[] = []; const emitted = new Set<string>();
   const walk = (parentId: string | null, depth: number, ancestors: Set<string>, ancestorContinuation: boolean[]) => {

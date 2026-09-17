@@ -70,7 +70,10 @@ export function mergeNodesByUpdatedAt(local: Node[], remote: Node[]) {
         chosen === node
           ? { ...cloud.routineHistory, ...node.routineHistory }
           : { ...node.routineHistory, ...cloud.routineHistory };
-      merged.set(node.id, { ...(chosen as MemoNode), routineHistory });
+      const mergedMemo = { ...(chosen as MemoNode) };
+      if (Object.keys(routineHistory).length) mergedMemo.routineHistory = routineHistory;
+      else delete mergedMemo.routineHistory;
+      merged.set(node.id, mergedMemo);
     } else merged.set(node.id, chosen);
   }
   return [...merged.values()];

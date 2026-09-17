@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import DraggableFlatList, { type DragEndParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, visibleDescendantNodeCount, visibleUnassignedMemoCount, type VisibleTreeRow } from '@/domain/treeView';
 import { dropCandidateFor, resolveDropCandidate, type DropCandidate } from '@/domain/treeDrop';
@@ -16,11 +16,11 @@ import { useInlineTitleEdit } from '@/hooks/useInlineTitleEdit';
 
 export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
-type Props = { nodes: Node[]; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
+type Props = { nodes: Node[]; showCompletedMemos: boolean; onShowCompletedMemosChange: (value: boolean) => void; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
 const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
 let retainedExpandedCategoryIds = new Set(INITIAL_EXPANDED_CATEGORY_IDS);
 
-export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
+export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
   const { colors } = useAppTheme(); const styles = createStyles(colors);
   const [mountId] = useState(nextTreeMountId);
   const viewportRef = useRef<View>(null); const scrollOffsetRef = useRef(0);
@@ -31,7 +31,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
   const titleEdit = useInlineTitleEdit(onRenameMemo);
   const movingId = useRef<string | null>(null);
   const candidateRef = useRef<DropCandidate | null>(null);
-  const rows = useMemo(() => flattenVisibleNodes(nodes, expanded), [nodes, expanded]);
+  const rows = useMemo(() => flattenVisibleNodes(nodes, expanded, showCompletedMemos), [nodes, expanded, showCompletedMemos]);
   const categoryIds = useMemo(() => [UNASSIGNED_GROUP_ID, ...nodes.filter((node) => node.type === 'category' && node.deletedAt === null).map((node) => node.id)], [nodes]);
   const categoryChildCounts = useMemo(() => new Map(categoryIds.map((id) => [id, id === UNASSIGNED_GROUP_ID ? visibleUnassignedMemoCount(nodes) : visibleDescendantNodeCount(nodes, id)])), [categoryIds, nodes]);
   const orderedKeys = useMemo(() => rows.map((row) => row.node.id), [rows]);
@@ -59,8 +59,9 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
     movingId.current = null; candidateRef.current = null; setCandidate(null);
     if (id && finalCandidate) onDrop(id, finalCandidate);
   };
+  const completedToggle = !selectionMode && <View style={styles.toggle}><Text style={styles.toolText}>完了を表示</Text><Switch value={showCompletedMemos} onValueChange={onShowCompletedMemosChange} accessibilityLabel="完了を表示" /></View>;
   if (Platform.OS === 'web') return <View style={styles.container}>
-    <View style={styles.toolbar}>{selectionTools}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
+    <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !selectionMode && !row.virtual}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: selectionMode ? 170 : 110 }}
       onHover={(active, target) => { movingId.current = active.node.id; const next = dropCandidateFor(nodes, active.node.id, target.node); candidateRef.current = next; setCandidate(next); }}
@@ -73,7 +74,7 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
     {actionBar}
   </View>;
   return <View style={styles.container}>
-    <View style={styles.toolbar}>{selectionTools}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
+    <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <View ref={viewportRef} collapsable={false} style={styles.listViewport}>
       <DraggableFlatList data={rows} keyExtractor={(row) => row.node.id}
         onDragBegin={(index) => { movingId.current = rows[index]?.virtual ? null : rows[index]?.node.id ?? null; if (movingId.current) beginTreeDragTrace(movingId.current); treeDiagnosticLog('drag-begin', { mountId, index, movingId: movingId.current, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys }); updateCandidate(index); }}
@@ -92,4 +93,4 @@ export function NodeTree({ nodes, completingIds, onCompletionAnimationFinished, 
   </View>;
 }
 
-const createStyles = (colors: ThemeColors) => StyleSheet.create({ container: { flex: 1 }, listViewport: { flex: 1 }, toolbar: { minHeight: 42, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', paddingHorizontal: 12, gap: 6 }, tool: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 8, borderRadius: 8, backgroundColor: colors.surfaceAlt }, toolText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' }, selectionCount: { marginRight: 'auto', color: colors.text, fontSize: 13, fontWeight: '700' }, actionBar: { position: 'absolute', left: 10, right: 10, bottom: 10, minHeight: 62, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.surface, elevation: 10, shadowOpacity: 0.2, shadowRadius: 10 }, actionCount: { marginRight: 'auto', color: colors.text, fontSize: 12, fontWeight: '700' }, actionButton: { minHeight: 42, justifyContent: 'center', paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.surfaceAlt }, actionText: { color: colors.text, fontSize: 11, fontWeight: '700' }, deleteButton: { backgroundColor: colors.surfaceAlt }, deleteText: { color: colors.danger, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.35 } });
+const createStyles = (colors: ThemeColors) => StyleSheet.create({ container: { flex: 1 }, listViewport: { flex: 1 }, toolbar: { minHeight: 42, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', paddingHorizontal: 12, gap: 6 }, toggle: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4 }, tool: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 8, borderRadius: 8, backgroundColor: colors.surfaceAlt }, toolText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' }, selectionCount: { marginRight: 'auto', color: colors.text, fontSize: 13, fontWeight: '700' }, actionBar: { position: 'absolute', left: 10, right: 10, bottom: 10, minHeight: 62, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 14, backgroundColor: colors.surface, elevation: 10, shadowOpacity: 0.2, shadowRadius: 10 }, actionCount: { marginRight: 'auto', color: colors.text, fontSize: 12, fontWeight: '700' }, actionButton: { minHeight: 42, justifyContent: 'center', paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.surfaceAlt }, actionText: { color: colors.text, fontSize: 11, fontWeight: '700' }, deleteButton: { backgroundColor: colors.surfaceAlt }, deleteText: { color: colors.danger, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.35 } });

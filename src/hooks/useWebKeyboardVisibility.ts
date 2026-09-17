@@ -1,19 +1,34 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Platform } from "react-native";
 
 import {
   focusedInputScrollOffset,
+  normalizeVisibleViewport,
+  shouldRevealFocusedInput,
   type VisibleViewport,
 } from "@/utils/focusedInputVisibility";
 
 const KEYBOARD_SETTLE_DELAYS = [80, 280];
 
-function currentViewport(): VisibleViewport {
-  const viewport = window.visualViewport;
+function layoutViewport(): VisibleViewport {
   return {
-    height: viewport?.height ?? window.innerHeight,
-    offsetTop: viewport?.offsetTop ?? 0,
+    height: Math.max(
+      window.innerHeight,
+      document.documentElement.clientHeight,
+    ),
+    offsetTop: 0,
   };
+}
+
+function currentViewport(layout: VisibleViewport): VisibleViewport {
+  const viewport = window.visualViewport;
+  return normalizeVisibleViewport(
+    {
+      height: viewport?.height ?? layout.height,
+      offsetTop: viewport?.offsetTop ?? 0,
+    },
+    layout,
+  );
 }
 
 function isTextEntry(element: Element | null): element is HTMLElement {
@@ -26,8 +41,10 @@ function isTextEntry(element: Element | null): element is HTMLElement {
 }
 
 function scrollableAncestor(element: HTMLElement) {
+  const keyboardContainer = element.closest("#editor-keyboard-scroll");
+  if (keyboardContainer instanceof HTMLElement) return keyboardContainer;
   let ancestor = element.parentElement;
-  while (ancestor) {
+  while (ancestor && ancestor !== document.body && ancestor !== document.documentElement) {
     const overflowY = window.getComputedStyle(ancestor).overflowY;
     if (/auto|scroll/.test(overflowY)) return ancestor;
     ancestor = ancestor.parentElement;
@@ -35,22 +52,32 @@ function scrollableAncestor(element: HTMLElement) {
   return null;
 }
 
-function revealFocusedInput() {
+function revealFocusedInput(
+  adjustedContainers: Map<HTMLElement, number>,
+) {
   const element = document.activeElement;
   if (!isTextEntry(element)) return;
+  const layout = layoutViewport();
+  const viewport = currentViewport(layout);
+  if (!shouldRevealFocusedInput(viewport, layout)) return;
   const offset = focusedInputScrollOffset(
     element.getBoundingClientRect(),
-    currentViewport(),
+    viewport,
   );
   if (!offset) return;
   const scrollContainer = scrollableAncestor(element);
-  if (scrollContainer) scrollContainer.scrollTop += offset;
+  if (scrollContainer) {
+    if (!adjustedContainers.has(scrollContainer))
+      adjustedContainers.set(scrollContainer, scrollContainer.scrollTop);
+    scrollContainer.scrollTop += offset;
+  }
 }
 
 export function useWebFocusedInputVisibility() {
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
     const viewport = window.visualViewport;
+    const adjustedContainers = new Map<HTMLElement, number>();
     let frame: number | null = null;
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const scheduleReveal = () => {
@@ -58,13 +85,22 @@ export function useWebFocusedInputVisibility() {
       timers.forEach(clearTimeout);
       timers.clear();
       frame = requestAnimationFrame(() => {
-        revealFocusedInput();
+        const layout = layoutViewport();
+        const visible = currentViewport(layout);
+        if (shouldRevealFocusedInput(visible, layout))
+          revealFocusedInput(adjustedContainers);
+        else {
+          adjustedContainers.forEach((scrollTop, container) => {
+            if (container.isConnected) container.scrollTop = scrollTop;
+          });
+          adjustedContainers.clear();
+        }
         frame = null;
       });
       KEYBOARD_SETTLE_DELAYS.forEach((delay) => {
         const timer = setTimeout(() => {
           timers.delete(timer);
-          revealFocusedInput();
+          revealFocusedInput(adjustedContainers);
         }, delay);
         timers.add(timer);
       });
@@ -81,26 +117,7 @@ export function useWebFocusedInputVisibility() {
       window.removeEventListener("resize", scheduleReveal);
       if (frame !== null) cancelAnimationFrame(frame);
       timers.forEach(clearTimeout);
+      adjustedContainers.clear();
     };
   }, []);
-}
-
-export function useWebVisualViewportHeight() {
-  const [height, setHeight] = useState<number | null>(null);
-  useEffect(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined") return;
-    const viewport = window.visualViewport;
-    const update = () => {
-      const next = Math.round(viewport?.height ?? window.innerHeight);
-      if (next > 0) setHeight(next);
-    };
-    update();
-    viewport?.addEventListener("resize", update);
-    window.addEventListener("resize", update);
-    return () => {
-      viewport?.removeEventListener("resize", update);
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-  return height;
 }

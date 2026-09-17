@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { commitNodeHistory, createNodeHistory, NODE_HISTORY_LIMIT, reconcileSyncedNodeHistory, redoNodeHistory, replaceNodeHistory, undoNodeHistory } from './nodeHistory';
 import type { Node } from '@/models/node';
+import { mergeNodesByUpdatedAt } from '../services/firebaseNodeCodec';
 
 const node = (title = 'A'): Node => ({ id: 'a', type: 'category', parentId: null, sortKey: 'a0', title, createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null });
 
@@ -36,6 +37,27 @@ describe('node history', () => {
     const echoed = reconcileSyncedNodeHistory(changed, [...changed.nodes].reverse());
     expect(echoed).toBe(changed);
     expect(undoNodeHistory(echoed).nodes.find((item) => item.id === 'a')?.title).toBe('A');
+  });
+
+  it('keeps title undo and redo after Firebase merge echoes a memo without routine history', () => {
+    const before: Node = {
+      id: 'memo', type: 'memo', parentId: null, sortKey: 'a0', title: 'before', body: '',
+      dueAt: null, duePreset: 'none', status: 'active', completedAt: null,
+      createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null,
+    };
+    const edited = commitNodeHistory(createNodeHistory([before]), 'タイトル編集', (nodes) =>
+      nodes.map((item) => item.id === 'memo'
+        ? { ...item, title: 'after', updatedAt: new Date(1) }
+        : item),
+    );
+
+    const firebaseEcho = mergeNodesByUpdatedAt(edited.nodes, edited.nodes);
+    const reconciled = reconcileSyncedNodeHistory(edited, firebaseEcho);
+
+    expect(reconciled.past).toHaveLength(1);
+    const undone = undoNodeHistory(reconciled);
+    expect(undone.nodes[0].title).toBe('before');
+    expect(redoNodeHistory(undone).nodes[0].title).toBe('after');
   });
 
   it('clears local history for a genuinely different external node set', () => {

@@ -8,6 +8,43 @@ export type ElementBounds = {
   top: number;
 };
 
+const MIN_USABLE_VIEWPORT_HEIGHT = 160;
+const KEYBOARD_HEIGHT_THRESHOLD = 80;
+
+export function normalizeVisibleViewport(
+  viewport: VisibleViewport,
+  layoutViewport: VisibleViewport,
+): VisibleViewport {
+  const layoutHeight =
+    Number.isFinite(layoutViewport.height) &&
+    layoutViewport.height >= MIN_USABLE_VIEWPORT_HEIGHT
+      ? layoutViewport.height
+      : MIN_USABLE_VIEWPORT_HEIGHT;
+  if (
+    !Number.isFinite(viewport.height) ||
+    viewport.height < MIN_USABLE_VIEWPORT_HEIGHT
+  )
+    return { height: layoutHeight, offsetTop: 0 };
+
+  const height = Math.min(viewport.height, layoutHeight);
+  const maxOffset = Math.max(0, layoutHeight - height);
+  const offsetTop =
+    Number.isFinite(viewport.offsetTop) &&
+    viewport.offsetTop >= 0 &&
+    viewport.offsetTop <= maxOffset + 1
+      ? viewport.offsetTop
+      : 0;
+  return { height, offsetTop };
+}
+
+export function shouldRevealFocusedInput(
+  viewport: VisibleViewport,
+  layoutViewport: VisibleViewport,
+) {
+  const normalized = normalizeVisibleViewport(viewport, layoutViewport);
+  return layoutViewport.height - normalized.height >= KEYBOARD_HEIGHT_THRESHOLD;
+}
+
 export function focusedInputScrollDirection(
   bounds: ElementBounds,
   viewport: VisibleViewport,

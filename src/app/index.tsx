@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -10,6 +12,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -77,8 +80,11 @@ import {
 } from "@/services/nodeTransfer";
 import {
   DEFAULT_LIST_DISPLAY_PREFERENCES,
+  DEFAULT_TREE_DISPLAY_PREFERENCES,
   loadListDisplayPreferences,
+  loadTreeDisplayPreferences,
   saveListDisplayPreferences,
+  saveTreeDisplayPreferences,
 } from "@/services/viewPreferences";
 import { loadPinnedNote, savePinnedNote } from "@/services/pinnedNoteStorage";
 import {
@@ -94,11 +100,9 @@ import {
   type CompletionHistoryItem,
 } from "@/domain/completionHistory";
 import { appAlert } from "@/utils/appAlert";
+import { canStartSheetDismiss, sheetDismissRelease } from "@/utils/sheetDismissGesture";
 import { useFirebaseSync } from "@/hooks/useFirebaseSync";
-import {
-  useWebFocusedInputVisibility,
-  useWebVisualViewportHeight,
-} from "@/hooks/useWebKeyboardVisibility";
+import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
@@ -182,6 +186,9 @@ export default function HomeScreen() {
     DEFAULT_LIST_DISPLAY_PREFERENCES.pinnedNoteHeight,
   );
   const listDisplaySaveQueue = useRef(Promise.resolve());
+  const [showCompletedTreeMemos, setShowCompletedTreeMemos] = useState(
+    DEFAULT_TREE_DISPLAY_PREFERENCES.showCompletedMemos,
+  );
   const [view, setView] = useState<MainView>("deadline");
   const [deadlineExpanded, setDeadlineExpanded] = useState<
     Set<DeadlineGroupKey>
@@ -243,6 +250,7 @@ export default function HomeScreen() {
       loadNodes(mockNodes),
       loadPinnedNote(),
       loadListDisplayPreferences(),
+      loadTreeDisplayPreferences(),
       loadReminderPreferences(),
       loadFeaturePreferences(),
     ])
@@ -251,6 +259,7 @@ export default function HomeScreen() {
           loaded,
           note,
           listDisplay,
+          treeDisplay,
           reminderPreferences,
           featurePreferences,
         ]) => {
@@ -266,6 +275,7 @@ export default function HomeScreen() {
           setShowPinnedNote(listDisplay.showPinnedNote);
           setTodayGranularity(listDisplay.todayGranularity);
           setPinnedNoteHeight(listDisplay.pinnedNoteHeight);
+          setShowCompletedTreeMemos(treeDisplay.showCompletedMemos);
           setDeadlineExpanded(
             new Set(
               deadlineGroupDefinitions(listDisplay.todayGranularity).map(
@@ -603,6 +613,11 @@ export default function HomeScreen() {
         {view === "tree" ? (
           <NodeTree
             nodes={displayNodes}
+            showCompletedMemos={showCompletedTreeMemos}
+            onShowCompletedMemosChange={(value) => {
+              setShowCompletedTreeMemos(value);
+              saveTreeDisplayPreferences({ showCompletedMemos: value }).catch(() => {});
+            }}
             completingIds={new Set(exitingMemos.keys())}
             onCompletionAnimationFinished={finishCompletionAnimation}
             onAddMemo={(parentId) => {
@@ -1561,7 +1576,9 @@ function EditorModal({
 }) {
   const styles = useStyles();
   const { colors } = useAppTheme();
-  const webViewportHeight = useWebVisualViewportHeight();
+  const { height: viewportHeight } = useWindowDimensions();
+  const [scrollAtTop, setScrollAtTop] = useState(true);
+  const [sheetTranslateY] = useState(() => new Animated.Value(0));
   const initialMemo = editor?.node?.type === "memo" ? editor.node : null;
   const memo = initialMemo
     ? (nodes.find(
@@ -1666,29 +1683,41 @@ function EditorModal({
       memoType: "task",
     });
   };
+  const dismissPanResponder = PanResponder.create({
+    onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+      canStartSheetDismiss({ scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy }),
+    onPanResponderMove: (_event, gesture) => sheetTranslateY.setValue(Math.max(0, gesture.dy)),
+    onPanResponderRelease: (_event, gesture) => {
+      if (sheetDismissRelease({ distance: Math.max(0, gesture.dy), velocity: gesture.vy, viewportHeight }) === 'commit-close') {
+        Animated.timing(sheetTranslateY, { toValue: viewportHeight, duration: 180, useNativeDriver: true })
+          .start(({ finished }) => { if (finished) save(); });
+      } else {
+        Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true }).start();
+      }
+    },
+    onPanResponderTerminate: () => Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true }).start(),
+  });
   return (
     <Modal
       visible={!!editor}
       animationType="slide"
       presentationStyle="pageSheet"
       allowSwipeDismissal
-      onRequestClose={onClose}
+      onRequestClose={save}
     >
-      <SafeAreaView
-        style={[
-          styles.modalPage,
-          webViewportHeight !== null && {
-            flex: 0,
-            height: webViewportHeight,
-            maxHeight: webViewportHeight,
-          },
-        ]}
+      <Animated.View
+        style={[styles.modalPage, { transform: [{ translateY: sheetTranslateY }] }]}
+        {...(Platform.OS === "web" ? dismissPanResponder.panHandlers : {})}
       >
+      <SafeAreaView style={styles.modalPage}>
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
           <ScrollView
+            nativeID="editor-keyboard-scroll"
+            onScroll={(event) => setScrollAtTop(event.nativeEvent.contentOffset.y <= 0)}
+            scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             automaticallyAdjustKeyboardInsets
@@ -1879,6 +1908,7 @@ function EditorModal({
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
+      </Animated.View>
     </Modal>
   );
 }

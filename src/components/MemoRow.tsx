@@ -9,6 +9,7 @@ import { CompletionMotion } from "@/components/CompletionMotion";
 import { repeatRuleLabel } from "@/domain/routine";
 import { isIdea } from "@/domain/memoType";
 import type { InlineTitleEditController } from "@/hooks/useInlineTitleEdit";
+import { isTitleEditorFor } from "@/utils/inlineTitleEdit";
 
 type Props = {
   memo: MemoNode;
@@ -122,7 +123,7 @@ export function MemoRow({
               {idea ? <Text style={styles.ideaIcon}>💡</Text> : <View style={styles.bullet} />}
             </View>
             <View style={styles.content}>
-              {titleEdit.editing ? (
+              {isTitleEditorFor(titleEdit.activeId, memo.id) ? (
                 <View nativeID={titleEdit.nativeID}>
                   <View style={styles.titleEditRow}>
                     <TextInput

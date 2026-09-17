@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { allDeadlineGroupIds, TODAY_GRANULARITIES, type DeadlineGroupKey, type TodayGranularity } from '../domain/deadlineView';
 
 const LIST_DISPLAY_KEY = '@taskmemo/view/list-display/v1';
+const TREE_DISPLAY_KEY = '@taskmemo/view/tree-display/v1';
 export const PINNED_NOTE_HEIGHT_MIN = 72; export const PINNED_NOTE_HEIGHT_MAX = 280; export const PINNED_NOTE_HEIGHT_DEFAULT = 110;
 export const clampPinnedNoteHeight = (height: number) => Math.max(PINNED_NOTE_HEIGHT_MIN, Math.min(PINNED_NOTE_HEIGHT_MAX, height));
 export type ListDisplayPreferences = { visibleGroupIds: DeadlineGroupKey[]; showPinnedNote: boolean; todayGranularity: TodayGranularity; pinnedNoteHeight: number };
@@ -13,3 +14,24 @@ export async function loadListDisplayPreferences(): Promise<ListDisplayPreferenc
 }
 
 export async function saveListDisplayPreferences(value: ListDisplayPreferences) { await AsyncStorage.setItem(LIST_DISPLAY_KEY, JSON.stringify(value)); }
+
+export type TreeDisplayPreferences = { showCompletedMemos: boolean };
+export const DEFAULT_TREE_DISPLAY_PREFERENCES: TreeDisplayPreferences = { showCompletedMemos: false };
+
+export function parseTreeDisplayPreferences(raw: string | null): TreeDisplayPreferences {
+  if (!raw) return DEFAULT_TREE_DISPLAY_PREFERENCES;
+  try {
+    const value = JSON.parse(raw) as { showCompletedMemos?: unknown };
+    return { showCompletedMemos: typeof value.showCompletedMemos === 'boolean' ? value.showCompletedMemos : false };
+  } catch {
+    return DEFAULT_TREE_DISPLAY_PREFERENCES;
+  }
+}
+
+export async function loadTreeDisplayPreferences() {
+  return parseTreeDisplayPreferences(await AsyncStorage.getItem(TREE_DISPLAY_KEY));
+}
+
+export async function saveTreeDisplayPreferences(value: TreeDisplayPreferences) {
+  await AsyncStorage.setItem(TREE_DISPLAY_KEY, JSON.stringify(value));
+}

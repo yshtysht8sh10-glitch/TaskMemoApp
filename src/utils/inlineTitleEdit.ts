@@ -6,3 +6,10 @@ export function titleClickAction(
   if (activeId === clickedId) return "keep-current";
   return "finish-current";
 }
+
+export function isTitleEditorFor(
+  activeId: string | null,
+  nodeId: string,
+) {
+  return activeId === nodeId;
+}
