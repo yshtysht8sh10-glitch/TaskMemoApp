@@ -4,6 +4,7 @@ import {
   focusedInputScrollDirection,
   focusedInputScrollOffset,
   normalizeVisibleViewport,
+  focusedInputScrollPlan,
   shouldRevealFocusedInput,
 } from "./focusedInputVisibility";
 
@@ -74,5 +75,14 @@ describe("focusedInputScrollDirection", () => {
         { height: 800, offsetTop: 0 },
       ),
     ).toBe(true);
+  });
+
+  it("末尾付近の入力欄は不足するscroll領域をkeyboard insetで補う", () => {
+    expect(
+      focusedInputScrollPlan(
+        { scrollTop: 500, scrollHeight: 1000, clientHeight: 500 },
+        260,
+      ),
+    ).toEqual({ extraBottomSpace: 260, targetScrollTop: 760 });
   });
 });

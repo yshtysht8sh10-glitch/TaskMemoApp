@@ -3,6 +3,7 @@ import { Platform } from "react-native";
 
 import {
   focusedInputScrollOffset,
+  focusedInputScrollPlan,
   normalizeVisibleViewport,
   shouldRevealFocusedInput,
   type VisibleViewport,
@@ -53,7 +54,7 @@ function scrollableAncestor(element: HTMLElement) {
 }
 
 function revealFocusedInput(
-  adjustedContainers: Map<HTMLElement, number>,
+  adjustedContainers: Map<HTMLElement, { paddingBottom: string; scrollTop: number }>,
 ) {
   const element = document.activeElement;
   if (!isTextEntry(element)) return;
@@ -68,8 +69,18 @@ function revealFocusedInput(
   const scrollContainer = scrollableAncestor(element);
   if (scrollContainer) {
     if (!adjustedContainers.has(scrollContainer))
-      adjustedContainers.set(scrollContainer, scrollContainer.scrollTop);
-    scrollContainer.scrollTop += offset;
+      adjustedContainers.set(scrollContainer, {
+        paddingBottom: scrollContainer.style.paddingBottom,
+        scrollTop: scrollContainer.scrollTop,
+      });
+    const plan = focusedInputScrollPlan(scrollContainer, offset);
+    if (plan.extraBottomSpace > 0) {
+      const currentPadding = Number.parseFloat(
+        window.getComputedStyle(scrollContainer).paddingBottom,
+      ) || 0;
+      scrollContainer.style.paddingBottom = `${currentPadding + plan.extraBottomSpace}px`;
+    }
+    scrollContainer.scrollTop = plan.targetScrollTop;
   }
 }
 
@@ -77,7 +88,7 @@ export function useWebFocusedInputVisibility() {
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
     const viewport = window.visualViewport;
-    const adjustedContainers = new Map<HTMLElement, number>();
+    const adjustedContainers = new Map<HTMLElement, { paddingBottom: string; scrollTop: number }>();
     let frame: number | null = null;
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const scheduleReveal = () => {
@@ -90,8 +101,11 @@ export function useWebFocusedInputVisibility() {
         if (shouldRevealFocusedInput(visible, layout))
           revealFocusedInput(adjustedContainers);
         else {
-          adjustedContainers.forEach((scrollTop, container) => {
-            if (container.isConnected) container.scrollTop = scrollTop;
+          adjustedContainers.forEach((original, container) => {
+            if (container.isConnected) {
+              container.style.paddingBottom = original.paddingBottom;
+              container.scrollTop = original.scrollTop;
+            }
           });
           adjustedContainers.clear();
         }

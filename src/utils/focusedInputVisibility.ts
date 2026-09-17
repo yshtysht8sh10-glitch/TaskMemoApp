@@ -8,6 +8,12 @@ export type ElementBounds = {
   top: number;
 };
 
+export type ScrollContainerMetrics = {
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+};
+
 const MIN_USABLE_VIEWPORT_HEIGHT = 160;
 const KEYBOARD_HEIGHT_THRESHOLD = 80;
 
@@ -72,4 +78,16 @@ export function focusedInputScrollOffset(
   if (bounds.bottom > visibleBottom) return bounds.bottom - visibleBottom;
   if (bounds.top < visibleTop) return bounds.top - visibleTop;
   return 0;
+}
+
+export function focusedInputScrollPlan(
+  container: ScrollContainerMetrics,
+  offset: number,
+) {
+  const targetScrollTop = Math.max(0, container.scrollTop + offset);
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  return {
+    extraBottomSpace: Math.max(0, targetScrollTop - maxScrollTop),
+    targetScrollTop,
+  };
 }
