@@ -1,4 +1,4 @@
-export type NodeType = 'category' | 'memo';
+export type NodeType = "category" | "memo";
 
 export type BaseNode = {
   id: string;
@@ -19,8 +19,13 @@ export type BaseNode = {
 };
 
 export type CategoryNode = BaseNode & {
-  type: 'category';
-  categoryKind?: 'routineRoot' | 'routineDaily' | 'routineWeekly' | 'routineMonthly' | 'routineYearly';
+  type: "category";
+  categoryKind?:
+    | "routineRoot"
+    | "routineDaily"
+    | "routineWeekly"
+    | "routineMonthly"
+    | "routineYearly";
   routineWeekday?: number;
   routineDayOfMonth?: number;
   /** JavaScript month index (0-11) used with routineDayOfMonth. */
@@ -28,20 +33,35 @@ export type CategoryNode = BaseNode & {
 };
 
 export type DuePreset =
-  | 'none'
-  | 'today'
-  | 'tomorrow'
-  | 'morning'
-  | 'afternoon'
-  | 'thisWeek'
-  | 'thisMonth'
-  | 'thisYear'
-  | 'custom';
+  | "none"
+  | "today"
+  | "tomorrow"
+  | "morning"
+  | "afternoon"
+  | "thisWeek"
+  | "thisMonth"
+  | "thisYear"
+  | "custom";
 
-export type MemoStatus = 'active' | 'completed';
+export type MemoStatus = "active" | "completed";
+export type MemoType = "task" | "idea";
+
+export type RepeatFrequency = "day" | "week" | "month" | "year";
+
+export type RepeatRule = {
+  frequency: RepeatFrequency;
+  interval: number;
+  /** Local calendar date (YYYY-MM-DD) that anchors the interval. */
+  startsOn: string;
+  weekdays?: number[];
+  dayOfMonth?: number;
+  nthWeekday?: { ordinal: number; weekday: number };
+};
 
 export type MemoNode = BaseNode & {
-  type: 'memo';
+  type: "memo";
+  /** Missing on legacy data; absence is interpreted as `task`. */
+  memoType?: MemoType;
   /** Manual ordering used by the deadline list, independent of tree order. */
   deadlineSortKey?: string;
   body: string;
@@ -52,7 +72,9 @@ export type MemoNode = BaseNode & {
   status: MemoStatus;
   completedAt: Date | null;
   /** Completion timestamps keyed by the local calendar date (YYYY-MM-DD). */
-  routineHistory?: Record<string, string>;
+  /** ISO completion timestamp, or null as a synchronized completion-cancellation tombstone. */
+  routineHistory?: Record<string, string | null>;
+  repeatRule?: RepeatRule | null;
 };
 
 export type Node = CategoryNode | MemoNode;

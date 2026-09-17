@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "rootDir": "..",
+    "outDir": "lib",
+    "baseUrl": "..",
+    "paths": { "@/*": ["src/*"] },
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "../src/external-ai/contracts.ts",
+    "../src/external-ai/errors.ts",
+    "../src/external-ai/repository.ts",
+    "../src/external-ai/taskMemoApplicationService.ts",
+    "../src/external-ai/usageQuotaGate.ts",
+    "../src/domain/nodeOperations.ts",
+    "../src/domain/routine.ts",
+    "../src/models/node.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
+}

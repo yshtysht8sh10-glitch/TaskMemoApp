@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { Node } from '@/models/node';
+import type { CategoryNode, MemoNode, Node } from '@/models/node';
 import { completionHistoryGroups } from './completionHistory';
+import { clearRoutineCompletion } from './routine';
 
 const memo = (id: string, createdAt: Date, completedAt: Date): Node => ({ id, type: 'memo', parentId: null, sortKey: id, title: id, body: '', dueAt: null, duePreset: 'none', status: 'completed', completedAt, createdAt, updatedAt: completedAt, deletedAt: null });
 
 describe('completion history', () => {
   const nodes = [memo('old-created', new Date(2026, 8, 1, 10), new Date(2026, 8, 14, 9)), memo('new-created', new Date(2026, 8, 2, 10), new Date(2026, 8, 13, 9))];
-  it('完了日で新しい日からグループ化する', () => expect(completionHistoryGroups(nodes, 'completedAt').map((group) => [group.label, group.memos.map((item) => item.id)])).toEqual([['2026年9月14日', ['old-created']], ['2026年9月13日', ['new-created']]]));
-  it('作成日へ切り替えて同じグループ構造で並べる', () => expect(completionHistoryGroups(nodes, 'createdAt').map((group) => group.memos[0].id)).toEqual(['new-created', 'old-created']));
+  it('完了日で新しい日からグループ化する', () => expect(completionHistoryGroups(nodes, 'completedAt').map((group) => [group.label, group.items.map((item) => item.memo.id)])).toEqual([['2026年9月14日', ['old-created']], ['2026年9月13日', ['new-created']]]));
+  it('作成日へ切り替えて同じグループ構造で並べる', () => expect(completionHistoryGroups(nodes, 'createdAt').map((group) => group.items[0].memo.id)).toEqual(['new-created', 'old-created']));
+  it('RoutineDefinitionはactiveのまま日付Occurrenceを完了履歴へ統合する', () => { const root: CategoryNode = { id: 'r', type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: 'r', title: 'ルーティーン', createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null }; const routine: MemoNode = { ...(memo('routine', new Date(2026, 8, 1), new Date(2026, 8, 1)) as MemoNode), parentId: 'r', status: 'active', completedAt: null, routineHistory: { '2026-09-17': '2026-09-17T10:00:00.000Z', '2026-09-15': '2026-09-15T10:00:00.000Z' } }; const groups = completionHistoryGroups([root, routine], 'completedAt'); expect(groups.flatMap((group) => group.items).map((item) => [item.key, item.kind, item.memo.status])).toEqual([['routine:routine:2026-09-17', 'routineOccurrence', 'active'], ['routine:routine:2026-09-15', 'routineOccurrence', 'active']]); });
+  it('Routine occurrenceの完了取消で対象日だけ完了一覧から除外する', () => { const root: CategoryNode = { id: 'r', type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: 'r', title: 'ルーティーン', createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null }; const routine: MemoNode = { ...(memo('routine', new Date(2026, 8, 1), new Date(2026, 8, 1)) as MemoNode), parentId: 'r', status: 'active', completedAt: null, routineHistory: { '2026-09-17': '2026-09-17T10:00:00.000Z', '2026-09-15': '2026-09-15T10:00:00.000Z' } }; const restored = clearRoutineCompletion([root, routine], 'routine', new Date(2026, 8, 17), new Date(2026, 8, 18)); expect(completionHistoryGroups(restored, 'completedAt').flatMap((group) => group.items).map((item) => item.key)).toEqual(['routine:routine:2026-09-15']); expect(restored[1]).toMatchObject({ status: 'active', routineHistory: { '2026-09-17': null } }); });
 });

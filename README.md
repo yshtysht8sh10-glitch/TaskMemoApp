@@ -1,5 +1,7 @@
 # TaskMemoApp
 
+外部AI向けRemote MCPの構成とローカル検証方法は [docs/external-ai-mcp.md](docs/external-ai-mcp.md) を参照してください。
+
 OneNoteで行っていたタスク・メモ管理を置き換えることを目的としたスマートフォンアプリ。
 
 ## Tech Stack

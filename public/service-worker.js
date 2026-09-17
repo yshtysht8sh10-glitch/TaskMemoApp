@@ -16,3 +16,12 @@ self.addEventListener('fetch', (event) => {
     return response;
   }).catch(() => caches.match(event.request).then((cached) => cached || (event.request.mode === 'navigate' ? caches.match('/') : undefined))));
 });
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
+    const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
+    if (existing) { existing.postMessage({ type: 'taskmemo-notification-open', view: 'deadline' }); return existing.focus(); }
+    return self.clients.openWindow('/');
+  }));
+});
