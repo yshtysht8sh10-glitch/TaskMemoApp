@@ -5,6 +5,7 @@ import {
   focusedInputScrollOffset,
   normalizeVisibleViewport,
   focusedInputScrollPlan,
+  focusedInputRevealPlan,
   shouldRevealFocusedInput,
 } from "./focusedInputVisibility";
 
@@ -84,5 +85,21 @@ describe("focusedInputScrollDirection", () => {
         260,
       ),
     ).toEqual({ extraBottomSpace: 260, targetScrollTop: 760 });
+  });
+
+  it("Safariのfocus scrollを戻した後も一覧内inputをkeyboard上へ出す", () => {
+    const plan = focusedInputRevealPlan({
+      baselineWindowScrollY: 0,
+      currentWindowScrollY: 180,
+      inputBounds: { top: 620, bottom: 670 },
+      viewport: { height: 420, offsetTop: 0 },
+      container: { scrollTop: 400, scrollHeight: 1000, clientHeight: 580 },
+    });
+
+    expect(plan.windowScrollTop).toBe(0);
+    expect(plan.inputBoundsAfterWindowRestore).toEqual({ top: 800, bottom: 850 });
+    expect(plan.containerScrollOffset).toBe(446);
+    expect(plan.scroll).toEqual({ extraBottomSpace: 426, targetScrollTop: 846 });
+    expect(plan.inputBoundsAfterReveal.bottom).toBeLessThan(420);
   });
 });

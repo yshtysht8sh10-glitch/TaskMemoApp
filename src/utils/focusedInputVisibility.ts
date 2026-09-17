@@ -14,6 +14,14 @@ export type ScrollContainerMetrics = {
   scrollTop: number;
 };
 
+export type FocusedInputRevealMetrics = {
+  baselineWindowScrollY: number;
+  currentWindowScrollY: number;
+  inputBounds: ElementBounds;
+  viewport: VisibleViewport;
+  container: ScrollContainerMetrics;
+};
+
 const MIN_USABLE_VIEWPORT_HEIGHT = 160;
 const KEYBOARD_HEIGHT_THRESHOLD = 80;
 
@@ -89,5 +97,34 @@ export function focusedInputScrollPlan(
   return {
     extraBottomSpace: Math.max(0, targetScrollTop - maxScrollTop),
     targetScrollTop,
+  };
+}
+
+export function focusedInputRevealPlan({
+  baselineWindowScrollY,
+  currentWindowScrollY,
+  inputBounds,
+  viewport,
+  container,
+}: FocusedInputRevealMetrics) {
+  const pageScrollDelta = currentWindowScrollY - baselineWindowScrollY;
+  const inputBoundsAfterWindowRestore = {
+    top: inputBounds.top + pageScrollDelta,
+    bottom: inputBounds.bottom + pageScrollDelta,
+  };
+  const containerScrollOffset = focusedInputScrollOffset(
+    inputBoundsAfterWindowRestore,
+    viewport,
+  );
+  const scroll = focusedInputScrollPlan(container, containerScrollOffset);
+  return {
+    windowScrollTop: baselineWindowScrollY,
+    inputBoundsAfterWindowRestore,
+    containerScrollOffset,
+    scroll,
+    inputBoundsAfterReveal: {
+      top: inputBoundsAfterWindowRestore.top - containerScrollOffset,
+      bottom: inputBoundsAfterWindowRestore.bottom - containerScrollOffset,
+    },
   };
 }

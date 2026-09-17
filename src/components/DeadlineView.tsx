@@ -573,6 +573,7 @@ export function DeadlineView({
         <DragScale>
           <View style={styles.rowSpacing}>
             <Pressable
+              nativeID={`deadline-memo-${item.memo.id}`}
               onPress={() =>
                 selectionMode
                   ? toggleSelected(item.memo.id)
