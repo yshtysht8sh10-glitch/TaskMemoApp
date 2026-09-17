@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
+import { keyboardDiagnosticsEnabled as diagnosticsEnabled, mountDiagnosticCopyPanel } from '../utils/diagnosticClipboard';
 
 import {
   focusedInputScrollOffset,
@@ -55,7 +56,7 @@ function scrollableAncestor(element: HTMLElement) {
 }
 
 function keyboardDiagnosticsEnabled() {
-  return new URLSearchParams(window.location.search).has("keyboardDiagnostics");
+  return diagnosticsEnabled(window.location.search);
 }
 
 // Opt-in, memory-only evidence. Never record titles, values or account data.
@@ -209,8 +210,17 @@ export function useWebFocusedInputVisibility() {
       diagnosticEntries.length = 0;
       const diagnosticWindow = window as typeof window & { taskMemoKeyboardDiagnostics?: { export: () => string } };
       diagnosticWindow.taskMemoKeyboardDiagnostics = {
-        export: () => JSON.stringify({ version: 2, userAgent: navigator.userAgent, entries: diagnosticEntries }, null, 2),
+        export: () => {
+          recordKeyboardDiagnostic('export');
+          return JSON.stringify({ version: 3, timestamp: new Date().toISOString(), userAgent: navigator.userAgent, entries: diagnosticEntries }, null, 2);
+        },
       };
+      diagnosticListeners.push(mountDiagnosticCopyPanel(
+        window.location.search,
+        () => diagnosticWindow.taskMemoKeyboardDiagnostics!.export(),
+        navigator.clipboard,
+        document,
+      ));
       const observe = (target: EventTarget, name: string, label: string) => {
         const listener = (event: Event) => {
           recordKeyboardDiagnostic(label, { eventTarget: event.target instanceof Element ? diagnosticElement(event.target) : null });

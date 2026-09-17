@@ -42,7 +42,7 @@ b5b61d4のテストは数値から余白と目標scrollTopを返す関数だけ�
 5. baseline: pointerdownを全要素で捕捉し次focusまで保存する。キーボード内の移動や
    再focusでは別操作由来baselineを利用し得る。時刻と要素identityで確認する。
 
-## 診断版（未公開）
+## 診断版
 
 ?keyboardDiagnostics=1 の時だけ追加観測。スクロール処理・フォーカス処理は変更しない。
 window.taskMemoKeyboardDiagnostics.export() でJSONを取得できる。
@@ -62,18 +62,22 @@ visualViewport下端はOSキーボードの実測値ではない。旧ログのk
 
 ## iPhoneでの次の観測手順
 
-診断版の公開またはiPhoneから到達できるローカル環境を準備した後に実施する。
-今回deployしないため、現行本番URLには追加診断JSON機能はまだない。
+公開済み診断版を利用する。コピーUIの更新版ではJSON version 3とexport時刻を付与する。
 
 1. Safariで診断版URLへ ?keyboardDiagnostics=1 を付けて開く。
 2. 一覧「明日」の下部対象Memoを表示し、タイトルを一度タップする。
 3. keyboard表示後、手でscrollせず3秒待つ。症状の有無を記録する。
-4. Mac SafariのWeb Inspectorで接続したiPhoneページのconsoleから
-   window.taskMemoKeyboardDiagnostics.export() を実行し、返ったJSONを保存する。
+4. 画面右上の「診断ログをコピー」をタップし、成功表示を確認してChatGPTへそのままペーストする。
+   ファイルはダウンロードしない。Web Inspectorでは従来のwindow.taskMemoKeyboardDiagnostics.export()も利用可能。
    キーボードを閉じる前のログもメモリに残るので、閉じてから取得してもよい。再読込はしない。
 5. iOS/Safari版、縦横、表示倍率、通常Safari/PWAを添える。
 
-Macを利用できない場合は端末内のログ書き出しUIを用意する必要がある。
+コピーはタップ内から直接Clipboard APIを呼ぶ。失敗時は再タップする。
+HTTPSのSafariで利用する。非対応環境では失敗を表示し、入力欄をfocusするfallbackは行わない
+（診断対象のfocus・選択・keyboard状態を変えないため）。必要なら従来のconsole exportを利用する。
+診断パラメータがない／値が1以外の画面ではUIを生成しない。
+新規テストはコピー開始の同期性、export全文の受渡し、表示条件、成功・失敗・再試行、cleanupを検証する。
+イベント/DOMアダプタのテストであり、iPhoneの実clipboard権限・タップ・keyboardは保証しない。
 追加observerにも測定負荷はあるため、診断ON/OFFで症状が変わる場合はその事実も記録する。
 
 ## ログからの判断
@@ -86,3 +90,14 @@ Macを利用できない場合は端末内のログ書き出しUIを用意する
 
 今回はSafari実機条件の再現FAILを取得できていない。既存算術テストのPASSは修正証拠にしない。
 実機ログを固定fixtureにしてから、hookイベントとDOM計測を通る回帰テストを作る。
+
+## 2026-09-18 診断コピーUI
+
+- `?keyboardDiagnostics=1`限定で44px以上のコピーボタンを追加。タップ時に既存exportを呼び、
+  同じイベント内でClipboard APIへJSON全文を渡す。成功・失敗を画面表示する。
+- version 3はtimestampとexport時の座標スナップショットを追加。既存イベントと匿名要素情報を維持。
+  Memo本文・タイトル・認証情報をJSONへ追加しない。ダウンロードは行わない。
+- focused: コピーUI/clipboardと既存可視化計算の22 tests PASS。全体: 26 files / 185 tests PASS。
+  TypeScript、Lint、git diff --check、Web production exportを確認。
+- iPhoneのコピー権限、タッチからの実コピー、キーボード表示中のボタン到達性は実機確認待ち。
+  #42のkeyboard回避ロジックは変更しておらず、解決の根拠にはしない。IssueはOPENを維持する。
