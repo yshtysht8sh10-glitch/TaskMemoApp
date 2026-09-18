@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function ownsUser(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validVersionedRecord(nodeId) {
+      let record = request.resource.data.record;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && record is map
+        && record.keys().hasAll(['value', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq', 'operationType'])
+        && record.value is map
+        && record.value.id == nodeId
+        && record.revision is int && record.revision >= 0
+        && record.lastOpId is string && record.lastOpId.size() > 0
+        && record.lastDeviceId is string && record.lastDeviceId.size() > 0
+        && record.lastLocalSeq is int && record.lastLocalSeq >= 0
+        && record.operationType is string;
+    }
+
+    function validOperation(opId) {
+      let operation = request.resource.data.operation;
+      let acknowledgement = request.resource.data.acknowledgement;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'operation', 'acknowledgement'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && operation is map
+        && operation.keys().hasAll(['opId', 'deviceId', 'localSeq', 'targetNodeId', 'type', 'baseRevision', 'payload', 'createdAt', 'status', 'attemptCount'])
+        && operation.opId == opId
+        && operation.deviceId is string && operation.deviceId.size() > 0
+        && operation.localSeq is int && operation.localSeq > 0
+        && operation.targetNodeId is string && operation.targetNodeId.size() > 0
+        && operation.baseRevision is int && operation.baseRevision >= 0
+        && operation.payload is map && operation.payload.node is map
+        && operation.payload.node.id == operation.targetNodeId
+        && acknowledgement is map && acknowledgement.opId == opId;
+    }
+
+    // Existing v1 client remains available only to the authenticated owner.
+    match /users/{userId}/nodes/{nodeId} {
+      allow read, write: if ownsUser(userId);
+    }
+    match /users/{userId}/externalAiAuditLogs/{logId} {
+      allow read: if ownsUser(userId);
+      allow write: if false;
+    }
+    match /users/{userId}/syncMetadataV2/{documentId} {
+      allow read: if ownsUser(userId);
+      allow write: if false;
+    }
+
+    match /users/{userId}/nodesV2/{nodeId} {
+      allow read: if ownsUser(userId);
+      allow create: if ownsUser(userId) && validVersionedRecord(nodeId);
+      allow update: if ownsUser(userId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validVersionedRecord(nodeId)
+        && request.resource.data.record.revision >= resource.data.record.revision;
+      allow delete: if false;
+    }
+    match /users/{userId}/syncOperationsV2/{opId} {
+      allow read: if ownsUser(userId);
+      allow create: if ownsUser(userId) && validOperation(opId);
+      // Operation receipts are immutable; this preserves the opId idempotency boundary.
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

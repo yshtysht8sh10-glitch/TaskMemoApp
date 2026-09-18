@@ -1,4 +1,4 @@
-import { doc, getDoc, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyRevisionOperation } from "./revisionModel";
@@ -63,13 +63,23 @@ export function createFirebaseSyncAdapter(
           const nodeSnapshot = await transaction.get(nodeRef);
           const current = nodeSnapshot.exists() ? nodeSnapshot.data().record as VersionedNode : undefined;
           const acknowledgement = applyRevisionOperation(current, operation);
-          if (acknowledgement.result === "applied") transaction.set(nodeRef, { record: acknowledgement.record, serverUpdatedAt: serverTimestamp() });
-          transaction.set(operationRef, { operation, acknowledgement, serverReceivedAt: serverTimestamp() });
+          if (acknowledgement.result === "applied") transaction.set(nodeRef, { ownerUid: uid, schemaVersion: 2, record: acknowledgement.record, serverUpdatedAt: serverTimestamp() });
+          transaction.set(operationRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
           return acknowledgement;
         });
       } catch (reason) {
         throw adapterError(reason);
       }
+    },
+
+    subscribe(onRecord, onError) {
+      return onSnapshot(collection(db, "users", uid, "nodesV2"), { includeMetadataChanges: true }, (snapshot) => {
+        for (const change of snapshot.docChanges()) {
+          if (change.type === "removed") continue;
+          const record = change.doc.data().record as VersionedNode | undefined;
+          if (record) void onRecord(record);
+        }
+      }, onError);
     },
   };
 }

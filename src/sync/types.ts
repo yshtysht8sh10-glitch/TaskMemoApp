@@ -65,6 +65,10 @@ export type SyncAcknowledgement = {
 export interface SyncAdapter {
   connect(): Promise<void>;
   upload(operation: SyncOperation): Promise<SyncAcknowledgement>;
+  subscribe?(
+    onRecord: (record: VersionedNode) => void | Promise<void>,
+    onError: (reason: unknown) => void,
+  ): () => void;
 }
 
 export interface SyncPersistence {

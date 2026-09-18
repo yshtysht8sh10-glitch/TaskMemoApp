@@ -37,6 +37,7 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
@@ -53,6 +54,7 @@
     "web": "expo start --web",
     "firebase:verify-env": "node ./scripts/verify-firebase-environment.js",
     "firebase:verify-dev-connection": "node ./scripts/verify-dev-firebase-connection.js",
+    "firebase:emulator": "npx firebase-tools emulators:start --config firebase.emulator.json --project demo-taskmemo-v2 --only auth,firestore",
     "web:export": "npm run firebase:verify-env && expo export --platform web --clear && node ./scripts/verify-firebase-web-export.js",
     "lint": "expo lint",
     "test": "vitest run",
