@@ -1,13 +1,14 @@
 import { canMoveNode, siblingsOf } from './nodeOperations';
 import { UNASSIGNED_GROUP_ID } from './treeView';
 import type { Node } from '../models/node';
+import { beforeIdForInsertion } from './insertionPosition';
 
 export type DropCandidate = {
   parentId: string | null;
   /** The sibling that will follow the moving node. Undefined means append. */
   beforeId?: string;
   targetId: string;
-  kind: 'inside' | 'before';
+  kind: 'inside' | 'before' | 'after';
 };
 
 type DropRow = { node: Node; virtual?: 'unassigned' };
@@ -25,6 +26,20 @@ export function resolveDropCandidate(nodes: Node[], movingId: string, hover: Dro
   const descendants = descendantIds(nodes, movingId);
   const previous = [...reorderedRows.slice(0, movingIndex)].reverse().find((row) => !descendants.has(row.node.id));
   const next = reorderedRows.slice(movingIndex + 1).find((row) => !descendants.has(row.node.id));
+
+  // A memo in the gap between the last child of an expanded Category and the
+  // next Category belongs to the former. The following Category header is only
+  // the visual anchor for that gap; it must not change the memo to a root node.
+  const moving = nodes.find((node) => node.id === movingId);
+  if (
+    moving?.type === 'memo' &&
+    previous?.node.parentId &&
+    next?.node.type === 'category' &&
+    next.node.parentId !== previous.node.parentId
+  ) {
+    const candidate = { parentId: previous.node.parentId, targetId: next.node.id, kind: 'before' as const };
+    return canMoveNode(nodes, movingId, candidate.parentId) ? candidate : null;
+  }
 
   // The placeholder is immediately before the hovered row. This is a sibling
   // insertion even when that row is a Category; treating it as "inside" loses
@@ -46,9 +61,17 @@ export function resolveDropCandidate(nodes: Node[], movingId: string, hover: Dro
 }
 
 /** Convert a visual row target into one unambiguous domain insertion point. */
-export function dropCandidateFor(nodes: Node[], movingId: string, target?: Node): DropCandidate | null {
+export function dropCandidateFor(nodes: Node[], movingId: string, target?: Node, placement: 'before' | 'on' | 'after' = 'on'): DropCandidate | null {
   const moving = nodes.find((node) => node.id === movingId && node.deletedAt === null);
   if (!moving || !target || target.id === movingId) return null;
+
+  if (placement === 'after' && target.type === 'memo') {
+    if (!canMoveNode(nodes, movingId, target.parentId)) return null;
+    const siblings = siblingsOf(nodes, target.parentId, movingId);
+    if (!siblings.some((node) => node.id === target.id)) return null;
+    const beforeId = beforeIdForInsertion(siblings.map((node) => node.id), movingId, { kind: 'after', nodeId: target.id });
+    return { parentId: target.parentId, beforeId, targetId: target.id, kind: 'after' };
+  }
 
   if (target.id === UNASSIGNED_GROUP_ID) {
     if (moving.type !== 'memo') return null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@/models/node';
-import { categoryPath, deadlineCreateContext, deadlineDraftForCreateContext, deadlineGroupDefinitions, deadlineGroupForDueAt, deadlineGroups, moveMemoInDeadlineList, updateMemoDeadline } from './deadlineView';
+import { categoryPath, deadlineBeforeIdForDrop, deadlineCreateContext, deadlineDraftForCreateContext, deadlineGroupDefinitions, deadlineGroupForDueAt, deadlineGroups, moveMemoInDeadlineList, updateMemoDeadline } from './deadlineView';
 
 const now = new Date(2026, 8, 13, 8);
 const base = (id: string, dueAt: Date | null, parentId: string | null = null): Node => ({ id, type: 'memo', parentId, sortKey: id, title: id, body: '', dueAt, duePreset: dueAt ? 'custom' : 'none', status: 'active', completedAt: null, createdAt: now, updatedAt: now, deletedAt: null });
@@ -24,7 +24,32 @@ describe('deadline view', () => {
   it('Routineは発生日当日だけ今日系bucketへ入り未来bucketへ先出ししない', () => { const routine = { id: 'routine-root', type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: 'a', title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null } as const; const task = { ...base('routine', new Date(2030, 0, 1), 'routine-root'), repeatRule: { frequency: 'week' as const, interval: 1, startsOn: '2026-09-15' } }; const monday = new Date(2026, 8, 14, 8); const tuesday = new Date(2026, 8, 15, 8); expect(deadlineGroups([routine, task], monday).flatMap((group) => group.memos)).toEqual([]); expect(deadlineGroups([routine, task], tuesday, new Set(['today']), 'today').find((group) => group.key === 'today')?.memos.map((memo) => memo.id)).toEqual(['routine']); expect(deadlineGroups([routine, task], tuesday, new Set(['tomorrow']), 'today').flatMap((group) => group.memos)).toEqual([]); expect(task.type === 'memo' && task.dueAt).toEqual(new Date(2030, 0, 1)); });
   it.each([['today', 'today'], ['dayNight', 'night'], ['amPm', 'pm'], ['threePart', 'evening']] as const)('Routine当日分は%sの共通今日系判定で%sへ入る', (granularity, expected) => { const routine = { id: 'r', type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: 'a', title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null } as const; const task = { ...base('m', null, 'r'), repeatRule: { frequency: 'day' as const, interval: 1, startsOn: '2026-09-13' } }; expect(deadlineGroups([routine, task], now, undefined, granularity).find((group) => group.memos.length)?.key).toBe(expected); });
   it('各グループのクイック追加とdropが同じ定義を使う', () => { const definition = deadlineGroupDefinitions('threePart').find((group) => group.id === 'morning')!; const context = deadlineCreateContext(definition, now, 'threePart')!; expect(deadlineGroupForDueAt(context.initialDueAt, now, 'threePart')).toBe('morning'); const moved = updateMemoDeadline([base('memo', null)], 'memo', 'morning', now, 'threePart'); expect(moved[0].type === 'memo' && moved[0].dueAt).toEqual(context.initialDueAt); });
+  it.each([
+    new Date(2026, 8, 14, 8),
+    new Date(2026, 8, 17, 8),
+    new Date(2026, 8, 19, 8),
+    new Date(2026, 8, 20, 8),
+    new Date(2026, 11, 31, 8),
+  ])('今週から追加したMemoを曜日や年末にかかわらず今週へ表示する (%s)', (current) => {
+    const definition = deadlineGroupDefinitions('amPm').find((group) => group.id === 'thisWeek')!;
+    const context = deadlineCreateContext(definition, current, 'amPm')!;
+    const draft = deadlineDraftForCreateContext(context, undefined, current);
+    const created = { ...base('created', draft.dueAt), duePreset: draft.duePreset };
+    const groups = deadlineGroups([created], current, undefined, 'amPm');
+
+    expect(created.type === 'memo' && created.duePreset).toBe('thisWeek');
+    expect(groups.find((group) => group.key === 'thisWeek')?.memos.map((memo) => memo.id)).toEqual(['created']);
+  });
   it('それ以降の追加だけ期限編集を要求し同じbucketで検証する', () => { const definition = deadlineGroupDefinitions('today').find((group) => group.id === 'later')!; const context = deadlineCreateContext(definition, now, 'today')!; expect(deadlineDraftForCreateContext(context, new Date(2027, 0, 2), now).duePreset).toBe('custom'); expect(() => deadlineDraftForCreateContext(context, new Date(2026, 11, 31), now)).toThrow(/それ以降/); });
   it('グループ間移動で期限と順序を更新する', () => { const a = base('a', new Date(2026, 8, 13, 11)); const b = base('b', new Date(2026, 8, 14, 18)); const moved = moveMemoInDeadlineList([a, b], 'b', 'am', 'a', now, 'amPm'); expect(deadlineGroups(moved, now, undefined, 'amPm').find((group) => group.key === 'am')?.memos.map((memo) => memo.id)).toEqual(['b', 'a']); });
+  it('期限グループ最後のMemo下端へのdropをグループ末尾として解決する', () => {
+    const a = base('a', new Date(2026, 11, 31, 12));
+    const toeic = base('toeic', new Date(2026, 11, 31, 12));
+    const moving = base('moving', new Date(2026, 8, 30, 12));
+    const groups = deadlineGroups([a, toeic, moving], now, undefined, 'amPm');
+    const beforeId = deadlineBeforeIdForDrop(groups, 'thisYear', 'moving', 'toeic', 'after');
+    const moved = moveMemoInDeadlineList([a, toeic, moving], 'moving', 'thisYear', beforeId, now, 'amPm');
+    expect(deadlineGroups(moved, now, undefined, 'amPm').find((group) => group.key === 'thisYear')?.memos.map((memo) => memo.id)).toEqual(['a', 'toeic', 'moving']);
+  });
   it('所属Categoryパスをcycle安全に構築する', () => { const root: Node = { id: 'a', type: 'category', parentId: null, sortKey: 'a', title: '個人', createdAt: now, updatedAt: now, deletedAt: null }; expect(categoryPath([{ ...root, parentId: 'a' }], 'a')).toBe('… > 個人'); });
 });

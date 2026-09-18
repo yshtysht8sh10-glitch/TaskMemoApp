@@ -16,6 +16,7 @@ import DraggableFlatList, {
 
 import {
   categoryPath,
+  deadlineBeforeIdForDrop,
   deadlineCreateContext,
   deadlineDraftForCreateContext,
   deadlineGroups,
@@ -781,6 +782,7 @@ export function DeadlineView({
             ) : null
           }
           showDropIndicator={(_active, target) => target.kind === "memo"}
+          canDropAfter={(target) => target.kind === "memo"}
           keyFor={(row) => row.id}
           canDrag={(row) => !selectionMode && row.kind === "memo"}
           contentContainerStyle={[
@@ -803,15 +805,26 @@ export function DeadlineView({
             targetRef.current = next;
             setTargetGroup(next);
           }}
-          onDrop={(active, target) => {
+          onDrop={(active, target, placement) => {
             setTargetGroup(null);
             targetRef.current = null;
-            if (active.kind === "memo")
+            if (active.kind === "memo") {
+              const beforeId =
+                target.kind === "memo" && placement !== "on"
+                  ? deadlineBeforeIdForDrop(
+                      groups,
+                      target.groupKey,
+                      active.memo.id,
+                      target.memo.id,
+                      placement,
+                    )
+                  : undefined;
               onDueDrop(
                 active.memo.id,
                 target.groupKey,
-                target.kind === "memo" ? target.memo.id : undefined,
+                beforeId,
               );
+            }
           }}
           renderItem={(item, active) => renderRow(item, active, () => {})}
         />

@@ -3,6 +3,7 @@ import type { DuePreset, MemoNode, Node } from "@/models/node";
 import { compareSortKeys } from "./nodeOperations";
 import { routineCategoryForMemo, routineOccurrenceDueAt } from "./routine";
 import { isTask } from "./memoType";
+import { beforeIdForInsertion } from "./insertionPosition";
 
 export type TodayGranularity = "today" | "dayNight" | "amPm" | "threePart";
 export const TODAY_GRANULARITIES: readonly {
@@ -260,7 +261,20 @@ export const deadlineGroupForMemo = (
   memo: MemoNode,
   now = new Date(),
   granularity: TodayGranularity = "amPm",
-) => deadlineGroupForDueAt(memo.dueAt, now, granularity);
+) => {
+  const byDate = deadlineGroupForDueAt(memo.dueAt, now, granularity);
+  // Late in the week, the calendar-week endpoint overlaps the earlier
+  // "today / tomorrow / 2-3 days" buckets. Preserve the explicit quick-add or
+  // drop intent while the generated deadline is still in the current week.
+  if (
+    memo.duePreset === "thisWeek" &&
+    memo.dueAt &&
+    memo.dueAt.getTime() >= now.getTime() &&
+    memo.dueAt.getTime() <= boundaries(now).weekEnd.getTime()
+  )
+    return "thisWeek";
+  return byDate;
+};
 export function visibleDeadlineGroup(
   source: DeadlineGroupKey,
   visible: ReadonlySet<DeadlineGroupKey>,
@@ -333,11 +347,9 @@ export function deadlineGroups(
           a.id.localeCompare(b.id),
     );
   for (const memo of memos) {
-    const source = deadlineGroupForDueAt(
-      occurrenceDueAt(memo),
-      now,
-      granularity,
-    );
+    const source = routineCategoryForMemo(nodes, memo)
+      ? deadlineGroupForDueAt(occurrenceDueAt(memo), now, granularity)
+      : deadlineGroupForMemo(memo, now, granularity);
     const key = visibleDeadlineGroup(source, visible, granularity);
     if (key) grouped.set(key, [...(grouped.get(key) ?? []), memo]);
   }
@@ -433,6 +445,22 @@ export function moveMemoInDeadlineList(
   );
   return changed.map((node) =>
     node.id === memoId ? { ...node, deadlineSortKey, updatedAt: now } : node,
+  );
+}
+
+export function deadlineBeforeIdForDrop(
+  groups: readonly DeadlineGroup[],
+  groupId: DeadlineGroupKey,
+  movingId: string,
+  targetId: string,
+  placement: "before" | "after",
+) {
+  const group = groups.find((item) => item.key === groupId);
+  if (!group) throw new Error("移動先の期限グループが見つかりません。");
+  return beforeIdForInsertion(
+    group.memos.map((memo) => memo.id),
+    movingId,
+    { kind: placement, nodeId: targetId },
   );
 }
 export function categoryPath(nodes: Node[], parentId: string | null) {

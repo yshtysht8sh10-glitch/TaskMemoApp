@@ -44,6 +44,16 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
   const completableCount = useMemo(() => completableSelectedMemoIds(nodes, normalizedIds).length, [nodes, normalizedIds]);
   const clearSelection = () => { setSelectionMode(false); setSelectedNodeIds(new Set()); };
   const toggleSelected = (id: string) => setSelectedNodeIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return new Set(normalizeSelectedNodeIds(nodes, next)); });
+  const candidateBeforeTarget = (active: VisibleRow, target: VisibleRow) => {
+    const hover = dropCandidateFor(nodes, active.node.id, target.node);
+    if (!hover) return null;
+    const withoutActive = rows.filter((row) => row.node.id !== active.node.id);
+    const targetIndex = withoutActive.findIndex((row) => row.node.id === target.node.id);
+    if (targetIndex < 0) return hover;
+    const reordered = [...withoutActive];
+    reordered.splice(targetIndex, 0, active);
+    return resolveDropCandidate(nodes, active.node.id, hover, reordered);
+  };
   const selectionTools = selectionMode ? <><Text style={styles.selectionCount}>{normalizedIds.length}件選択</Text><Pressable style={styles.tool} onPress={clearSelection}><Text style={styles.toolText}>キャンセル</Text></Pressable></> : <Pressable style={styles.tool} onPress={() => setSelectionMode(true)}><Text style={styles.toolText}>複数選択</Text></Pressable>;
   const actionBar = selectionMode && <View style={styles.actionBar}><Text style={styles.actionCount}>{normalizedIds.length}件選択</Text><Pressable disabled={!normalizedIds.length} style={[styles.actionButton, !normalizedIds.length && styles.disabled]} onPress={() => onBulkMove(normalizedIds, clearSelection)}><Text style={styles.actionText}>移動</Text></Pressable><Pressable disabled={!completableCount} style={[styles.actionButton, !completableCount && styles.disabled]} onPress={() => { if (onBulkComplete(normalizedIds)) clearSelection(); }}><Text style={styles.actionText}>{completableCount}件のMemoを完了</Text></Pressable><Pressable disabled={!normalizedIds.length} style={[styles.actionButton, styles.deleteButton, !normalizedIds.length && styles.disabled]} onPress={() => onBulkDelete(normalizedIds, clearSelection)}><Text style={styles.deleteText}>削除</Text></Pressable></View>;
   const updateCandidate = (index: number, data = rows) => { const target = data[index]?.node; const next = movingId.current ? dropCandidateFor(nodes, movingId.current, target) : null; candidateRef.current = next; setCandidate(next); treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next }); };
@@ -63,9 +73,11 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
   if (Platform.OS === 'web') return <View style={styles.container}>
     <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !selectionMode && !row.virtual}
+      distinguishBeforeTarget
+      canDropAfter={(row) => row.node.type === 'memo'}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: selectionMode ? 170 : 110 }}
-      onHover={(active, target) => { movingId.current = active.node.id; const next = dropCandidateFor(nodes, active.node.id, target.node); candidateRef.current = next; setCandidate(next); }}
-      onDrop={(active, target) => { const next = dropCandidateFor(nodes, active.node.id, target.node); candidateRef.current = null; setCandidate(null); if (next) onDrop(active.node.id, next); }}
+      onHover={(active, target, placement) => { movingId.current = active.node.id; const next = placement === 'before' ? candidateBeforeTarget(active, target) : dropCandidateFor(nodes, active.node.id, target.node, placement); candidateRef.current = next; setCandidate(next); }}
+      onDrop={(active, target, placement) => { const next = placement === 'before' ? candidateBeforeTarget(active, target) : dropCandidateFor(nodes, active.node.id, target.node, placement); candidateRef.current = null; setCandidate(null); if (next) onDrop(active.node.id, next); }}
       renderItem={(item, isActive) => {
         const isTarget = candidate?.targetId === item.node.id; const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
         const selectionState = selectedNodeState(nodes, selectedNodeIds, item.node.id);
