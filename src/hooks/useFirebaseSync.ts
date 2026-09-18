@@ -19,9 +19,9 @@ const authMessage = (error: unknown) => {
   return error instanceof Error ? error.message : 'Firebaseの処理に失敗しました。';
 };
 
-export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloudNodes: (nodes: Node[]) => void) {
+export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloudNodes: (nodes: Node[]) => void, enabled = true) {
   const firebase = firebaseConfiguration();
-  const configured = firebase.config !== null;
+  const configured = firebase.config !== null && enabled;
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(!configured);
   const [status, setStatus] = useState<FirebaseSyncStatus>(configured ? 'connecting' : 'disabled');

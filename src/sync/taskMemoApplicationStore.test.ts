@@ -18,6 +18,19 @@ const at = (ms: number) => new Date(`2026-09-18T00:00:${String(ms).padStart(2, "
 const initialMemo = (): MemoNode => ({ id: "memo-a", type: "memo", memoType: "task", parentId: null, sortKey: "a0", deadlineSortKey: "d0", title: "A", body: "body", dueAt: null, duePreset: "none", status: "active", completedAt: null, repeatRule: null, routineHistory: { "2026-09-17": at(1).toISOString() }, createdAt: at(0), updatedAt: at(0), deletedAt: null, deletionBatchId: null, purgedAt: null });
 
 describe("TaskMemo V2 application store", () => {
+  it("serializes overlapping UI commands without losing history, fields, or operation IDs", async () => {
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: "device-a" });
+    await Promise.all([
+      store.command("title", "update", nodes => updateNode(nodes, "memo-a", { title: "B" }, at(1))),
+      store.command("body", "update", nodes => updateNode(nodes, "memo-a", { body: "new body" }, at(2))),
+    ]);
+    expect(store.nodes[0]).toMatchObject({ title: "B", body: "new body" });
+    expect(store.historyDepths).toEqual({ past: 2, future: 0 });
+    expect(store.outbox.map(op => op.opId)).toEqual(["device-a:1", "device-a:2"]);
+    const reopened = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
+    expect(reopened.nodes).toEqual(store.nodes);
+  });
   it("persists real create/edit/move/deadline/complete/delete/restore/purge commands with full fields", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
     await store.command("Category追加", "create", (nodes) => createNode(nodes, "category", { title: "C", parentId: null }, at(1), "category-a"));
@@ -48,6 +61,17 @@ describe("TaskMemo V2 application store", () => {
     expect(store.historyDepths).toEqual({ past: 1, future: 0 });
   });
 
+  it("represents Undo of create as a synchronized soft tombstone and Redo as a newer restore", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", now: () => at(9) });
+    await store.command("作成", "create", (nodes) => createNode(nodes, "memo", { title: "new", parentId: null }, at(1), "new"));
+    await store.undo(at(2));
+    expect(store.nodes.find((node) => node.id === "new")?.deletedAt).toEqual(at(2));
+    expect(store.outbox.at(-1)).toMatchObject({ type: "undo", payload: { node: { id: "new", deletedAt: at(2).toISOString() } } });
+    await store.redo(at(3));
+    expect(store.nodes.find((node) => node.id === "new")).toMatchObject({ title: "new", deletedAt: null });
+    expect(store.versionedNode("new")?.revision).toBe(3);
+  });
+
   it("recovers a multi-node command and all matching operations from the WAL", async () => {
     const persistence = new MemoryPersistence();
     const category: Node = { id: "category-a", type: "category", parentId: null, sortKey: "a0", title: "C", createdAt: at(0), updatedAt: at(0), deletedAt: null };
@@ -59,6 +83,13 @@ describe("TaskMemo V2 application store", () => {
     const recovered = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", now: () => at(9) });
     expect(recovered.nodes.every((node) => node.deletedAt)).toBe(true);
     expect(recovered.outbox).toHaveLength(2);
+  });
+
+  it("can bootstrap existing local Nodes as durable import operations for first dev login", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9), bootstrapInitialNodes: true });
+    expect(store.outbox).toHaveLength(1);
+    expect(store.outbox[0]).toMatchObject({ type: "import", targetNodeId: "memo-a", baseRevision: 0 });
+    expect(store.versionedNode("memo-a")?.revision).toBe(1);
   });
 
   it("two devices converge under reverse and duplicate delivery, including purge against stale child edit", async () => {

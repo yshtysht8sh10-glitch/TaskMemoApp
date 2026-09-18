@@ -1,5 +1,7 @@
 # TaskMemo sync V2 foundation
 
+The React UI uses V2 only when both `EXPO_PUBLIC_TASKMEMO_ENV=development` and `EXPO_PUBLIC_SYNC_V2_ENABLED=true`. Production ignores the flag. Local emulator routing additionally requires `EXPO_PUBLIC_FIREBASE_EMULATOR=true` on localhost. See `SYNC_V2_CUTOVER_RUNBOOK.md` for the human cutover procedure.
+
 This document describes the state-machine and durable-outbox foundation. It is
 not a production migration plan. V2 Firebase writes are restricted to the
 development project or an explicitly selected Emulator.

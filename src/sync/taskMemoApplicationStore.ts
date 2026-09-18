@@ -14,7 +14,7 @@ type Envelope = {
   history: { past: StoredHistoryEntry[]; future: StoredHistoryEntry[] };
   sync: { outbox: SyncOperation[]; seenOpIds: string[] };
 };
-type Options = { deviceId: string; now?: () => Date };
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
 const decodeNodes = (nodes: SyncNodeValue[]) => nodes.map(nodeFromV2Value);
@@ -23,6 +23,14 @@ const decodeEntry = (entry: StoredHistoryEntry): NodeHistoryEntry => ({ ...entry
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 export class TaskMemoV2ApplicationStore {
+  // All envelope mutations share one WAL. Serialize the entire read/modify/write,
+  // not just persistence, so listener acknowledgements cannot overwrite UI edits.
+  private mutations: Promise<unknown> = Promise.resolve();
+  private serialize<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.mutations.then(action);
+    this.mutations = next.catch(() => undefined);
+    return next;
+  }
   private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date) {}
 
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
@@ -34,6 +42,14 @@ export class TaskMemoV2ApplicationStore {
       domain: Object.fromEntries(initialNodes.map((node) => [node.id, { value: nodeToV2Value(node), revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
       history: { past: [], future: [] }, sync: { outbox: [], seenOpIds: [] },
     };
+    if (!committed && options.bootstrapInitialNodes) {
+      for (const node of initialNodes) {
+        const localSeq = envelope.nextLocalSeq++;
+        const operation: SyncOperation = { opId: `${envelope.deviceId}:${localSeq}`, deviceId: envelope.deviceId, localSeq, targetNodeId: node.id, type: "import", baseRevision: 0, payload: { node: nodeToV2Value(node) }, createdAt: (options.now ?? (() => new Date()))().toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
+        envelope.domain[node.id] = candidateForOperation(operation);
+        envelope.sync.outbox.push(operation);
+      }
+    }
     const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()));
     if (!committed) await store.commit(envelope);
     return store;
@@ -42,31 +58,46 @@ export class TaskMemoV2ApplicationStore {
   get nodes() { return Object.values(this.envelope.domain).map((record) => nodeFromV2Value(record.value)); }
   get outbox() { return [...this.envelope.sync.outbox]; }
   get historyDepths() { return { past: this.envelope.history.past.length, future: this.envelope.history.future.length }; }
+  get history(): NodeHistory { return this.nodeHistory(); }
   versionedNode(id: string) { return this.envelope.domain[id]; }
 
-  async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[]) {
+  async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
+    return this.serialize(() => this.commandSerialized(label, type, transform, options));
+  }
+
+  private async commandSerialized(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean }) {
     const before = this.nodes;
     const after = transform(before);
     if (same(encodeNodes(before), encodeNodes(after))) return [];
-    return this.apply(type, after, {
+    const history = options.recordHistory === false ? this.envelope.history : {
       past: [...this.envelope.history.past, encodeEntry({ label, before, after })].slice(-75), future: [],
-    });
+    };
+    return this.apply(type, after, history, this.now());
   }
 
   async undo(now = this.now()) {
+    return this.serialize(() => this.undoSerialized(now));
+  }
+  private async undoSerialized(now: Date) {
     if (!this.envelope.history.past.length) return [];
     const history = this.nodeHistory();
     const next = undoNodeHistory(history, now);
-    return this.apply("undo", next.nodes, { past: next.past.map(encodeEntry), future: next.future.map(encodeEntry) });
+    return this.apply("undo", next.nodes, { past: next.past.map(encodeEntry), future: next.future.map(encodeEntry) }, now);
   }
 
   async redo(now = this.now()) {
+    return this.serialize(() => this.redoSerialized(now));
+  }
+  private async redoSerialized(now: Date) {
     if (!this.envelope.history.future.length) return [];
     const next = redoNodeHistory(this.nodeHistory(), now);
-    return this.apply("redo", next.nodes, { past: next.past.map(encodeEntry), future: next.future.map(encodeEntry) });
+    return this.apply("redo", next.nodes, { past: next.past.map(encodeEntry), future: next.future.map(encodeEntry) }, now);
   }
 
   async receive(incoming: VersionedNode) {
+    return this.serialize(() => this.receiveSerialized(incoming));
+  }
+  private async receiveSerialized(incoming: VersionedNode) {
     if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
     const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
     const current = this.envelope.domain[incoming.value.id];
@@ -85,6 +116,9 @@ export class TaskMemoV2ApplicationStore {
   }
 
   async acknowledge(opId: string, record?: VersionedNode) {
+    return this.serialize(() => this.acknowledgeSerialized(opId, record));
+  }
+  private async acknowledgeSerialized(opId: string, record?: VersionedNode) {
     const operation = this.envelope.sync.outbox.find((item) => item.opId === opId);
     let domain = this.envelope.domain;
     if (record && record.lastDeviceId !== this.envelope.deviceId) {
@@ -108,18 +142,21 @@ export class TaskMemoV2ApplicationStore {
     return { nodes: this.nodes, past: this.envelope.history.past.map(decodeEntry), future: this.envelope.history.future.map(decodeEntry) };
   }
 
-  private async apply(type: SyncOperationType, nodes: Node[], history: Envelope["history"]) {
+  private async apply(type: SyncOperationType, nodes: Node[], history: Envelope["history"], commandTime: Date) {
     let localSeq = this.envelope.nextLocalSeq;
     const operations: SyncOperation[] = [];
     const domain = { ...this.envelope.domain };
     const after = new Map(nodes.map((node) => [node.id, nodeToV2Value(node)]));
+    for (const [id, current] of Object.entries(domain)) {
+      if (!after.has(id)) after.set(id, { ...current.value, deletedAt: commandTime.toISOString(), deletionBatchId: null });
+    }
     for (const [id, value] of after) {
       const current = domain[id];
       if (current && same(current.value, value)) continue;
       const operation: SyncOperation = {
         opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
         targetNodeId: id, type, baseRevision: current?.revision ?? 0, payload: { node: value },
-        createdAt: this.now().toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+        createdAt: commandTime.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
       };
       localSeq += 1; operations.push(operation); domain[id] = candidateForOperation(operation);
     }

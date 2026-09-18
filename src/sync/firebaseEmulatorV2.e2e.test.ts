@@ -22,7 +22,15 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
   beforeAll(async () => {
     environment = await initializeTestEnvironment({ projectId: "demo-taskmemo-v2", firestore: { host: "127.0.0.1", port: 8180 } });
   });
-  beforeEach(async () => environment.clearFirestore());
+  const v2Gate = { schemaVersion: 1, minimumSyncProtocol: 2, v1WritesAllowed: false, v2Enabled: true };
+  beforeEach(async () => {
+    await environment.clearFirestore();
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(doc(context.firestore(), "syncControl/current"), { schemaVersion: 1, writesEnabled: true });
+      for (const uid of ["owner", "same-user", "purge-user"])
+        await setDoc(doc(context.firestore(), `users/${uid}/syncMetadataV2/compatibility`), v2Gate);
+    });
+  });
   afterAll(async () => environment.cleanup());
 
   it("enforces owner isolation, ownerUid, required identity fields, and monotonic revision", async () => {
@@ -34,6 +42,32 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/spoof"), { ...valid, ownerUid: "other" }));
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), { ...valid, record: { ...valid.record, revision: 0 } }));
     await assertFails(setDoc(doc(owner, "users/owner/syncOperationsV2/wrong"), { ownerUid: "owner", schemaVersion: 2, operation: { opId: "different" }, acknowledgement: { opId: "different" } }));
+  });
+
+  it("rejects stale V1, dual-write, missing markers, and both protocols during maintenance", async () => {
+    const owner = environment.authenticatedContext("owner").firestore();
+    const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { id: "a" }, revision: 1, lastOpId: "device:1", lastDeviceId: "device", lastLocalSeq: 1, operationType: "create" } };
+    await assertFails(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertSucceeds(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
+    // The previous draft allowed this dual-write configuration. It violates cutover isolation.
+    await environment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "users/owner/syncMetadataV2/compatibility"), { ...v2Gate, v1WritesAllowed: true });
+    });
+    await assertFails(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
+    await assertFails(setDoc(doc(owner, "users/owner/syncMetadataV2/compatibility"), v2Gate));
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(doc(context.firestore(), "users/owner/syncMetadataV2/compatibility"), { ...v2Gate, minimumSyncProtocol: 1, v1WritesAllowed: true, v2Enabled: false });
+    });
+    await assertSucceeds(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(doc(context.firestore(), "syncControl/current"), { schemaVersion: 1, writesEnabled: false });
+    });
+    await assertFails(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
+    const missing = environment.authenticatedContext("missing-marker").firestore();
+    await assertFails(setDoc(doc(missing, "users/missing-marker/nodes/legacy"), { id: "legacy" }));
   });
 
   it("runs two isolated devices through create, bidirectional edits, conflict, restart, replay, Undo/Redo, and backlog drain", async () => {

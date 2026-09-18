@@ -1,0 +1,231 @@
+{
+  "migrationId": "fixture-20260919",
+  "source": "docs/fixtures/v1-migration.json",
+  "sourceSha256": "49094267e855687c705f212cc1668e26c5aa04fe941a58f84be9289df6b980f0",
+  "schemaVersion": 2,
+  "sourceCount": 8,
+  "outputCount": 8,
+  "activeCount": 6,
+  "deletedCount": 1,
+  "purgedCount": 1,
+  "categoryCount": 2,
+  "memoCount": 6,
+  "routineCount": 1,
+  "completedCount": 1,
+  "routineHistoryCount": 2,
+  "unknownFields": [
+    {
+      "nodeId": "category",
+      "fields": [
+        "futureCategoryMetadata"
+      ]
+    },
+    {
+      "nodeId": "idea",
+      "fields": [
+        "unknownNested"
+      ]
+    }
+  ],
+  "changedFields": [],
+  "lostFieldCount": 0,
+  "records": [
+    {
+      "value": {
+        "id": "category",
+        "type": "category",
+        "parentId": null,
+        "sortKey": "a0",
+        "title": "Fixture category",
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "deletedAt": null,
+        "futureCategoryMetadata": {
+          "version": 7
+        }
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:category",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "routine-root",
+        "type": "category",
+        "categoryKind": "routineRoot",
+        "parentId": null,
+        "sortKey": "a1",
+        "title": "Fixture routine",
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "deletedAt": null
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:routine-root",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "task",
+        "type": "memo",
+        "memoType": "task",
+        "parentId": "category",
+        "sortKey": "a0",
+        "deadlineSortKey": "d0",
+        "title": "Fixture task",
+        "body": "Synthetic only",
+        "dueAt": "2026-09-20T06:00:00.000Z",
+        "duePreset": "afternoon",
+        "status": "active",
+        "completedAt": null,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "deletedAt": null
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:task",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "idea",
+        "type": "memo",
+        "memoType": "idea",
+        "parentId": "category",
+        "sortKey": "a1",
+        "title": "Fixture idea",
+        "body": "Synthetic only",
+        "dueAt": null,
+        "duePreset": "none",
+        "status": "active",
+        "completedAt": null,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-01T00:00:00.000Z",
+        "deletedAt": null,
+        "unknownNested": {
+          "items": [
+            1,
+            null,
+            "preserve"
+          ]
+        }
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:idea",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "routine",
+        "type": "memo",
+        "memoType": "task",
+        "parentId": "routine-root",
+        "sortKey": "a0",
+        "title": "Fixture routine memo",
+        "body": "",
+        "dueAt": null,
+        "duePreset": "none",
+        "status": "active",
+        "completedAt": null,
+        "repeatRule": {
+          "frequency": "day",
+          "interval": 1,
+          "startsOn": "2026-09-01"
+        },
+        "routineHistory": {
+          "2026-09-01": "2026-09-01T03:00:00.000Z",
+          "2026-09-02": null
+        },
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "deletedAt": null
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:routine",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "completed",
+        "type": "memo",
+        "memoType": "task",
+        "parentId": "category",
+        "sortKey": "a2",
+        "title": "Fixture completed",
+        "body": "",
+        "dueAt": null,
+        "duePreset": "none",
+        "status": "completed",
+        "completedAt": "2026-09-02T00:00:00.000Z",
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "deletedAt": null
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:completed",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "deleted",
+        "type": "memo",
+        "memoType": "task",
+        "parentId": "category",
+        "sortKey": "a3",
+        "title": "Fixture deleted",
+        "body": "",
+        "dueAt": null,
+        "duePreset": "none",
+        "status": "active",
+        "completedAt": null,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "deletedAt": "2026-09-02T00:00:00.000Z",
+        "deletionBatchId": "batch-1"
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:deleted",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    },
+    {
+      "value": {
+        "id": "purged",
+        "type": "memo",
+        "memoType": "task",
+        "parentId": "category",
+        "sortKey": "a4",
+        "title": "Fixture purge",
+        "body": "",
+        "dueAt": null,
+        "duePreset": "none",
+        "status": "active",
+        "completedAt": null,
+        "createdAt": "2026-09-01T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "deletedAt": "2026-09-02T00:00:00.000Z",
+        "purgedAt": "2026-09-03T00:00:00.000Z",
+        "deletionBatchId": "batch-1"
+      },
+      "revision": 0,
+      "lastOpId": "migration:fixture-20260919:purged",
+      "lastDeviceId": "migration:fixture-20260919",
+      "lastLocalSeq": 0,
+      "operationType": "import"
+    }
+  ],
+  "issues": []
+}

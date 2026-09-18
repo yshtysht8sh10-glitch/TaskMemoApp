@@ -55,7 +55,6 @@ import {
   commitNodeHistory,
   createNodeHistory,
   redoNodeHistory,
-  reconcileSyncedNodeHistory,
   replaceNodeHistory,
   undoNodeHistory,
 } from "@/domain/nodeHistory";
@@ -101,7 +100,7 @@ import {
 } from "@/domain/completionHistory";
 import { appAlert } from "@/utils/appAlert";
 import { canStartSheetDismiss, sheetDismissRelease } from "@/utils/sheetDismissGesture";
-import { useFirebaseSync } from "@/hooks/useFirebaseSync";
+import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
@@ -234,12 +233,10 @@ export default function HomeScreen() {
   const [ideasEnabled, setIdeasEnabled] = useState(
     DEFAULT_FEATURE_PREFERENCES.ideasEnabled,
   );
-  const sync = useFirebaseSync(nodes, ready, (cloudNodes) => {
-    setHistory((current) =>
-      reconcileSyncedNodeHistory(current, normalizeLegacyRanks(cloudNodes)),
-    );
-    saveNodes(cloudNodes).catch(() => {});
-  });
+  const sync = useTaskMemoSync(history, ready, (nextHistory) => setHistory({
+    ...nextHistory,
+    nodes: normalizeLegacyRanks(nextHistory.nodes),
+  }));
   useEffect(() => {
     const traceId = currentTreeTraceId();
     treeDiagnosticLog("hydrate/reload-start", {
@@ -247,7 +244,7 @@ export default function HomeScreen() {
       source: "initial-mount",
     });
     Promise.all([
-      loadNodes(mockNodes),
+      sync.protocol === 2 ? Promise.resolve([]) : loadNodes(mockNodes),
       loadPinnedNote(),
       loadListDisplayPreferences(),
       loadTreeDisplayPreferences(),
@@ -296,9 +293,9 @@ export default function HomeScreen() {
         appAlert("読み込みエラー", "保存データを読み込めませんでした。");
       })
       .finally(() => setReady(true));
-  }, []);
+  }, [sync.protocol]);
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || sync.protocol === 2) return;
     const traceId = currentTreeTraceId();
     const revision = nodesRevision(nodes);
     const startedAt = Date.now();
@@ -328,7 +325,7 @@ export default function HomeScreen() {
         });
         appAlert("保存エラー", "端末への保存に失敗しました。");
       });
-  }, [nodes, ready]);
+  }, [nodes, ready, sync.protocol]);
   useEffect(() => {
     const subscription = addReminderResponseListener(() => setView("deadline"));
     return () => subscription.remove();
@@ -345,6 +342,7 @@ export default function HomeScreen() {
   );
   const apply = (label: string, operation: (current: Node[]) => Node[]) => {
     try {
+      if (sync.command(label, operation)) return;
       setHistory((current) => commitNodeHistory(current, label, operation));
     } catch (error) {
       appAlert(
@@ -355,6 +353,7 @@ export default function HomeScreen() {
   };
   const replaceNodes = (operation: (current: Node[]) => Node[]) => {
     try {
+      if (sync.command("Nodeを完全削除", operation, false)) return;
       setHistory((current) =>
         replaceNodeHistory(current, operation(current.nodes)),
       );
@@ -371,6 +370,7 @@ export default function HomeScreen() {
   ) => {
     try {
       const nextNodes = operation(nodes);
+      if (sync.command(label, () => nextNodes)) return true;
       setHistory((current) =>
         commitNodeHistory(current, label, () => nextNodes),
       );
@@ -456,29 +456,14 @@ export default function HomeScreen() {
   };
   const onDrop = (nodeId: string, candidate: DropCandidate) => {
     const traceId = currentTreeTraceId();
-    setHistory((current) => {
-      const before = current.nodes.find((node) => node.id === nodeId);
-      const next = commitNodeHistory(current, "Nodeを移動", (nodes) =>
-        tryMoveNode(nodes, nodeId, candidate.parentId, candidate.beforeId),
-      );
-      const after = next.nodes.find((node) => node.id === nodeId);
-      treeDiagnosticLog("drag-end-after-state", {
-        traceId,
-        movingId: nodeId,
-        candidate,
-        committed: next !== current,
-        before: before
-          ? { parentId: before.parentId, sortKey: before.sortKey }
-          : null,
-        after: after
-          ? { parentId: after.parentId, sortKey: after.sortKey }
-          : null,
-        beforeNodesRevision: nodesRevision(current.nodes),
-        nodesRevision: nodesRevision(next.nodes),
-        nodes: summarizeNodes(next.nodes),
-      });
-      return next;
-    });
+    const before = nodes.find((node) => node.id === nodeId);
+    const nextNodes = tryMoveNode(nodes, nodeId, candidate.parentId, candidate.beforeId);
+    const after = nextNodes.find((node) => node.id === nodeId);
+    treeDiagnosticLog("drag-end-after-state", { traceId, movingId: nodeId, candidate, committed: nextNodes !== nodes,
+      before: before ? { parentId: before.parentId, sortKey: before.sortKey } : null,
+      after: after ? { parentId: after.parentId, sortKey: after.sortKey } : null,
+      beforeNodesRevision: nodesRevision(nodes), nodesRevision: nodesRevision(nextNodes), nodes: summarizeNodes(nextNodes) });
+    apply("Nodeを移動", () => nextNodes);
   };
   const exportData = async () => {
     try {
@@ -507,10 +492,10 @@ export default function HomeScreen() {
             onPress: async () => {
               try {
                 const normalized = normalizeLegacyRanks(imported);
-                await saveNodes(normalized);
-                setHistory((current) =>
-                  replaceNodeHistory(current, normalized),
-                );
+                if (!sync.command("データを読み込む", () => normalized)) {
+                  await saveNodes(normalized);
+                  setHistory((current) => replaceNodeHistory(current, normalized));
+                }
                 setSettingsOpen(false);
               } catch {
                 appAlert(
@@ -581,13 +566,13 @@ export default function HomeScreen() {
             label="↶"
             accessibilityLabel="元に戻す"
             disabled={!history.past.length}
-            onPress={() => setHistory(undoNodeHistory)}
+            onPress={() => { if (!sync.undo()) setHistory(undoNodeHistory); }}
           />
           <HistoryButton
             label="↷"
             accessibilityLabel="やり直す"
             disabled={!history.future.length}
-            onPress={() => setHistory(redoNodeHistory)}
+            onPress={() => { if (!sync.redo()) setHistory(redoNodeHistory); }}
           />
           <TopButton label="設定" onPress={() => setSettingsOpen(true)} />
         </View>
@@ -865,13 +850,11 @@ export default function HomeScreen() {
                     text: "初期化",
                     style: "destructive",
                     onPress: async () => {
-                      await resetNodes();
-                      setHistory((current) =>
-                        replaceNodeHistory(
-                          current,
-                          normalizeLegacyRanks(mockNodes),
-                        ),
-                      );
+                      const initial = normalizeLegacyRanks(mockNodes);
+                      if (!sync.command("データを初期化", () => initial)) {
+                        await resetNodes();
+                        setHistory((current) => replaceNodeHistory(current, initial));
+                      }
                     },
                   },
                 ],
@@ -1266,6 +1249,8 @@ export default function HomeScreen() {
           onSignIn={sync.signIn}
           onSignUp={sync.signUp}
           onSignOut={sync.signOut}
+          protocol={sync.protocol}
+          devNetwork={sync.devNetwork}
         />
       </Sheet>
       <Sheet
@@ -1749,6 +1734,7 @@ function EditorModal({
             </Text>
             <TextInput
               value={title}
+              accessibilityLabel={editor?.type === "memo" ? "タイトル" : "Category名"}
               onChangeText={setTitle}
               placeholderTextColor={colors.textSecondary}
               style={styles.input}
@@ -1759,6 +1745,7 @@ function EditorModal({
                 <Text style={styles.label}>自由記述</Text>
                 <TextInput
                   value={body}
+                  accessibilityLabel="自由記述"
                   onChangeText={setBody}
                   placeholderTextColor={colors.textSecondary}
                   style={[styles.input, styles.multiline]}

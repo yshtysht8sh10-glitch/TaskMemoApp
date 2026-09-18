@@ -5,6 +5,22 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
+    function protocolAllowed(userId, protocol) {
+      let global = get(/databases/$(database)/documents/syncControl/current).data;
+      let gate = get(/databases/$(database)/documents/users/$(userId)/syncMetadataV2/compatibility).data;
+      return global.schemaVersion == 1 && global.writesEnabled == true
+        && gate.schemaVersion == 1
+        && ((protocol == 1 && gate.minimumSyncProtocol == 1
+          && gate.v1WritesAllowed == true && gate.v2Enabled == false)
+        || (protocol == 2 && gate.minimumSyncProtocol == 2
+          && gate.v1WritesAllowed == false && gate.v2Enabled == true));
+    }
+
+    match /syncControl/current {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     function validVersionedRecord(nodeId) {
       let record = request.resource.data.record;
       return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
@@ -41,7 +57,8 @@ service cloud.firestore {
 
     // Existing v1 client remains available only to the authenticated owner.
     match /users/{userId}/nodes/{nodeId} {
-      allow read, write: if ownsUser(userId);
+      allow read: if ownsUser(userId);
+      allow write: if ownsUser(userId) && protocolAllowed(userId, 1);
     }
     match /users/{userId}/externalAiAuditLogs/{logId} {
       allow read: if ownsUser(userId);
@@ -54,8 +71,9 @@ service cloud.firestore {
 
     match /users/{userId}/nodesV2/{nodeId} {
       allow read: if ownsUser(userId);
-      allow create: if ownsUser(userId) && validVersionedRecord(nodeId);
+      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validVersionedRecord(nodeId);
       allow update: if ownsUser(userId)
+        && protocolAllowed(userId, 2)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && validVersionedRecord(nodeId)
         && request.resource.data.record.revision >= resource.data.record.revision;
@@ -63,7 +81,7 @@ service cloud.firestore {
     }
     match /users/{userId}/syncOperationsV2/{opId} {
       allow read: if ownsUser(userId);
-      allow create: if ownsUser(userId) && validOperation(opId);
+      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validOperation(opId);
       // Operation receipts are immutable; this preserves the opId idempotency boundary.
       allow update, delete: if false;
     }

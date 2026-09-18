@@ -10,6 +10,9 @@ dist-native-check/
 web-build/
 .firebase/
 firebase-debug.log*
+firestore-debug.log*
+test-results/
+playwright-report/
 expo-env.d.ts
 
 # Native

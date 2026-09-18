@@ -1,7 +1,8 @@
-import { collection, doc, getDoc, onSnapshot, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
+import { collection, doc, getDocFromServer, onSnapshot, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyRevisionOperation } from "./revisionModel";
+import { validateCompatibilityGate } from "./compatibilityGate";
 import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedNode } from "./types";
 
 type AdapterOptions = { emulator?: boolean };
@@ -33,7 +34,7 @@ export function createFirebaseSyncAdapter(
 ): SyncAdapter {
   const projectId = db.app.options.projectId;
   const developmentAllowed = environment === "development" && projectId === FIREBASE_PROJECT_IDS.development;
-  const emulatorAllowed = environment === "test" && options.emulator === true;
+  const emulatorAllowed = environment === "test" && options.emulator === true && projectId?.startsWith("demo-") === true;
   if (!developmentAllowed && !emulatorAllowed) {
     throw new Error(`Firebase V2 sync adapter is disabled for ${environment}/${projectId ?? "unknown"}.`);
   }
@@ -41,7 +42,12 @@ export function createFirebaseSyncAdapter(
   return {
     async connect() {
       try {
-        await getDoc(doc(db, "users", uid, "syncMetadataV2", "connection"));
+        const global = await getDocFromServer(doc(db, "syncControl", "current"));
+        if (global.data()?.schemaVersion !== 1 || global.data()?.writesEnabled !== true)
+          throw { code: "permission-denied", message: "同期はmaintenance中です。" };
+        const gate = await getDocFromServer(doc(db, "users", uid, "syncMetadataV2", "compatibility"));
+        try { validateCompatibilityGate(gate.exists() ? gate.data() : undefined); }
+        catch (error) { throw { code: "permission-denied", message: String(error) }; }
       } catch (reason) {
         throw adapterError(reason);
       }
@@ -77,7 +83,7 @@ export function createFirebaseSyncAdapter(
         for (const change of snapshot.docChanges()) {
           if (change.type === "removed") continue;
           const record = change.doc.data().record as VersionedNode | undefined;
-          if (record) void onRecord(record);
+          if (record) void Promise.resolve(onRecord(record)).catch(onError);
         }
       }, onError);
     },
