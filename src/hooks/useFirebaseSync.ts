@@ -4,7 +4,7 @@ import { collection, doc, getDocs, onSnapshot, writeBatch } from 'firebase/fires
 
 import type { Node } from '@/models/node';
 import { getFirebaseClient } from '@/services/firebaseClient';
-import { isFirebaseConfigured } from '@/services/firebaseConfig';
+import { firebaseConfiguration } from '@/services/firebaseConfig';
 import { applyRemoteDeletionsAsTombstones, mergeNodesByUpdatedAt, nodeFromFirestore, nodeSyncFingerprint, nodeToFirestore, withRemoteTombstones } from '@/services/firebaseNodeCodec';
 
 export type FirebaseSyncStatus = 'disabled' | 'signed-out' | 'connecting' | 'synced' | 'offline' | 'error';
@@ -20,7 +20,8 @@ const authMessage = (error: unknown) => {
 };
 
 export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloudNodes: (nodes: Node[]) => void) {
-  const configured = isFirebaseConfigured();
+  const firebase = firebaseConfiguration();
+  const configured = firebase.config !== null;
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(!configured);
   const [status, setStatus] = useState<FirebaseSyncStatus>(configured ? 'connecting' : 'disabled');
@@ -99,5 +100,5 @@ export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloud
   const signUp = async (email: string, password: string) => { setError(null); setStatus('connecting'); try { await createUserWithEmailAndPassword(getFirebaseClient().auth, email.trim(), password); } catch (reason) { const message = authMessage(reason); setStatus('signed-out'); setError(message); throw new Error(message); } };
   const logOut = async () => { await signOut(getFirebaseClient().auth); };
 
-  return { configured, authReady, user, status, error, signIn, signUp, signOut: logOut };
+  return { configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, signOut: logOut };
 }

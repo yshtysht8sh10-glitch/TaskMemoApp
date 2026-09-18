@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const requiredNames = [
+  'EXPO_PUBLIC_TASKMEMO_ENV',
   'EXPO_PUBLIC_FIREBASE_API_KEY',
   'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
   'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
@@ -18,7 +19,7 @@ function readEnvLocal() {
 
   const values = new Map();
   for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^\s*(EXPO_PUBLIC_FIREBASE_[A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    const match = line.match(/^\s*(EXPO_PUBLIC_(?:FIREBASE_[A-Z0-9_]+|TASKMEMO_ENV))\s*=\s*(.*)\s*$/);
     if (!match) continue;
     let value = match[2].trim();
     if ((value.startsWith('"') && value.endsWith('"')) ||
@@ -60,7 +61,7 @@ try {
     throw new Error(`bundle に反映されていない環境変数: ${absent.join(', ')}`);
   }
 
-  console.log('Firebase web export check: 6個の公開設定が bundle に反映されています（値は非表示）。');
+  console.log('Firebase web export check: 環境名と6個の公開設定が bundle に反映されています（値は非表示）。');
 } catch (error) {
   console.error(`Firebase web export check failed: ${error.message}`);
   process.exitCode = 1;

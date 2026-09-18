@@ -568,7 +568,12 @@ export default function HomeScreen() {
       <StatusBar style={resolved === "dark" ? "light" : "dark"} />
       <View style={styles.header}>
         <View>
-          <Text style={styles.title}>TaskMemo</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>TaskMemo</Text>
+            {sync.environment === "development" && (
+              <Text style={styles.developmentBadge}>DEV</Text>
+            )}
+          </View>
           <Text style={styles.subtitle}>メモとタスク</Text>
         </View>
         <View style={styles.headerActions}>
@@ -1253,6 +1258,8 @@ export default function HomeScreen() {
       >
         <SyncAccountPanel
           configured={sync.configured}
+          environment={sync.environment}
+          configurationError={sync.configurationError}
           user={sync.user}
           status={sync.status}
           error={sync.error}
@@ -2444,7 +2451,9 @@ const createStyles = (colors: ThemeColors) =>
       justifyContent: "space-between",
     },
     headerActions: { flexDirection: "row", alignItems: "center", gap: 3 },
+    titleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
     title: { color: colors.text, fontSize: 25, fontWeight: "700" },
+    developmentBadge: { color: "#6d3b00", backgroundColor: "#ffd08a", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, fontSize: 10, fontWeight: "900" },
     subtitle: { color: colors.textSecondary, fontSize: 11 },
     historyButton: {
       width: 38,

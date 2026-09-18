@@ -1,6 +1,7 @@
 {
   "projects": {
-    "default": "taskmemoapp-eabc3"
+    "default": "taskmemoapp-eabc3",
+    "dev": "taskmemoapp-dev"
   },
   "targets": {},
   "etags": {}
