@@ -47,15 +47,23 @@ async function main() {
     localId = auth.localId;
     console.log('dev Authentication: PASS');
 
-    documentUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${localId}/diagnostics/${token}`;
+    const operation = {
+      opId: { stringValue: `${localId}:1` },
+      deviceId: { stringValue: localId },
+      localSeq: { integerValue: '1' },
+      targetNodeId: { stringValue: 'connection-check' },
+      type: { stringValue: 'update' },
+    };
+    documentUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${localId}/syncOperationsV2/${token}`;
     const headers = { authorization: `Bearer ${idToken}`, 'content-type': 'application/json' };
-    await jsonRequest(documentUrl, { method: 'PATCH', headers, body: JSON.stringify({ fields: { purpose: { stringValue: 'connection-check' } } }) });
+    await jsonRequest(documentUrl, { method: 'PATCH', headers, body: JSON.stringify({ fields: operation }) });
+    await jsonRequest(documentUrl, { method: 'PATCH', headers, body: JSON.stringify({ fields: operation }) });
     const read = await jsonRequest(documentUrl, { headers });
-    if (read.fields?.purpose?.stringValue !== 'connection-check') throw new Error('Firestore read-back mismatch');
-    console.log('dev Firestore own-user read/write: PASS');
+    if (read.fields?.opId?.stringValue !== `${localId}:1`) throw new Error('Firestore operation read-back mismatch');
+    console.log('dev Firestore V2 operation duplicate write/read: PASS');
 
-    const forbiddenUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/not-${localId}/diagnostics/${token}`;
-    const forbidden = await fetch(forbiddenUrl, { method: 'PATCH', headers, body: JSON.stringify({ fields: { purpose: { stringValue: 'must-fail' } } }) });
+    const forbiddenUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/not-${localId}/syncOperationsV2/${token}`;
+    const forbidden = await fetch(forbiddenUrl, { method: 'PATCH', headers, body: JSON.stringify({ fields: operation }) });
     if (forbidden.status !== 403) throw new Error(`cross-user write returned ${forbidden.status}, expected 403`);
     console.log('dev Firestore cross-user isolation: PASS');
   } finally {
