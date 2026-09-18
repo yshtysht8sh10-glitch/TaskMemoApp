@@ -26,6 +26,7 @@ export type SyncOperation = {
   localSeq: number;
   targetNodeId: string;
   type: SyncOperationType;
+  baseRevision: number;
   payload: Record<string, unknown>;
   createdAt: string;
   status: SyncOperationStatus;
@@ -37,9 +38,29 @@ export type SyncOperation = {
 export type NewSyncOperation = Pick<
   SyncOperation,
   "targetNodeId" | "type" | "payload" | "createdAt"
->;
+> & { baseRevision?: number };
 
-export type SyncAcknowledgement = { opId: string };
+export type SyncNodeValue = Record<string, unknown> & {
+  id: string;
+  deletedAt?: string | null;
+  purgedAt?: string | null;
+};
+
+export type VersionedNode = {
+  value: SyncNodeValue;
+  revision: number;
+  lastOpId: string;
+  lastDeviceId: string;
+  lastLocalSeq: number;
+  operationType: SyncOperationType;
+};
+
+export type SyncAcknowledgement = {
+  opId: string;
+  revision?: number;
+  result?: "applied" | "superseded";
+  record?: VersionedNode;
+};
 
 export interface SyncAdapter {
   connect(): Promise<void>;

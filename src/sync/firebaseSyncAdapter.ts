@@ -1,9 +1,19 @@
 import { doc, getDoc, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
-import type { SyncAdapter, SyncOperation } from "./types";
+import { applyRevisionOperation } from "./revisionModel";
+import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedNode } from "./types";
 
 type AdapterOptions = { emulator?: boolean };
+
+const stableValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stableValue(item)]),
+  );
+  return value;
+};
+const sameOperation = (a: unknown, b: unknown) => JSON.stringify(stableValue(a)) === JSON.stringify(stableValue(b));
 
 const adapterError = (reason: unknown) => {
   const code = reason && typeof reason === "object" && "code" in reason ? String(reason.code) : "";
@@ -40,15 +50,22 @@ export function createFirebaseSyncAdapter(
     async upload(operation: SyncOperation) {
       try {
         const operationRef = doc(db, "users", uid, "syncOperationsV2", operation.opId);
+        const nodeRef = doc(db, "users", uid, "nodesV2", operation.targetNodeId);
         return await runTransaction(db, async (transaction) => {
           const existing = await transaction.get(operationRef);
-          if (!existing.exists()) {
-            transaction.set(operationRef, {
-              ...operation,
-              serverReceivedAt: serverTimestamp(),
-            });
+          if (existing.exists()) {
+            const data = existing.data();
+            if (!sameOperation(data.operation, operation)) {
+              throw { code: "invalid-argument", message: "opId collision with different payload" };
+            }
+            return data.acknowledgement as SyncAcknowledgement;
           }
-          return { opId: operation.opId };
+          const nodeSnapshot = await transaction.get(nodeRef);
+          const current = nodeSnapshot.exists() ? nodeSnapshot.data().record as VersionedNode : undefined;
+          const acknowledgement = applyRevisionOperation(current, operation);
+          if (acknowledgement.result === "applied") transaction.set(nodeRef, { record: acknowledgement.record, serverUpdatedAt: serverTimestamp() });
+          transaction.set(operationRef, { operation, acknowledgement, serverReceivedAt: serverTimestamp() });
+          return acknowledgement;
         });
       } catch (reason) {
         throw adapterError(reason);

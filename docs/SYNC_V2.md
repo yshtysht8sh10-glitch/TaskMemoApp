@@ -60,5 +60,56 @@ Firebase implementation stores each operation at
 `users/{uid}/syncOperationsV2/{opId}` in a transaction. If that document already
 exists, the same `opId` is acknowledged without a second write.
 
-Revision assignment, self-echo handling, remote Node application, and conflict
-resolution belong to the next phase and are intentionally absent here.
+## Revision and deterministic convergence
+
+Each operation carries the revision it was based on. Its candidate revision is
+`baseRevision + 1`; client wall-clock time is not part of winner selection.
+Higher revisions win. Operations created concurrently from the same base have
+the same candidate revision, so ties are resolved by deletion rank
+(`purge > soft delete > normal`) and then lexicographically by globally unique
+`opId`. This order is independent of upload or snapshot delivery order.
+
+A purge tombstone dominates a normal Node even when a stale offline client
+reconnects. Soft deletion wins same-revision ties and can only be undone later
+by an explicit restore based on the deletion revision. Losing operations remain
+in `syncOperationsV2` with a `superseded` acknowledgement and winning record for
+future diagnostics.
+
+The Firebase adapter transaction reads both the operation document and
+`nodesV2/{nodeId}`. A new operation writes its acknowledgement and, only when it
+wins, the Node record with a server timestamp. A repeated `opId` returns the
+stored acknowledgement; reuse of the same ID with a different payload is a
+permanent error.
+
+## Echo and duplicate handling
+
+`lastOpId` and `lastDeviceId` are stored with every versioned Node. An incoming
+record from the installation's own device is a self echo: it acknowledges the
+matching outbox item but does not reapply Domain state, create another
+operation, or touch Undo/Redo history. Seen operation IDs are retained in a
+bounded local list so duplicate listener delivery is ignored.
+
+## Application command journal
+
+The V2 application store persists three separate responsibilities in one
+recoverable envelope:
+
+```text
+domain:  versioned Node records
+history: past / future entries
+sync:    outbox / seen operation IDs / device sequence
+```
+
+Before replacing the committed envelope, it writes the complete next envelope
+to `@taskmemo/sync-v2/application-journal/v1`. The committed key is
+`@taskmemo/sync-v2/application/v1`. Startup replays a remaining journal before
+loading state. Therefore a crash between the visible Domain change and outbox
+commit recovers both the Node and its exact operation, while a crash before the
+journal retains the previous consistent state.
+
+Normal edits, Undo, and Redo all call the same command path. Undo and Redo use
+the current revision as their base and create a new operation/revision; they do
+not move cloud time backward.
+
+The V2 foundation remains disconnected from the current V1 application hook.
+Production migration and client cutover require a separate approval.

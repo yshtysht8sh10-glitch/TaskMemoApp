@@ -47,6 +47,7 @@ export class DurableOutbox {
     const localSeq = this.envelope.nextLocalSeq;
     const operation: SyncOperation = {
       ...input,
+      baseRevision: input.baseRevision ?? 0,
       opId: `${this.envelope.deviceId}:${localSeq}`,
       deviceId: this.envelope.deviceId,
       localSeq,
