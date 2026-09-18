@@ -5,13 +5,33 @@ import { keyboardDiagnosticsEnabled as diagnosticsEnabled, mountDiagnosticCopyPa
 import {
   focusedInputScrollOffset,
   focusedInputScrollPlan,
-  focusedInputRevealPlan,
   normalizeVisibleViewport,
-  shouldRevealFocusedInput,
   type VisibleViewport,
 } from "@/utils/focusedInputVisibility";
 
 const KEYBOARD_SETTLE_DELAYS = [80, 280];
+
+// Keep the pre-keyboard reference even when the layout viewport also resizes.
+// Scale compensation avoids treating focus/pinch zoom alone as a keyboard.
+function viewportSample() {
+  const vv = window.visualViewport;
+  const height = vv?.height ?? window.innerHeight;
+  const scale = vv?.scale ?? 1;
+  return {
+    height: Math.max(layoutViewport().height, height * scale),
+    visibleHeight: height * scale,
+    width: document.documentElement.clientWidth,
+    valid: Number.isFinite(height) && height >= 160 && Number.isFinite(scale) && scale > 0,
+  };
+}
+type KeyboardState = {
+  keyboardVisible: boolean;
+  reason: string;
+  referenceHeight: number;
+  currentHeight: number;
+  contraction: number;
+};
+let diagnosticKeyboardState: (() => KeyboardState) | undefined;
 
 function layoutViewport(): VisibleViewport {
   return {
@@ -103,7 +123,9 @@ function recordKeyboardDiagnostic(stage: string, details: Record<string, unknown
       innerHeight: window.innerHeight, innerWidth: window.innerWidth },
     rawViewport: vv ? { height: vv.height, width: vv.width, offsetTop: vv.offsetTop,
       offsetLeft: vv.offsetLeft, pageTop: vv.pageTop, pageLeft: vv.pageLeft, scale: vv.scale } : null,
-    layout, normalized, correctionAllowed: shouldRevealFocusedInput(normalized, layout),
+    layout, normalized, keyboard: diagnosticKeyboardState?.(),
+    correctionAllowed: diagnosticKeyboardState?.().keyboardVisible ?? false,
+    keyboardTop: normalized.offsetTop + normalized.height,
     // This is a viewport boundary, not a measurement of the OS keyboard.
     rawVisibleBottom: vv ? vv.offsetTop + vv.height : null,
     ...details,
@@ -145,27 +167,40 @@ function revealFocusedInput(
 ) {
   const element = document.activeElement;
   recordKeyboardDiagnostic('correction-attempt', { baselineWindowScrollY });
-  if (!isTextEntry(element)) return;
-  const layout = layoutViewport();
-  const viewport = currentViewport(layout);
-  if (!shouldRevealFocusedInput(viewport, layout)) return;
+  if (!isTextEntry(element)) {
+    recordKeyboardDiagnostic('correction-skip', { reason: 'no-text-input' });
+    return;
+  }
   const scrollContainer = scrollableAncestor(element);
-  if (!scrollContainer) return;
-  const reveal = focusedInputRevealPlan({
-    baselineWindowScrollY,
-    currentWindowScrollY: window.scrollY,
-    inputBounds: element.getBoundingClientRect(),
-    viewport,
-    container: scrollContainer,
-  });
+  if (!scrollContainer) {
+    recordKeyboardDiagnostic('correction-skip', { reason: 'no-internal-scroll-container' });
+    return;
+  }
+  // Never use a predicted input position from before restoring the page.
+  if (window.scrollY !== baselineWindowScrollY) {
+    recordKeyboardDiagnostic('page-scroll-detected', { baselineWindowScrollY });
+    window.scrollTo(window.scrollX, baselineWindowScrollY);
+    recordKeyboardDiagnostic('page-scroll-restored', { baselineWindowScrollY });
+  }
+  const availableViewport = (): VisibleViewport => {
+    const visible = currentViewport(layoutViewport());
+    const bounds = scrollContainer.getBoundingClientRect();
+    const top = Math.max(visible.offsetTop, bounds.top);
+    const bottom = Math.min(visible.offsetTop + visible.height, bounds.bottom);
+    return { offsetTop: top, height: Math.max(0, bottom - top) };
+  };
+  const viewport = availableViewport();
+  if (viewport.height <= 32) {
+    recordKeyboardDiagnostic('correction-skip', { reason: 'no-visible-scroll-region', viewport });
+    return;
+  }
+  const requestedOffset = focusedInputScrollOffset(element.getBoundingClientRect(), viewport);
   const scrollTopBefore = scrollContainer.scrollTop;
   logKeyboardGeometry("before-correction", element, scrollContainer, viewport, {
     baselineWindowScrollY,
-    calculatedScrollOffset: reveal.containerScrollOffset,
-    calculatedExtraBottomSpace: reveal.scroll.extraBottomSpace,
+    calculatedScrollOffset: requestedOffset,
   });
-  if (window.scrollY !== reveal.windowScrollTop)
-    window.scrollTo(window.scrollX, reveal.windowScrollTop);
+  recordKeyboardDiagnostic('before-correction', { requestedOffset, availableViewport: viewport });
   const applyOffset = (offset: number) => {
     if (!offset) return;
     if (!adjustedContainers.has(scrollContainer))
@@ -182,16 +217,25 @@ function revealFocusedInput(
     }
     scrollContainer.scrollTop = plan.targetScrollTop;
   };
-  applyOffset(reveal.containerScrollOffset);
-  applyOffset(
-    focusedInputScrollOffset(element.getBoundingClientRect(), currentViewport(layout)),
-  );
-  recordKeyboardDiagnostic('correction-immediate-result', {
-    requestedOffset: reveal.containerScrollOffset,
-    actualOffset: scrollContainer.scrollTop - scrollTopBefore,
-  });
-  const finalViewport = currentViewport(layout);
+  applyOffset(requestedOffset);
+  const residualOffset = focusedInputScrollOffset(element.getBoundingClientRect(), availableViewport());
+  recordKeyboardDiagnostic('before-residual-correction', { residualOffset });
+  applyOffset(residualOffset);
+  const finalViewport = availableViewport();
   const finalBounds = element.getBoundingClientRect();
+  const containerBounds = scrollContainer.getBoundingClientRect();
+  const visualLeft = window.visualViewport?.offsetLeft ?? 0;
+  const visualRight = visualLeft + (window.visualViewport?.width ?? window.innerWidth);
+  recordKeyboardDiagnostic('correction-immediate-result', {
+    requestedOffset, residualOffset,
+    actualOffset: scrollContainer.scrollTop - scrollTopBefore,
+    remainingOffset: focusedInputScrollOffset(finalBounds, finalViewport),
+    availableViewport: finalViewport,
+    inputFullyVisible: finalBounds.top >= finalViewport.offsetTop + 16 &&
+      finalBounds.bottom <= finalViewport.offsetTop + finalViewport.height - 16 &&
+      finalBounds.left >= Math.max(visualLeft, containerBounds.left) &&
+      finalBounds.right <= Math.min(visualRight, containerBounds.right),
+  });
   logKeyboardGeometry("after-correction", element, scrollContainer, finalViewport, {
     appliedScrollOffset: scrollContainer.scrollTop - scrollTopBefore,
     inputVisibleAboveKeyboard:
@@ -203,6 +247,17 @@ export function useWebFocusedInputVisibility() {
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
     const viewport = window.visualViewport;
+    let reference = viewportSample();
+    const keyboardState = (): KeyboardState => {
+      const current = viewportSample();
+      const contraction = Math.max(reference.height, layoutViewport().height) - current.visibleHeight;
+      const reason = !current.valid ? 'invalid-viewport'
+        : current.width !== reference.width ? 'layout-width-changed'
+        : contraction >= 80 ? 'viewport-contracted' : 'no-keyboard-contraction';
+      return { keyboardVisible: reason === 'viewport-contracted', reason,
+        referenceHeight: reference.height, currentHeight: current.visibleHeight, contraction };
+    };
+    diagnosticKeyboardState = keyboardState;
     const diagnosticTimers = new Set<ReturnType<typeof setTimeout>>();
     const diagnosticFrames = new Set<number>();
     const diagnosticListeners: (() => void)[] = [];
@@ -212,7 +267,7 @@ export function useWebFocusedInputVisibility() {
       diagnosticWindow.taskMemoKeyboardDiagnostics = {
         export: () => {
           recordKeyboardDiagnostic('export');
-          return JSON.stringify({ version: 3, timestamp: new Date().toISOString(), userAgent: navigator.userAgent, entries: diagnosticEntries }, null, 2);
+          return JSON.stringify({ version: 4, timestamp: new Date().toISOString(), userAgent: navigator.userAgent, entries: diagnosticEntries }, null, 2);
         },
       };
       diagnosticListeners.push(mountDiagnosticCopyPanel(
@@ -253,9 +308,36 @@ export function useWebFocusedInputVisibility() {
     }
     const adjustedContainers = new Map<HTMLElement, { paddingBottom: string; scrollTop: number }>();
     let baselineWindowScrollY = window.scrollY;
-    let pendingFocusWindowScrollY: number | null = null;
+    let pendingFocus: { scrollY: number; reference: ReturnType<typeof viewportSample> } | null = null;
     let frame: number | null = null;
+    let hadKeyboard = false;
     const timers = new Set<ReturnType<typeof setTimeout>>();
+    const runCorrection = () => {
+      const state = keyboardState();
+      if (state.keyboardVisible) {
+        hadKeyboard = true;
+        revealFocusedInput(adjustedContainers, baselineWindowScrollY);
+        return;
+      }
+      recordKeyboardDiagnostic('correction-skip', { reason: state.reason });
+      // Invalid samples during animation must not undo a successful correction.
+      if (state.reason === 'invalid-viewport') return;
+      if (adjustedContainers.size) {
+        recordKeyboardDiagnostic('restore-containers', { count: adjustedContainers.size });
+        adjustedContainers.forEach((original, container) => {
+          if (container.isConnected) {
+            container.style.paddingBottom = original.paddingBottom;
+            container.scrollTop = original.scrollTop;
+          }
+        });
+        adjustedContainers.clear();
+      }
+      // Do not chase small resize steps during keyboard opening animation.
+      // Rebase only outside editing, after dismissal, or on a width change.
+      if (!isTextEntry(document.activeElement) || hadKeyboard || state.reason === 'layout-width-changed')
+        reference = viewportSample();
+      hadKeyboard = false;
+    };
     const scheduleReveal = () => {
       recordKeyboardDiagnostic('schedule', { cancelFrame: frame !== null, cancelTimerCount: timers.size });
       if (frame !== null) cancelAnimationFrame(frame);
@@ -263,40 +345,36 @@ export function useWebFocusedInputVisibility() {
       timers.clear();
       frame = requestAnimationFrame(() => {
         recordKeyboardDiagnostic('correction-rAF');
-        const layout = layoutViewport();
-        const visible = currentViewport(layout);
-        if (shouldRevealFocusedInput(visible, layout))
-          revealFocusedInput(adjustedContainers, baselineWindowScrollY);
-        else {
-          recordKeyboardDiagnostic('restore-containers', { count: adjustedContainers.size });
-          adjustedContainers.forEach((original, container) => {
-            if (container.isConnected) {
-              container.style.paddingBottom = original.paddingBottom;
-              container.scrollTop = original.scrollTop;
-            }
-          });
-          adjustedContainers.clear();
-        }
+        runCorrection();
         frame = null;
       });
       KEYBOARD_SETTLE_DELAYS.forEach((delay) => {
         const timer = setTimeout(() => {
           timers.delete(timer);
           recordKeyboardDiagnostic('correction-timer', { delay });
-          revealFocusedInput(adjustedContainers, baselineWindowScrollY);
+          runCorrection();
         }, delay);
         timers.add(timer);
       });
     };
 
     const capturePreFocusScroll = () => {
-      pendingFocusWindowScrollY = window.scrollY;
+      if (!keyboardState().keyboardVisible) {
+        pendingFocus = { scrollY: window.scrollY, reference: viewportSample() };
+        recordKeyboardDiagnostic('before-focus');
+      }
     };
     const handleFocusIn = () => {
-      baselineWindowScrollY = pendingFocusWindowScrollY ?? window.scrollY;
-      pendingFocusWindowScrollY = null;
       const element = document.activeElement;
       if (isTextEntry(element)) {
+        if (pendingFocus) {
+          reference = pendingFocus.reference;
+          baselineWindowScrollY = pendingFocus.scrollY;
+          pendingFocus = null;
+        } else if (!keyboardState().keyboardVisible) {
+          reference = viewportSample();
+          baselineWindowScrollY = window.scrollY;
+        }
         const layout = layoutViewport();
         logKeyboardGeometry(
           "focus",
@@ -325,6 +403,7 @@ export function useWebFocusedInputVisibility() {
       if (frame !== null) cancelAnimationFrame(frame);
       timers.forEach(clearTimeout);
       adjustedContainers.clear();
+      if (diagnosticKeyboardState === keyboardState) diagnosticKeyboardState = undefined;
     };
   }, []);
 }
