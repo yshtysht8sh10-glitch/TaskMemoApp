@@ -1,59 +1,90 @@
 # TaskMemo V2 production cutover runbook
 
-Status: draft for human execution. Issue #45 remains open. Nothing here authorizes a production change.
+Status: rehearsal-validated draft. Issue #45 remains open. Nothing here authorizes a production change.
 
-## Safety invariants
+## Project identity guard
 
-- Use one unique `migrationId`; archive it with the backup manifest.
-- A user gate is exactly V1 (`minimumSyncProtocol=1`, `v1WritesAllowed=true`, `v2Enabled=false`) or V2 (`2`, `false`, `true`). Other shapes fail closed.
-- Global `syncControl/current.writesEnabled=false` is the maintenance freeze. There is no V1/V2 dual-write interval.
-- Migration preserves Node IDs and imports at revision 0 using an ID-derived migration identity. The first V2 edit is revision 1; V1 cannot write `nodesV2`.
-- After V2 edits, rollback keeps the V2 protocol and deploys a corrected/previous V2-compatible client. Re-enabling V1 would lose V2 revisions and is forbidden.
+| Role | Exact project | Permitted use before approval |
+| --- | --- | --- |
+| production | `taskmemoapp-eabc3` | read-only snapshot/query only |
+| release candidate/dev | `taskmemoapp-dev` | RC Rules, seed user/data, Hosting |
+| isolated rehearsal | `demo-taskmemo-rehearsal` | local emulator only |
 
-## Preflight and backup
+At every step print and independently compare the project ID. STOP on any mismatch. Never reuse a production CLI command by editing only part of it.
 
-1. Select and independently verify the exact production project ID and source commit.
-   - Success: both values are recorded by the operator.
-   - Stop: mismatch, uncommitted build, or missing operator review.
-   - Rollback: none; read-only.
-2. Run full tests, TypeScript, lint, diff check and production export with the production V2 flag off.
-   - Success: every check passes and export hash is archived.
-   - Stop: any failure.
-3. Managed-export `users/{uid}/nodes`, sync metadata, any existing `nodesV2` / `syncOperationsV2`, and `syncControl/current` into a versioned restricted bucket. Store a canonical JSON manifest with document counts and SHA-256 hashes.
-   - Success: export completes and manifest counts match read-only counts.
-   - Stop: partial export, mismatch, or inaccessible generation.
-4. Restore into a new non-production database and run semantic validation.
-   - Success: IDs/counts/hashes match; parents, sort keys, deadline keys, histories, tombstones and unknown fields survive; lost-field count is zero.
-   - Stop: any mismatch. Do not begin maintenance.
-   - Rollback: discard only the isolated rehearsal target.
+## Rehearsed pre-cutover sequence
 
-## Freeze, migrate, validate
+### 1. Read-only source snapshot
 
-5. Announce maintenance and set global `writesEnabled=false` with the reviewed admin procedure/rules.
-   - Success: cached V1 and V2 probes are both denied writes while reads work.
-   - Stop: either write succeeds. Keep maintenance enabled.
-   - Rollback: restore the previous marker only if no migration write occurred.
-6. Take a second post-freeze export/manifest and run the offline dry-run on that exact export.
-   - Success: no duplicate/invalid/orphan/field-loss issue and source hash is recorded.
-   - Stop: any issue or count divergence.
-7. Write `nodesV2` using create-only/idempotent operations bound to `migrationId`; never delete V1. Set the per-user V2 marker only after all records validate.
-   - Success: encode→migrate→decode is semantically identical and every marker is V2-only.
-   - Stop: first error; keep writes frozen and retry only idempotently with the same ID.
-   - Rollback before unfreeze: remove only records proven to belong to this migration, restore V1 markers, then validate against the post-freeze export.
-8. Deploy reviewed production Rules while writes remain frozen.
-   - Success: V1/malformed-gate probes are rejected and V2 remains frozen.
-   - Stop: any unexpected allow/deny.
+- Command: `npm run migration:production-read-only -- <private-output.json> read-only:taskmemoapp-eabc3`, with a short-lived OAuth token supplied only through the process environment.
+- Target: production `taskmemoapp-eabc3`, Firestore `documents:runQuery` against collection group `nodes`.
+- Expected: a private, gitignored snapshot; two consecutive reads produce the same canonical hash and count.
+- Validation: project identity, REST method, decoded document count, canonical SHA-256.
+- STOP: any write-capable request in the script, project mismatch, unstable snapshot, authentication ambiguity.
+- Rollback: none; the step is read-only. Delete only the local private snapshot if necessary.
 
-## Enable and monitor
+### 2. Offline migration analysis
 
-9. Deploy the V2-capable client, change migrated users to V2-only, then set global `writesEnabled=true`.
-   - Success: canary create/edit/Undo/Redo and two devices converge with empty outboxes.
-   - Stop: listener errors, divergence, backlog growth, or any V1 write success.
-10. Expand canaries while monitoring permission errors, operation latency, outbox depth, duplicate op IDs and count/hash drift.
-   - Success: the agreed observation window has no unexplained error or drift.
-   - Rollback: freeze writes, preserve current V2 data and receipts, and deploy the last known V2-compatible client. Never overwrite V2 edits with the old V1 backup.
+- Command: `npm run migration:analyze-production-snapshot -- <private-snapshot.json> <private-report.json>`.
+- Target: local files only.
+- Expected: equal input/output Node counts, zero changed/lost fields, zero semantic changes, zero orphan/unknown/unexpected records.
+- Validation: inspect all reported counters and retained Node fields, including ID, `parentId`, `sortKey`, `deadlineSortKey`, deadline/due, `dayPart`, Routine configuration/history, completion, `deletedAt`, `purgedAt`, and unknown fields.
+- STOP: **any** issue. On 2026-09-19 this stopped on deleted orphan `ipa-morning` → missing parent `ipa`.
+- Rollback: none; analysis is read-only. Escalate the exact source issue for an explicit data decision.
+
+### 3. Isolated backup and exact restore
+
+- Command: start `firebase.rehearsal.json` with project `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- <snapshot> <migrationId> <new-backup> <new-report> --continue-after-validation-stop=orphan-preservation-only` only when deliberately testing post-STOP mechanics.
+- Target: local Auth/Firestore emulator only (9299/8280). Never substitute a deployable Firebase project.
+- Expected: create-only backup; restore count/IDs/fields/values/nested values/tombstones/unknown fields are byte-semantically equal.
+- Validation: automated recursive comparison. Rehearsal result on 2026-09-19: 121/121 exact, 237.79 ms restore plus 83.20 ms validation.
+- STOP: target is not `demo-taskmemo-rehearsal`, backup path already exists, or any equality/count mismatch.
+- Rollback: stop emulator and discard only the isolated emulator data/private rehearsal artifacts.
+
+### 4. Freeze, migrate, validate and gate in rehearsal
+
+- Command/operation: set emulator `syncControl/current.writesEnabled=false`; run V1→V2 create/import preserving IDs; compare all V2 records; set per-user compatibility to V2-only; re-enable writes.
+- Target: `demo-taskmemo-rehearsal` only.
+- Expected: zero semantic/lost-field change; old V1 read/write and tombstone resurrection rejected; real V2 adapter smoke operation applied.
+- Validation: automated Rules assertions and adapter upload. Diagnostic 2026-09-19 timings: migration 159.17 ms, validation 54.55 ms, gate 30.69 ms, freeze window 598.59 ms.
+- STOP: any source issue in a formal rehearsal, partial migration, equality failure, old-client access, or V2 smoke failure. The orphan-preservation switch is diagnostic only and cannot produce cutover approval.
+- Rollback: while frozen, remove only records proven to belong to that rehearsal migration. For production, preserve the post-freeze export and never infer ownership by timestamp alone.
+
+## Production execution — requires separate authorization
+
+### 5. Preflight and managed backup
+
+- Command/operation: record reviewed commit and migration ID; run full tests/type/lint/export; create a managed Firestore export of V1 Nodes, sync metadata, any V2 collections, operations, and global control into a versioned restricted bucket.
+- Target: `taskmemoapp-eabc3`.
+- Expected: manifest counts/hashes equal the post-freeze read-only inventory; restore of that exact export succeeds in a fresh isolated target.
+- STOP: dirty/unreviewed commit, current orphan or any validation issue, partial export, count/hash mismatch, or inaccessible export generation.
+- Rollback: none before writes; retain the backup and abort.
+
+### 6. Production write freeze
+
+- Command/operation: deploy the separately reviewed production maintenance control/Rules and set `writesEnabled=false`.
+- Target: `taskmemoapp-eabc3` only.
+- Expected: cached V1 and V2 probes cannot write; required reads remain available.
+- Validation: two authenticated protocol probes plus a fresh post-freeze export/hash.
+- STOP: either write succeeds, snapshot differs unexpectedly, or maintenance state is uncertain.
+- Rollback: restore the previous control only if no migration write occurred; otherwise remain frozen.
+
+### 7. Production migration and Rules
+
+- Command/operation: dry-run the post-freeze export, then perform create-only/idempotent V2 writes bound to the recorded migration ID; validate before setting user gates; deploy reviewed V2 Rules while still frozen.
+- Target: `taskmemoapp-eabc3`.
+- Expected: equal counts and semantic content, zero validation issues, V1/malformed gates rejected, V2 still frozen.
+- STOP: first issue/error; keep writes frozen. Retry only idempotently with the same migration ID.
+- Rollback before unfreeze: remove only records cryptographically/manifest-proven to belong to this migration, restore V1 gates, and validate against the post-freeze export.
+
+### 8. Client enablement and observation
+
+- Command/operation: deploy the separately approved V2 production clients, change migrated users to V2-only, then re-enable writes.
+- Target: `taskmemoapp-eabc3` and explicitly approved production release channels.
+- Expected: canary create/edit/Undo/Redo and multi-device convergence with empty outboxes.
+- STOP: permission errors, divergence, backlog growth, duplicate operation IDs, count/hash drift, or any V1 access.
+- Rollback after V2 edits: freeze writes, preserve current V2 state/receipts, and deploy a known V2-compatible client. Never restore V1 over V2 revisions.
 
 ## Emergency data recovery
 
-Freeze writes, export current V2 state, preserve operation receipts, repair/replay into a separate validation target, and apply an audited forward repair only after semantic validation. The pre-cutover backup is a forensic baseline, not a safe rollback target after V2 edits.
-
+Freeze writes, export current V2 state, preserve operation receipts, repair/replay in a separate validation target, then apply an audited forward repair. The pre-cutover backup is a forensic baseline, not a safe rollback target after V2 edits.

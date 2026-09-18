@@ -10,7 +10,7 @@ describe("V1 to V2 migration dry-run", () => {
   it("retains unknown fields, IDs, history tombstones and stable identities across export ordering", () => {
     const source = [{ ...memo("a"), extra: { nested: [1, "future", null] }, routineHistory: { day1: at.toISOString(), day2: null } }, { ...memo("b"), status: "completed" as const, completedAt: at }];
     const plan = planV1ToV2Migration(source, "fixture");
-    expect(plan).toMatchObject({ lostFieldCount: 0, memoCount: 2, categoryCount: 0, routineCount: 2, completedCount: 1, routineHistoryCount: 3, issues: [], unknownFields: [{ nodeId: "a", fields: ["extra"] }] });
+    expect(plan).toMatchObject({ lostFieldCount: 0, memoCount: 2, ideaCount: 0, categoryCount: 0, routineCount: 2, completedCount: 1, routineHistoryCount: 3, orphanCount: 0, unexpectedDataCount: 0, issues: [], unknownFields: [{ nodeId: "a", fields: ["extra"] }] });
     expect(plan.records.map(record => nodeFromV2Value(record.value))).toEqual(source);
     expect(planV1ToV2Migration([...source].reverse(), "fixture").records.reverse()).toEqual(plan.records);
   });

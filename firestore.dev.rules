@@ -57,7 +57,7 @@ service cloud.firestore {
 
     // Existing v1 client remains available only to the authenticated owner.
     match /users/{userId}/nodes/{nodeId} {
-      allow read: if ownsUser(userId);
+      allow read: if ownsUser(userId) && protocolAllowed(userId, 1);
       allow write: if ownsUser(userId) && protocolAllowed(userId, 1);
     }
     match /users/{userId}/externalAiAuditLogs/{logId} {

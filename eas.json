@@ -13,6 +13,14 @@
       "environment": "preview",
       "distribution": "internal"
     },
+    "v2-rc": {
+      "environment": "development",
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SYNC_V2_ENABLED": "true",
+        "EXPO_PUBLIC_RELEASE_CHANNEL": "v2-rc-20260919"
+      }
+    },
     "production": {
       "environment": "production"
     }

@@ -12,9 +12,15 @@ export type MigrationDryRun = {
   purgedCount: number;
   categoryCount: number;
   memoCount: number;
+  ideaCount: number;
   routineCount: number;
   completedCount: number;
   routineHistoryCount: number;
+  dueCount: number;
+  dayPartCount: number;
+  orphanCount: number;
+  unexpectedDataCount: number;
+  addedV2Metadata: string[];
   unknownFields: { nodeId: string; fields: string[] }[];
   changedFields: { nodeId: string; fields: string[] }[];
   lostFieldCount: number;
@@ -37,11 +43,15 @@ export function planV1ToV2Migration(nodes: Node[], migrationId: string): Migrati
   const unknownFields = nodes.map(node => ({ nodeId: node.id, fields: Object.keys(node).filter(key => !known.has(key)) })).filter(item => item.fields.length);
   const changedFields: MigrationDryRun["changedFields"] = [];
   let lostFieldCount = 0;
+  let unexpectedDataCount = 0;
   for (const node of nodes) {
     if (!node.id || !["memo", "category"].includes(node.type) || !node.sortKey || !(node.createdAt instanceof Date) || !Number.isFinite(node.createdAt.getTime()))
-      issues.push({ kind: "invalid-node", nodeId: node.id, detail: "Invalid identity/type/rank/date" });
+      { issues.push({ kind: "invalid-node", nodeId: node.id, detail: "Invalid identity/type/rank/date" }); unexpectedDataCount++; }
     const parent = nodes.find(item => item.id === node.parentId);
     if (parent && parent.type !== "category") issues.push({ kind: "orphan-parent", nodeId: node.id, detail: "Parent is not a Category" });
+    if (node.type === "memo" && (!["task", "idea"].includes(node.memoType ?? "task") || !["active", "completed"].includes(node.status) || typeof node.body !== "string" || typeof node.duePreset !== "string")) {
+      issues.push({ kind: "invalid-node", nodeId: node.id, detail: "Invalid Memo schema value" }); unexpectedDataCount++;
+    }
   }
   // IDs (not input array order or updatedAt) define deterministic migration identity.
   const records = nodes.map((node): VersionedNode => ({
@@ -65,9 +75,15 @@ export function planV1ToV2Migration(nodes: Node[], migrationId: string): Migrati
     purgedCount: nodes.filter((node) => Boolean(node.purgedAt)).length,
     categoryCount: nodes.filter(node => node.type === "category").length,
     memoCount: nodes.filter(node => node.type === "memo").length,
+    ideaCount: nodes.filter(node => node.type === "memo" && node.memoType === "idea").length,
     routineCount: nodes.filter(node => node.type === "memo" && Boolean(node.repeatRule)).length,
     completedCount: nodes.filter(node => node.type === "memo" && node.status === "completed").length,
     routineHistoryCount: nodes.reduce((sum, node) => sum + (node.type === "memo" ? Object.keys(node.routineHistory ?? {}).length : 0), 0),
+    dueCount: nodes.filter(node => node.type === "memo" && Boolean(node.dueAt)).length,
+    dayPartCount: nodes.filter(node => node.type === "memo" && ["morning", "afternoon"].includes(node.duePreset)).length,
+    orphanCount: issues.filter(issue => issue.kind === "orphan-parent").length,
+    unexpectedDataCount,
+    addedV2Metadata: ["revision", "lastOpId", "lastDeviceId", "lastLocalSeq", "operationType"],
     unknownFields, changedFields, lostFieldCount,
     records, issues,
   };

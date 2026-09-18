@@ -13,6 +13,7 @@ firebase-debug.log*
 firestore-debug.log*
 test-results/
 playwright-report/
+artifacts/private/
 expo-env.d.ts
 
 # Native

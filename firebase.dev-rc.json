@@ -1,0 +1,10 @@
+{
+  "firestore": { "rules": "firestore.dev.rules" },
+  "hosting": {
+    "site": "taskmemoapp-dev",
+    "public": "dist",
+    "ignore": ["firebase.dev-rc.json", "**/.*", "**/node_modules/**"],
+    "cleanUrls": true,
+    "rewrites": [{ "source": "**", "destination": "/index.html" }]
+  }
+}

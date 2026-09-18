@@ -48,6 +48,7 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     const owner = environment.authenticatedContext("owner").firestore();
     const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { id: "a" }, revision: 1, lastOpId: "device:1", lastDeviceId: "device", lastLocalSeq: 1, operationType: "create" } };
     await assertFails(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertFails(getDoc(doc(owner, "users/owner/nodes/legacy")));
     await assertSucceeds(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
     // The previous draft allowed this dual-write configuration. It violates cutover isolation.
     await environment.withSecurityRulesDisabled(async (context) => {
