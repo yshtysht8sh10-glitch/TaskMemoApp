@@ -33,6 +33,7 @@ type StoredHistoryEntry = {
   targets: HistoryTarget[];
   coalesceUntil?: string;
 };
+export type LegacyPinnedNoteCandidate = { body: string; updatedAt: string };
 type Envelope = {
   version: 2;
   deviceId: string;
@@ -42,7 +43,7 @@ type Envelope = {
   sync: { outbox: SyncOperation[]; seenOpIds: string[] };
   profile: {
     pinnedNote: { localBody: string; synced: VersionedPinnedNote | null; dirtySince: string | null; migrationPending: boolean; legacyUpdatedAt: string | null };
-    legacyPinnedNoteCandidates: { body: string; updatedAt: string }[];
+    legacyPinnedNoteCandidates: LegacyPinnedNoteCandidate[];
     features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
@@ -175,7 +176,8 @@ export class TaskMemoV2ApplicationStore {
         else if (!pinned.localBody || pinned.localBody === remote.value.body) nextPinned = { localBody: remote.value.body, synced: remote, dirtySince: null, migrationPending: false, legacyUpdatedAt: null };
         else {
           const updatedAt = pinned.legacyUpdatedAt ?? this.now().toISOString();
-          candidates = [...candidates, { body: pinned.localBody, updatedAt }];
+          const candidate = { body: pinned.localBody, updatedAt };
+          if (!candidates.some((item) => same(item, candidate))) candidates = [...candidates, candidate];
           nextPinned = { localBody: remote.value.body, synced: remote, dirtySince: null, migrationPending: false, legacyUpdatedAt: null };
         }
       } else if (remote) {
@@ -184,6 +186,23 @@ export class TaskMemoV2ApplicationStore {
       }
       const next = { ...this.envelope, profile: { ...profile, pinnedNote: nextPinned, legacyPinnedNoteCandidates: candidates } };
       if (!same(next, this.envelope)) await this.commit(next);
+    });
+  }
+
+  async importLegacyPinnedNoteCandidates(candidates: LegacyPinnedNoteCandidate[]) {
+    return this.serialize(async () => {
+      const merged = [...this.envelope.profile.legacyPinnedNoteCandidates];
+      for (const candidate of candidates) if (!merged.some((item) => same(item, candidate))) merged.push(candidate);
+      if (!same(merged, this.envelope.profile.legacyPinnedNoteCandidates))
+        await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, legacyPinnedNoteCandidates: merged } });
+    });
+  }
+
+  async discardLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    return this.serialize(async () => {
+      const candidates = this.envelope.profile.legacyPinnedNoteCandidates.filter((item) => !same(item, candidate));
+      if (candidates.length !== this.envelope.profile.legacyPinnedNoteCandidates.length)
+        await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, legacyPinnedNoteCandidates: candidates } });
     });
   }
 

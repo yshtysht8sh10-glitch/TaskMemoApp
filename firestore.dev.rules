@@ -24,6 +24,7 @@ service cloud.firestore {
     function validVersionedRecord(nodeId) {
       let record = request.resource.data.record;
       return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'record', 'serverUpdatedAt'])
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.schemaVersion == 2
         && record is map
@@ -40,6 +41,7 @@ service cloud.firestore {
     function validPinnedNoteRecord() {
       let record = request.resource.data.record;
       return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'record', 'serverUpdatedAt'])
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.schemaVersion == 2
         && record is map
@@ -55,6 +57,7 @@ service cloud.firestore {
     function validFeaturesRecord() {
       let record = request.resource.data.record;
       return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'record', 'serverUpdatedAt'])
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.schemaVersion == 2
         && record is map
@@ -72,6 +75,7 @@ service cloud.firestore {
       let operation = request.resource.data.operation;
       let acknowledgement = request.resource.data.acknowledgement;
       return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'operation', 'acknowledgement'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'producerType', 'operation', 'acknowledgement', 'serverReceivedAt'])
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.schemaVersion == 2
         && operation is map
@@ -146,6 +150,11 @@ service cloud.firestore {
       allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validOperation(opId);
       // Operation receipts are immutable; this preserves the opId idempotency boundary.
       allow update, delete: if false;
+    }
+    // Functions use Admin SDK and must validate gate, UID, request identity and
+    // revision inside their transaction. Client SDK access is never allowed.
+    match /users/{userId}/externalAiRequestsV2/{requestId} {
+      allow read, write: if false;
     }
 
     match /{document=**} {

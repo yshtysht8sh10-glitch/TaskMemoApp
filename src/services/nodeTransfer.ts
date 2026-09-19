@@ -5,13 +5,14 @@ import * as Sharing from 'expo-sharing';
 import type { Node } from '@/models/node';
 import { parseTaskMemoBackup, serializeTaskMemoBackup, type TaskMemoBackupSettings } from '@/services/nodeBackup';
 import type { PinnedNote } from '@/services/pinnedNoteStorage';
+import type { LegacyPinnedNoteCandidate } from '@/sync/taskMemoApplicationStore';
 
-export async function exportNodesToFile(nodes: Node[], pinnedNote: PinnedNote, settings: TaskMemoBackupSettings) {
+export async function exportNodesToFile(nodes: Node[], pinnedNote: PinnedNote, settings: TaskMemoBackupSettings, legacyPinnedNoteCandidates: LegacyPinnedNoteCandidate[] = []) {
   if (!(await Sharing.isAvailableAsync())) throw new Error('この端末ではファイル共有を利用できません。');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const file = new File(Paths.cache, `taskmemo-backup-${stamp}.json`);
   file.create();
-  file.write(serializeTaskMemoBackup(nodes, pinnedNote, settings));
+  file.write(serializeTaskMemoBackup(nodes, pinnedNote, settings, new Date(), legacyPinnedNoteCandidates));
   await Sharing.shareAsync(file.uri, { mimeType: 'application/json', UTI: 'public.json', dialogTitle: 'TaskMemoデータを書き出す' });
 }
 

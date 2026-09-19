@@ -40,8 +40,11 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await assertSucceeds(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
     await assertFails(getDoc(doc(other, "users/owner/nodesV2/a")));
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/spoof"), { ...valid, ownerUid: "other" }));
+    await assertFails(setDoc(doc(owner, "users/owner/nodesV2/extra"), { ...valid, unexpected: true }));
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), { ...valid, record: { ...valid.record, revision: 0 } }));
     await assertFails(setDoc(doc(owner, "users/owner/syncOperationsV2/wrong"), { ownerUid: "owner", schemaVersion: 2, operation: { opId: "different" }, acknowledgement: { opId: "different" } }));
+    await assertFails(getDoc(doc(owner, "users/owner/externalAiRequestsV2/request-a")));
+    await assertFails(setDoc(doc(owner, "users/owner/externalAiRequestsV2/request-a"), { ownerUid: "owner" }));
   });
 
   it("isolates and validates the separate pinned-note profile resource", async () => {
@@ -86,11 +89,13 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
       await setDoc(doc(context.firestore(), "users/owner/syncMetadataV2/compatibility"), { ...v2Gate, minimumSyncProtocol: 1, v1WritesAllowed: true, v2Enabled: false });
     });
     await assertSucceeds(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertSucceeds(getDoc(doc(owner, "users/owner/nodes/legacy")));
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
     await environment.withSecurityRulesDisabled(async context => {
       await setDoc(doc(context.firestore(), "syncControl/current"), { schemaVersion: 1, writesEnabled: false });
     });
     await assertFails(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
+    await assertFails(getDoc(doc(owner, "users/owner/nodes/legacy")));
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
     const missing = environment.authenticatedContext("missing-marker").firestore();
     await assertFails(setDoc(doc(missing, "users/missing-marker/nodes/legacy"), { id: "legacy" }));

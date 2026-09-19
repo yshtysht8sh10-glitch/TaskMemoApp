@@ -217,6 +217,24 @@ describe("TaskMemo V2 application store", () => {
     expect(store.outbox).toHaveLength(0);
   });
 
+  it("keeps recovery candidates until explicit discard and round-trips imported candidates", async () => {
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, [], {
+      deviceId: "device-a", now: () => at(2), initialPinnedNote: { body: "local legacy", updatedAt: at(1) },
+    });
+    const remote = { value: { body: "cloud" }, revision: 1, lastOpId: "remote:1", lastDeviceId: "remote", lastLocalSeq: 1 };
+    await store.initializePinnedNote(remote);
+    const candidate = store.legacyPinnedNoteCandidates[0];
+    await store.receivePinnedNote({ ...remote, revision: 2, lastOpId: "remote:2", value: { body: "local legacy" } });
+    expect(store.legacyPinnedNoteCandidates).toEqual([candidate]);
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
+    expect(store.legacyPinnedNoteCandidates).toEqual([candidate]);
+    await store.importLegacyPinnedNoteCandidates([candidate, { body: "imported", updatedAt: at(3).toISOString() }]);
+    expect(store.legacyPinnedNoteCandidates).toHaveLength(2);
+    await store.discardLegacyPinnedNoteCandidate(candidate);
+    expect(store.legacyPinnedNoteCandidates).toEqual([{ body: "imported", updatedAt: at(3).toISOString() }]);
+  });
+
   it("keeps self echo and duplicate pinned-note delivery idempotent and resolves concurrent edits deterministically", async () => {
     const self = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-self", now: () => at(1) });
     await self.setPinnedNoteDraft("self", at(2)); await self.queuePinnedNoteOperation(at(2));

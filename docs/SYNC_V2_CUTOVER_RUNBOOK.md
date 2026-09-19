@@ -14,6 +14,12 @@ At every step print and independently compare the project ID. STOP on any mismat
 
 ## Rehearsed pre-cutover sequence
 
+### Production client V2 selection contract
+
+- An ordinary production build without `EXPO_PUBLIC_SYNC_V2_ENABLED=true` remains V1.
+- A reviewed V2-capable production build requires the exact flag plus a valid production Firebase configuration. It then stays on the V2 path and calls `connect()`; it does not fall back to V1 if connection fails.
+- Before any V2 read/write, `syncControl/current` must be schema 1 with `writesEnabled=true`, and the user gate must be schema 1 with `minimumSyncProtocol=2`, `v1WritesAllowed=false`, `v2Enabled=true`. Missing/malformed/dual-write/newer gates fail closed.
+
 ### 1. Read-only source snapshot
 
 - Command: `npm run migration:production-read-only -- <private-output.json> read-only:taskmemoapp-eabc3`, with a short-lived OAuth token supplied only through the process environment.
@@ -49,6 +55,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Validation: automated Rules assertions and adapter upload. Formal post-cleanup 2026-09-19 timings: migration 222.90 ms, validation 60.12 ms, gate 27.41 ms, freeze window 708.52 ms.
 - STOP: any source issue in a formal rehearsal, partial migration, equality failure, old-client access, or V2 smoke failure. The orphan-preservation switch is diagnostic only and cannot produce cutover approval.
 - Rollback: while frozen, remove only records proven to belong to that rehearsal migration. For production, preserve the post-freeze export and never infer ownership by timestamp alone.
+- Legacy pinned-note recovery: inspect every V2 client for unresolved candidates. The formal rehearsal reports `USER_ACTION_REQUIRED` and stops when supplied candidate inventory is non-empty. The user must compare and explicitly adopt or discard; adopting emits a normal pinned-note V2 operation. Never auto-merge or delete candidates at cutover.
 
 ### External AI phase policy
 
@@ -80,6 +87,17 @@ FunctionsをV2対応版へ切り替えること自体もcutover操作である�
 - Validation: two authenticated protocol probes plus a fresh post-freeze export/hash.
 - STOP: either write succeeds, snapshot differs unexpectedly, or maintenance state is uncertain.
 - Rollback: restore the previous control only if no migration write occurred; otherwise remain frozen.
+
+### Rules deployment order
+
+1. While the existing broad production Rules remain active, create `syncControl/current` and a V1 gate for every in-scope user (`minimumSyncProtocol=1`, `v1WritesAllowed=true`, `v2Enabled=false`, writes enabled).
+2. Verify current V1 clients still read/write, then deploy the separately reviewed strict artifact with `--config firebase.cutover.json --only firestore:rules`. This repository preparation does not authorize that deploy.
+3. Set `writesEnabled=false`. Under strict Rules both V1 and V2 client reads/writes stop; Admin migration remains responsible for its own project/manifest validation.
+4. Migrate and validate while frozen. Switch each validated user gate atomically to V2-only, deploy the reviewed V2 client/Functions artifacts in the documented order, then set `writesEnabled=true`.
+5. Prove V1 read/listen/write rejection and V2 gate acceptance before observation begins.
+6. Before any migration write, rollback Rules may return to the prior artifact and V1 gates. After migration writes, remain frozen and follow audited reconciliation; after V2 edits, never restore V1 over V2.
+
+Client access to `externalAiRequestsV2` is denied explicitly. External-AI Functions use Admin SDK and must enforce global/user gates, UID/request identity, revision and idempotency inside their transaction; Rules do not validate Admin SDK calls.
 
 ### 7. Production migration and Rules
 

@@ -1,10 +1,11 @@
 import type { Node } from '@/models/node';
 import { parseTaskMemoBackup, serializeTaskMemoBackup, type TaskMemoBackupData, type TaskMemoBackupSettings } from '@/services/nodeBackup';
 import type { PinnedNote } from '@/services/pinnedNoteStorage';
+import type { LegacyPinnedNoteCandidate } from '@/sync/taskMemoApplicationStore';
 
-export async function exportNodesToFile(nodes: Node[], pinnedNote: PinnedNote, settings: TaskMemoBackupSettings) {
+export async function exportNodesToFile(nodes: Node[], pinnedNote: PinnedNote, settings: TaskMemoBackupSettings, legacyPinnedNoteCandidates: LegacyPinnedNoteCandidate[] = []) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const blob = new Blob([serializeTaskMemoBackup(nodes, pinnedNote, settings)], { type: 'application/json' });
+  const blob = new Blob([serializeTaskMemoBackup(nodes, pinnedNote, settings, new Date(), legacyPinnedNoteCandidates)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

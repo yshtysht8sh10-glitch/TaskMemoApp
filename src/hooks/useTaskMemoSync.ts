@@ -8,7 +8,7 @@ import { getFirebaseClient } from "../services/firebaseClient";
 import { firebaseConfiguration } from "../services/firebaseConfig";
 import { TaskMemoV2ApplicationJournal } from "../sync/applicationStorage";
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
-import { TaskMemoV2ApplicationStore } from "../sync/taskMemoApplicationStore";
+import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -30,6 +30,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const [error, setError] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(!configured);
   const [networkPaused, setNetworkPaused] = useState(false);
+  const [legacyPinnedNoteCandidates, setLegacyPinnedNoteCandidates] = useState<LegacyPinnedNoteCandidate[]>([]);
   const onHistoryRef = useRef(onHistory);
   useEffect(() => { onHistoryRef.current = onHistory; }, [onHistory]);
   const onPinnedNoteRef = useRef(onPinnedNote);
@@ -40,6 +41,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   useEffect(() => { onIdeasEnabledRef.current = onIdeasEnabled; }, [onIdeasEnabled]);
   const publishedPinnedNoteRef = useRef(initialPinnedNote.body);
   const publishedIdeasEnabledRef = useRef(initialIdeasEnabled);
+  const publishedCandidatesRef = useRef("[]");
   const storeRef = useRef<TaskMemoV2ApplicationStore | null>(null);
   const controllerRef = useRef<TaskMemoV2SyncController | null>(null);
   const initialPinnedBody = initialPinnedNote.body;
@@ -68,6 +70,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       publishedIdeasEnabledRef.current = store.ideasEnabled;
       onIdeasEnabledRef.current(store.ideasEnabled);
     }
+    if (store) {
+      const candidates = store.legacyPinnedNoteCandidates;
+      const fingerprint = JSON.stringify(candidates);
+      if (fingerprint !== publishedCandidatesRef.current) {
+        publishedCandidatesRef.current = fingerprint;
+        setLegacyPinnedNoteCandidates(candidates);
+      }
+    }
     if (controller) setStatus(controller.state.phase);
   };
 
@@ -78,6 +88,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
       const currentGeneration = ++generation;
       controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
+      publishedCandidatesRef.current = "[]"; setLegacyPinnedNoteCandidates([]);
       onHistoryRef.current(createNodeHistory([]));
       setUser(nextUser); setAuthReady(true); setError(null);
       if (!nextUser) { setStatus("signed-out"); return; }
@@ -87,7 +98,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         const store = await TaskMemoV2ApplicationStore.open(new TaskMemoV2ApplicationJournal(`${db.app.options.projectId}/${nextUser.uid}`), [], { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current });
         if (currentGeneration !== generation) return;
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
-        const controller = new TaskMemoV2SyncController(store, createFirebaseSyncAdapter(db, nextUser.uid, emulator ? "test" : "development", { emulator }), publish);
+        const adapterEnvironment = emulator ? "test" : firebase.environment === "production" ? "production" : "development";
+        const controller = new TaskMemoV2SyncController(store, createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator }), publish);
         storeRef.current = store; controllerRef.current = controller; publish(); await controller.start(); publish();
       } catch (reason) { if (currentGeneration === generation) { setStatus("error"); setError(message(reason)); } }
     });
@@ -101,7 +113,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       removeOnlineListener();
     };
-  }, [configured, ready]);
+  }, [configured, ready, firebase.environment]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
@@ -126,11 +138,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         publish();
       },
     } : undefined,
-    configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp,
+    configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, legacyPinnedNoteCandidates,
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),
     updatePinnedNote: (body: string) => run((controller) => controller.updatePinnedNote(body)),
     updateIdeasEnabled: (value: boolean, type: "update" | "import" = "update") => run((controller) => controller.updateIdeasEnabled(value, type)),
+    adoptLegacyPinnedNoteCandidate: (candidate: LegacyPinnedNoteCandidate) => run((controller) => controller.adoptLegacyPinnedNoteCandidate(candidate)),
+    discardLegacyPinnedNoteCandidate: (candidate: LegacyPinnedNoteCandidate) => run((controller) => controller.discardLegacyPinnedNoteCandidate(candidate)),
+    importLegacyPinnedNoteCandidates: (candidates: LegacyPinnedNoteCandidate[]) => run((controller) => controller.importLegacyPinnedNoteCandidates(candidates)),
     undo: () => run((controller) => controller.undo()), redo: () => run((controller) => controller.redo()),
   };
 }
@@ -144,5 +159,5 @@ export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory:
     onHistory({ ...next, nodes: normalizeLegacyRanks(next.nodes) });
   }, !useV2);
   const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2, initialPinnedNote, onPinnedNote, initialIdeasEnabled, onIdeasEnabled);
-  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, updatePinnedNote: () => false, updateIdeasEnabled: () => false, undo: () => false, redo: () => false };
+  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, legacyPinnedNoteCandidates: [] as LegacyPinnedNoteCandidate[], command: () => false, updatePinnedNote: () => false, updateIdeasEnabled: () => false, adoptLegacyPinnedNoteCandidate: () => false, discardLegacyPinnedNoteCandidate: () => false, importLegacyPinnedNoteCandidates: () => false, undo: () => false, redo: () => false };
 }

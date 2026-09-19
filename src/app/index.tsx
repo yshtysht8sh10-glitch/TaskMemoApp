@@ -482,7 +482,7 @@ export default function HomeScreen() {
         reminders,
         theme: mode,
         features: { ideasEnabled },
-      });
+      }, sync.legacyPinnedNoteCandidates);
     } catch (error) {
       appAlert(
         "書き出しエラー",
@@ -496,6 +496,8 @@ export default function HomeScreen() {
     try {
       const imported = await pickAndParseNodeBackup();
       if (!imported) return;
+      if (imported.legacyPinnedNoteCandidates.length && sync.protocol !== 2)
+        throw new Error("常設メモの回復候補を保持するにはV2同期環境で読み込んでください。");
       appAlert(
         "データを読み込む",
         `現在のデータを、選択した${imported.nodes.length}件のNodeで置き換えます。先に書き出しておくことを推奨します。`,
@@ -519,6 +521,8 @@ export default function HomeScreen() {
                   setPinnedNoteUpdatedAt(imported.pinnedNote.updatedAt);
                   changePinnedNote(imported.pinnedNote.body);
                 }
+                if (imported.legacyPinnedNoteCandidates.length)
+                  sync.importLegacyPinnedNoteCandidates(imported.legacyPinnedNoteCandidates);
                 if (imported.settings) {
                   const settings = imported.settings;
                   setVisibleGroupIds(new Set(settings.listDisplay.visibleGroupIds));
@@ -1269,6 +1273,27 @@ export default function HomeScreen() {
             <SettingsButton label="データを読み込む" onPress={importData} />
           </View>
         </SettingsSection>
+        {sync.legacyPinnedNoteCandidates.length > 0 && (
+          <SettingsSection title="常設メモの回復候補">
+            <Text style={styles.settingHelp}>旧端末にだけ残っていた内容です。現在の常設メモと比較し、採用または明示的に破棄してください。候補は自動削除されません。</Text>
+            {sync.legacyPinnedNoteCandidates.map((candidate, index) => (
+              <SettingsLink
+                key={`${candidate.updatedAt}-${index}`}
+                label={`回復候補 ${index + 1}`}
+                value={candidate.body.slice(0, 24) || "（空）"}
+                onPress={() => appAlert(
+                  "常設メモの回復候補",
+                  `現在:\n${pinnedNote || "（空）"}\n\n候補:\n${candidate.body || "（空）"}\n\n候補保存日時: ${candidate.updatedAt}`,
+                  [
+                    { text: "キャンセル", style: "cancel" },
+                    { text: "候補を破棄", style: "destructive", onPress: () => sync.discardLegacyPinnedNoteCandidate(candidate) },
+                    { text: "候補を採用", onPress: () => sync.adoptLegacyPinnedNoteCandidate(candidate) },
+                  ],
+                )}
+              />
+            ))}
+          </SettingsSection>
+        )}
       </Sheet>
       <Sheet
         visible={syncOpen}

@@ -41,7 +41,7 @@ mkdirSync(dirname(backup), { recursive: true });
 const backupStarted = performance.now();
 copyFileSync(input, backup, constants.COPYFILE_EXCL);
 const backupMs = elapsed(backupStarted);
-const source = JSON.parse(readFileSync(backup, "utf8")) as { projectId: string; documentCount: number; nodes: { uid: string; node: Record<string, unknown> }[] };
+const source = JSON.parse(readFileSync(backup, "utf8")) as { projectId: string; documentCount: number; nodes: { uid: string; node: Record<string, unknown> }[]; legacyPinnedNoteCandidates?: { body: string; updatedAt: string }[] };
 if (source.projectId !== "taskmemoapp-eabc3" || source.documentCount !== source.nodes.length) throw new Error("Backup source identity/count mismatch.");
 const users = [...new Set(source.nodes.map(item => item.uid))];
 const environment = await initializeTestEnvironment({ projectId: PROJECT, firestore: { host: "127.0.0.1", port: 8280 } });
@@ -83,7 +83,11 @@ const plans = users.map(uid => ({ uid, plan: planV1ToV2Migration(source.nodes.fi
     if (typeof node[key] === "string") node[key] = new Date(node[key] as string);
   return node as Node;
 }), migrationId) }));
-const sourceIssues = plans.flatMap(item => item.plan.issues);
+const legacyCandidateCount = source.legacyPinnedNoteCandidates?.length ?? 0;
+const sourceIssues = [
+  ...plans.flatMap(item => item.plan.issues),
+  ...(legacyCandidateCount ? [{ kind: "legacy-pinned-note-candidate", nodeId: "profile", detail: `${legacyCandidateCount} unresolved candidate(s) require explicit user action.` }] : []),
+];
 if (validationMustPass && sourceIssues.length) throw new Error(`Formal rehearsal stopped on ${sourceIssues.length} source validation issue(s).`);
 const migrationStarted = performance.now();
 await environment.withSecurityRulesDisabled(async context => {
@@ -132,6 +136,7 @@ const report = {
   counts: { backup: source.documentCount, restored: restoredCount, migrated: plans.reduce((sum, item) => sum + item.plan.outputCount, 0) },
   equality: { documentIdsFieldsValuesNestedTombstonesUnknownFields: true, migrationSemanticChanges: plans.reduce((sum, item) => sum + item.plan.changedFields.length, 0), lostFields: plans.reduce((sum, item) => sum + item.plan.lostFieldCount, 0) },
   sourceIssues, oldClient: { readRejected: true, writeRejected: true, tombstoneResurrectionRejected: Boolean(purged) }, v2SmokeApplied: true,
+  legacyPinnedNoteRecovery: { candidateCount: legacyCandidateCount, status: legacyCandidateCount ? "USER_ACTION_REQUIRED" : "CLEAR" },
   timingMs: { backup: backupMs, restore: restoreMs, restoreValidation: restoreValidationMs, migration: migrationMs, migrationValidation: migrationValidationMs, gate: gateMs, writeFreezeDiagnosticWindow: freezeMs, total: elapsed(started) },
 };
 mkdirSync(dirname(reportPath), { recursive: true });

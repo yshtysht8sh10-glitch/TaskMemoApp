@@ -5,8 +5,9 @@ import { createFirebaseSyncAdapter } from "./firebaseSyncAdapter";
 const firestore = (projectId: string) => ({ app: { options: { projectId } } });
 
 describe("Firebase V2 adapter environment boundary", () => {
-  it("refuses production even with the production project", () => {
-    expect(() => createFirebaseSyncAdapter(firestore("taskmemoapp-eabc3") as never, "uid", "production")).toThrow("disabled");
+  it("allows production only with the exact production project", () => {
+    expect(() => createFirebaseSyncAdapter(firestore("taskmemoapp-eabc3") as never, "uid", "production")).not.toThrow();
+    expect(() => createFirebaseSyncAdapter(firestore("taskmemoapp-dev") as never, "uid", "production")).toThrow("disabled");
   });
 
   it("refuses a production project from development", () => {

@@ -163,7 +163,7 @@ This table records current behavior, not desired behavior. `Cloud Sync ○` for 
 | Soft-delete state | Node fields | ○ | ○ | ○ | ○ | Content lifecycle | Restorable |
 | Purge tombstone | Node fields | ○ | △ | ○ | ○ | Content lifecycle | Single purge omits history; batch path currently records a history entry |
 | Pinned note | Legacy key + V2 envelope + `profileV2` | ○ | ○ | ○ | ○ | User content | V2 has WAL, History, outbox, revision, echo handling |
-| Legacy pinned-note candidates | V2 envelope only | × | ― | × | × | Recovery content | Preserved locally but has no user-facing recovery/export path |
+| Legacy pinned-note candidates | V2 envelope only | × | ― | ○ | ○ | Recovery content | Settings UI supports compare/adopt/discard; schema 4 preserves unresolved candidates |
 | List display preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | Four settings share one record |
 | Tree display preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | `showCompletedMemos` |
 | Reminder preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | OS permission and scheduled notifications are separate |
@@ -183,12 +183,12 @@ This table records current behavior, not desired behavior. `Cloud Sync ○` for 
 
 The UI uses `serializeTaskMemoBackup` and `parseTaskMemoBackup` in [`nodeBackup.ts`](../src/services/nodeBackup.ts).
 
-- Current export `schemaVersion`: `3`
-- Schema 3 separates `content` (all Nodes and `{ body, updatedAt }` pinnedNote) from validated `settings` (list/tree display, reminders, theme, features).
+- Current export `schemaVersion`: `4`
+- Schema 4 extends schema 3 with validated `content.legacyPinnedNoteCandidates`; candidates remain local recovery data and are not Cloud Sync resources.
 - Deleted and purged Node records remain in the exported Node array.
-- Schema 3 import restores Nodes, pinnedNote and settings. Settings are persisted with one AsyncStorage `multiSet` batch; under V2, imported `ideasEnabled` additionally becomes a normal profile operation, while every other setting stays local-only.
-- Schemas 1 and 2 remain import-compatible. Missing pinnedNote/settings are represented as absent and leave the importing device's current values unchanged.
-- Recovery candidates, History, WAL, outbox, revision, device identity, authentication, Firebase internals and audit records are not exported.
+- Schema 4 import restores Nodes, pinnedNote, settings and unresolved recovery candidates. Schema 3 remains compatible with an empty candidate list. Under V2, imported `ideasEnabled` additionally becomes a normal profile operation, while every other setting stays local-only.
+- Schemas 1 and 2 remain import-compatible. Missing pinnedNote/settings/candidates are represented as absent or empty and leave current settings unchanged.
+- History, WAL, outbox, revision, device identity, authentication, Firebase internals and audit records are not exported. Unresolved pinned-note recovery candidates are exported by schema 4.
 
 ## Target matrix
 
@@ -203,7 +203,7 @@ This table is a proposal and does not claim implementation.
 | Soft-delete state | V2 content state | ○ | ○ | ○ | ○ | User-wide | Keep current behavior |
 | Purge tombstone | V2 content state | ○ | ― | ○ | ○ | User-wide | Define permanent deletion as non-Undoable consistently |
 | Pinned note | V2 profile state | ○ | ○ | ○ | ○ | User-wide | Keep current behavior |
-| Unresolved pinned-note candidate | Recovery archive or explicit resolution state | △ | ― | ○ | ○ | Decision required | Either synchronize recovery archive or keep it device-local until resolved |
+| Unresolved pinned-note candidate | V2 local recovery state + backup | × | ― | ○ | ○ | Device recovery | Keep device-local; explicit user resolution only |
 | `ideasEnabled` | V2 user preference | ○ | × | ○ | ○ | User-wide | Feature meaning should follow the account |
 | List display preferences | Local preferences | × | × | ○ | ○ | Device-specific | PC/mobile layouts may differ |
 | Tree display preferences | Local preferences | × | × | ○ | ○ | Device-specific | Restore on the importing device |
@@ -221,7 +221,7 @@ The facts below describe the current implementation. The recommendations are sep
 
 ### 1. Persistent preferences Export/Import — resolved
 
-**Current fact:** schema 3 includes validated list/tree display, reminder, theme and feature preferences. Import applies list/tree display, reminder and theme only to the importing device; imported `ideasEnabled` participates in its separately defined V2 Cloud Sync. Schemas 1/2 preserve current device settings because those schemas have no settings section.
+**Current fact:** schema 4 retains schema 3's validated list/tree display, reminder, theme and feature preferences and adds recovery candidates. Import applies list/tree display, reminder and theme only to the importing device; imported `ideasEnabled` participates in its separately defined V2 Cloud Sync. Schemas 1/2 preserve current device settings because those schemas have no settings section.
 
 ### 2. `ideasEnabled` Cloud Sync — resolved
 
@@ -229,11 +229,11 @@ The facts below describe the current implementation. The recommendations are sep
 
 Initial migration is deterministic: an existing Cloud record is authoritative; when no Cloud record exists, legacy `true` is promoted and legacy `false`/default emits no write. This prevents an arbitrary first OFF/default device from erasing an existing ON preference.
 
-### 3. `legacyPinnedNoteCandidates` have no recovery workflow
+### 3. `legacyPinnedNoteCandidates` recovery — resolved
 
-**Current fact:** conflicting pre-V2 local text is preserved inside the local V2 envelope, but is not shown, synchronized, exported, or imported.
+**Current fact:** conflicting pre-V2 local text is preserved inside the local V2 envelope and exposed in Settings for side-by-side comparison. A user can adopt it through the normal pinned-note V2 operation or explicitly discard it. Unresolved candidates are included in schema 4 Export/Import and are never automatically merged, overwritten, timestamp-selected, synchronized, or deleted.
 
-**Target proposal:** decide between an explicit recovery UI/archive and a device-local resolution workflow. Until resolved, Export must not silently omit the only retained copy.
+**Cleanup rule:** only explicit adoption or discard removes a candidate. Production cutover alone is not a cleanup condition.
 
 ### 4. Purge Undo rules are inconsistent
 

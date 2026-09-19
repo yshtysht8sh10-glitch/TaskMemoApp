@@ -1,6 +1,6 @@
 import { initialSyncState, transitionSyncState } from "./stateMachine";
 import type { SyncAdapter, SyncFailureKind, SyncOperationType, SyncState } from "./types";
-import type { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
+import type { LegacyPinnedNoteCandidate, TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import type { Node } from "../models/node";
 
 const classify = (reason: unknown): { kind: SyncFailureKind; message: string } => {
@@ -96,6 +96,26 @@ export class TaskMemoV2SyncController {
       this.pinnedNoteTimer = undefined;
       void this.store.queuePinnedNoteOperation().then(() => this.flush()).then(() => this.onChange());
     }, debounceMs);
+  }
+
+  async adoptLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    await this.store.setPinnedNoteDraft(candidate.body);
+    await this.store.discardLegacyPinnedNoteCandidate(candidate);
+    await this.store.queuePinnedNoteOperation();
+    this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
+    this.onChange();
+    await this.flush();
+    this.onChange();
+  }
+
+  async discardLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    await this.store.discardLegacyPinnedNoteCandidate(candidate);
+    this.onChange();
+  }
+
+  async importLegacyPinnedNoteCandidates(candidates: LegacyPinnedNoteCandidate[]) {
+    await this.store.importLegacyPinnedNoteCandidates(candidates);
+    this.onChange();
   }
 
   async updateIdeasEnabled(value: boolean, type: SyncOperationType = "update") {

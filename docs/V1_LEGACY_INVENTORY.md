@@ -21,10 +21,10 @@ An item may have multiple classifications.
 
 ## Executive findings
 
-1. Production is still a real V1 runtime. `isV2SyncEnabled` returns true only for `development`, so a production build always selects `useFirebaseSync` and `users/{uid}/nodes`, regardless of `EXPO_PUBLIC_SYNC_V2_ENABLED`.
+1. Production remains V1 by default. A production build selects V2 only with the exact explicit flag; the server gate is then mandatory and failures remain on the V2 fail-closed path.
 2. There is no “V2 request failed, then write V1 Cloud” branch. Once `useV2` is true, V1 Firebase sync is disabled and V2 commands refuse to mutate through the V1 route while initialization is unavailable.
 3. A missing/invalid Firebase configuration makes `useV2` false. This gives a local-only V1-shaped AsyncStorage runtime, not a V1 Cloud write. It can nevertheless create a separate local state after cutover and needs an explicit product decision.
-4. Production `firestore.rules` is still the broad owner-only V1-era rule (`users/{uid}/**`). It does not implement freeze/protocol/resource validation. `firestore.dev.rules` contains the V2 gate and is used only by dev RC/emulators. A separately reviewed production Rules transition is mandatory.
+4. The currently deployed/default `firestore.rules` remains the broad V1-era rule. A strict, tested cutover artifact is prepared through `firebase.cutover.json` → `firestore.dev.rules`; it must be deployed only after explicit V1 gates/control are provisioned.
 5. The Node migration planner and formal Emulator rehearsal still pass on latest HEAD for 120 production-derived V1 Nodes. They cover Nodes, tombstones, field equality, V1 rejection and one V2 Node smoke operation. They do **not** yet constitute complete latest-schema cutover evidence for `profileV2/pinnedNote`, `profileV2/features`, external-AI Functions, or a production client that can select V2.
 6. There is no general executable V2-to-V1 rollback. The runbook correctly prohibits restoring an old V1 snapshot after V2 edits; recovery is freeze + preserve V2 + audited forward repair.
 
@@ -61,7 +61,7 @@ Authentication is Firebase Auth state, not a Firestore path. Dev verification an
 | Key | Content | Readers / writers | Generation | Export / Import | Cloud Sync | Migration / rollback | Runtime status | Removal |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `@taskmemo/nodes/v1` | V1 local Node array | `loadNodes`; `saveNodes`, `resetNodes`; UI only when protocol 1 | V1 | Nodes are exported/imported, but not by copying the key | V1 Nodes sync via Firestore `nodes` | Local recovery source; production Cloud migration reads Firestore instead | Active in production and local-only fallback; bypassed by V2 UI | Keep through migration and rollback window (A,B,C,E,F) |
-| `@taskmemo/profile/pinned-note/v1` | `{body, updatedAt}` | `loadPinnedNote`, `savePinnedNote`; V2 also uses it as initial migration source/cache | Common/legacy bridge | Yes in schema 2/3; import invokes normal V2 behavior | `profileV2/pinnedNote` under V2 | Required to rescue device-local pre-V2 notes | Active on V1 and V2 | Keep until all relevant devices migrate and candidates are resolved (A,C,D,E,F) |
+| `@taskmemo/profile/pinned-note/v1` | `{body, updatedAt}` | `loadPinnedNote`, `savePinnedNote`; V2 also uses it as initial migration source/cache | Common/legacy bridge | Yes in schema 2/3/4; import invokes normal V2 behavior | `profileV2/pinnedNote` under V2 | Required to rescue device-local pre-V2 notes | Active on V1 and V2 | Keep until all relevant devices migrate and candidates are resolved (A,C,D,E,F) |
 | `@taskmemo/view/list-display/v1` | List UI preferences | preference service and atomic settings import | Common | Yes / Yes | No | Backup restore only | Active | Keep (E) |
 | `@taskmemo/view/tree-display/v1` | Tree UI preferences | preference service and atomic settings import | Common | Yes / Yes | No | Backup restore only | Active | Keep (E) |
 | `@taskmemo/settings/reminders/v1` | Reminder preferences | preference service and atomic settings import | Common | Yes / Yes | No | Backup restore only | Active | Keep (E) |
@@ -84,7 +84,7 @@ The list matches `DATA_MANAGEMENT_MATRIX.md`. No key deletion or migration was p
 | V1 Firestore upload | Yes, debounced batch writes to `users/{uid}/nodes` | Same, after initial merge/listener readiness | Yes; this is the current production writer | A, D, E, F |
 | V1 local persistence | Yes | protocol 1, including Firebase-disabled local-only operation | Yes | B, C, E, F |
 | V1 `updatedAt` merge/codecs | Yes | V1 Cloud listener/read/write | Yes | A, C, D, E, F |
-| V2 runtime | Yes | development + exact flag `true` + valid dev Firebase config | No in production: hard-disabled by `isV2SyncEnabled` | E now in dev; production enablement is BLOCKER |
+| V2 runtime | Yes | development/production + exact flag `true` + matching Firebase project; server gate then validates V2-only phase | Production-capable but remains V1 with current unset/false flag | E; repository blocker resolved |
 | Compatibility gate | Yes for V2 app/Functions/dev Rules | V2 connect/write | Not enforced by current production Rules/V1 client | A, B, D |
 
 ### Fallback conclusion
@@ -106,8 +106,8 @@ Two adjacent risks remain:
 - **Cleanup:** none.
 - **Normal startup:** the field is loaded/preserved every V2 start, but candidate creation runs only during initial migration.
 - **Migration value:** necessary for safe per-device pinned-note migration because production V1 pinned notes are device-local and cannot be included in the Firestore Node snapshot.
-- **Current gap:** it preserves bytes but provides no user-visible recovery/export path. AsyncStorage/site-data loss can therefore destroy the only retained candidate.
-- **Classification:** **NEEDS DECISION** (A, C, H), not REMOVE NOW. Keep through production cutover. Before cutover, decide and test a recovery/export/resolution policy; only resolved candidates may become REMOVE AFTER CUTOVER.
+- **Recovery:** Settings shows current/candidate content. Explicit adoption uses the normal V2 pinned-note operation; explicit discard removes only the selected candidate. Schema 4 Export/Import preserves unresolved candidates.
+- **Classification:** **KEEP UNTIL RESOLVED** (A, C, E). It is never auto-merged or removed by cutover.
 
 ## Backward compatibility and legacy transformations
 
@@ -116,6 +116,7 @@ Two adjacent risks remain:
 | Backup schema 1 | Nodes only; missing `memoType` becomes Task | D/C; retain for a documented import support window |
 | Backup schema 2 | Nodes + pinned note | D/C; retain for support window |
 | Backup schema 3 | Current content + pinned note + settings; imported `ideasEnabled` becomes V2 operation | E |
+| Backup schema 4 | Schema 3 content plus unresolved pinned-note recovery candidates | E |
 | Legacy Memo without `memoType` | Decoded as Task in local storage, Firestore V1 codec and backup parser | C/D; retain through migration/support window |
 | Legacy invalid/duplicate sort keys | Normalized at V1 local load, migration planning and V2 authoritative ingestion/repair | A/C/D; retain until all migrated data is validated |
 | Legacy Routine Categories | `ensureRoutineCategories` migrates old routine-category representation into repeat rules/tombstones | A/C/D; retain through migration and old backup support |
@@ -154,11 +155,11 @@ There is no general rollback script that converts versioned V2 state, profiles a
 
 ## Cutover priority
 
-### BLOCKER
+### BLOCKER — repository implementation resolved; deployment not authorized
 
-- Production cannot select V2 at this commit (`isV2SyncEnabled` is development-only).
-- Production Rules are still `firestore.rules`, an owner wildcard without V2 gate/freeze/resource validation. Cutover cannot safely rely on `firestore.dev.rules` unless a production-specific reviewed Rules artifact/deployment sequence is prepared.
-- `legacyPinnedNoteCandidates` has no usable recovery/export/resolution path. A differing device-local pinned note can be preserved but remain inaccessible and can be lost with local storage.
+- Production V2 selection is now explicit-flag capable and fail-closed on server-gate failure; default production remains V1.
+- `firebase.cutover.json` now identifies the strict tested Rules artifact without changing/deploying current production Rules.
+- Recovery candidates now have compare/adopt/discard UI and schema 4 backup coverage.
 
 ### MUST BEFORE CUTOVER
 
@@ -174,7 +175,7 @@ There is no general rollback script that converts versioned V2 state, profiles a
 - Remove V1 runtime, codec and `@taskmemo/nodes/v1` only after the observation/rollback window closes and all supported clients are rejected/migrated.
 - Remove schema 1/2 and legacy Node/Routine transforms only after the backup compatibility support window.
 - Remove migration planners/rehearsal assets only after retained backups are independently restorable and migration is formally closed.
-- Resolve and then prune legacy pinned-note candidate structures.
+- Prune only explicitly resolved legacy pinned-note candidates; keep the recovery structure through the support window.
 
 ### OPTIONAL CLEANUP
 

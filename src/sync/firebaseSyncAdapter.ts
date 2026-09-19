@@ -34,8 +34,9 @@ export function createFirebaseSyncAdapter(
 ): SyncAdapter {
   const projectId = db.app.options.projectId;
   const developmentAllowed = environment === "development" && projectId === FIREBASE_PROJECT_IDS.development;
+  const productionAllowed = environment === "production" && projectId === FIREBASE_PROJECT_IDS.production;
   const emulatorAllowed = environment === "test" && options.emulator === true && projectId?.startsWith("demo-") === true;
-  if (!developmentAllowed && !emulatorAllowed) {
+  if (!developmentAllowed && !productionAllowed && !emulatorAllowed) {
     throw new Error(`Firebase V2 sync adapter is disabled for ${environment}/${projectId ?? "unknown"}.`);
   }
 

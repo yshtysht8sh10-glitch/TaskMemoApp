@@ -15,10 +15,11 @@ describe('Node backup', () => {
   it('壊れたJSONとschemaVersionを拒否する', () => { expect(() => parseNodeBackup('{')).toThrow(/JSON/); expect(() => parseNodeBackup('{"schemaVersion":99,"exportedAt":"2026-01-01T00:00:00Z","nodes":[]}')).toThrow(/対応/); });
   it('存在しない親とMemo親を拒否する', () => { expect(() => parseNodeBackup(serializeNodeBackup([{ ...memo, parentId: 'missing' }]))).toThrow(/親参照/); expect(() => parseNodeBackup(serializeNodeBackup([{ ...memo, parentId: null }, { ...category, parentId: 'm' }]))).toThrow(/親参照/); });
   it('自己参照とcycleを拒否する', () => { expect(() => parseNodeBackup(serializeNodeBackup([{ ...category, parentId: 'c' }]))).toThrow(/親参照/); const a = { ...category, id: 'a', parentId: 'b' }; const b = { ...category, id: 'b', parentId: 'a' }; expect(() => parseNodeBackup(serializeNodeBackup([a, b]))).toThrow(/cycle/); });
-  it('schema 3でcontent・常設メモ・全永続設定を往復する', () => {
+  it('schema 4でcontent・常設メモ・回復候補・全永続設定を往復する', () => {
     const pinnedNote = { body: 'shared pinned note', updatedAt: date };
-    const raw = serializeTaskMemoBackup([category, memo], pinnedNote, settings, date);
-    expect(parseTaskMemoBackup(raw)).toEqual({ nodes: [category, memo], pinnedNote, settings });
+    const candidates = [{ body: 'legacy local note', updatedAt: date.toISOString() }];
+    const raw = serializeTaskMemoBackup([category, memo], pinnedNote, settings, date, candidates);
+    expect(parseTaskMemoBackup(raw)).toEqual({ nodes: [category, memo], pinnedNote, settings, legacyPinnedNoteCandidates: candidates });
     expect(JSON.parse(raw)).not.toHaveProperty('deviceId');
     expect(JSON.parse(raw)).not.toHaveProperty('outbox');
     expect(JSON.parse(raw)).not.toHaveProperty('history');
@@ -26,8 +27,15 @@ describe('Node backup', () => {
   });
   it('schema 1/2では存在しないpinnedNote・settingsを現在値維持用nullとして返す', () => {
     const pinnedNote = { body: 'schema 2', updatedAt: date.toISOString() };
-    expect(parseTaskMemoBackup(serializeNodeBackup([category], date))).toEqual({ nodes: [category], pinnedNote: null, settings: null });
-    expect(parseTaskMemoBackup(JSON.stringify({ schemaVersion: 2, exportedAt: date.toISOString(), nodes: [category], pinnedNote }))).toEqual({ nodes: [category], pinnedNote: { body: 'schema 2', updatedAt: date }, settings: null });
+    expect(parseTaskMemoBackup(serializeNodeBackup([category], date))).toEqual({ nodes: [category], pinnedNote: null, settings: null, legacyPinnedNoteCandidates: [] });
+    expect(parseTaskMemoBackup(JSON.stringify({ schemaVersion: 2, exportedAt: date.toISOString(), nodes: [category], pinnedNote }))).toEqual({ nodes: [category], pinnedNote: { body: 'schema 2', updatedAt: date }, settings: null, legacyPinnedNoteCandidates: [] });
+  });
+  it('schema 3 remains compatible and malformed recovery candidates are rejected', () => {
+    const current = JSON.parse(serializeTaskMemoBackup([category], { body: '', updatedAt: date }, settings, date));
+    current.schemaVersion = 3; delete current.content.legacyPinnedNoteCandidates;
+    expect(parseTaskMemoBackup(JSON.stringify(current)).legacyPinnedNoteCandidates).toEqual([]);
+    current.schemaVersion = 4; current.content.legacyPinnedNoteCandidates = [{ body: 'x', updatedAt: 'invalid' }];
+    expect(() => parseTaskMemoBackup(JSON.stringify(current))).toThrow(/回復候補/);
   });
   it('不正な設定値と部分的なschema 3を全体適用前に拒否する', () => {
     const raw = JSON.parse(serializeTaskMemoBackup([category], { body: '', updatedAt: date }, settings, date));

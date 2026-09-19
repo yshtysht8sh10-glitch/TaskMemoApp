@@ -47,6 +47,20 @@ describe("V2 listener controller", () => {
     await vi.waitFor(() => expect(b.ideasEnabled).toBe(true));
     expect(a.outbox).toHaveLength(0);
   });
+  it("adopts a legacy pinned-note candidate through the normal V2 operation", async () => {
+    const adapter = new ListenerAdapter();
+    const seed = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "seed", initialPinnedNote: { body: "cloud", updatedAt: new Date(0) } });
+    await seed.initializePinnedNote(); await seed.queuePinnedNoteOperation(); adapter.server.apply(seed.outbox[0]);
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", initialPinnedNote: { body: "legacy", updatedAt: new Date(0) } });
+    const controller = new TaskMemoV2SyncController(store, adapter);
+    await controller.start();
+    const candidate = store.legacyPinnedNoteCandidates[0];
+    expect(candidate.body).toBe("legacy");
+    await controller.adoptLegacyPinnedNoteCandidate(candidate);
+    expect(store.legacyPinnedNoteCandidates).toEqual([]);
+    expect(store.pinnedNote.body).toBe("legacy");
+    expect(adapter.uploads.some((operation) => operation.targetType === "pinnedNote" && (operation.payload.pinnedNote as { body?: string })?.body === "legacy")).toBe(true);
+  });
   it("repairs and uploads an invalid remote sort key instead of retaining it authoritatively", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
     const root = provisionedRoutineRoot();

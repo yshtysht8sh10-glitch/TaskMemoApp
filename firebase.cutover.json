@@ -1,0 +1,16 @@
+{
+  "firestore": {
+    "rules": "firestore.dev.rules"
+  },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs22"
+  },
+  "hosting": {
+    "site": "taskmemoapp-eabc3",
+    "public": "dist",
+    "ignore": ["firebase.cutover.json", "**/.*", "**/node_modules/**"],
+    "cleanUrls": true,
+    "rewrites": [{ "source": "**", "destination": "/index.html" }]
+  }
+}
