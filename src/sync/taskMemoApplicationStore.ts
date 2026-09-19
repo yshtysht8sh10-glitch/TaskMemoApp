@@ -1,5 +1,6 @@
 import { redoNodeHistory, undoNodeHistory, type NodeHistory, type NodeHistoryEntry } from "../domain/nodeHistory";
 import type { Node } from "../models/node";
+import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
 import { candidateForOperation, chooseVersionedNode } from "./revisionModel";
@@ -37,13 +38,15 @@ export class TaskMemoV2ApplicationStore {
     const journal = await persistence.loadJournal();
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
-    const envelope: Envelope = committed ? JSON.parse(committed) as Envelope : {
+    const normalizedInitialNodes = normalizeNodeSortKeys(initialNodes);
+    const loadedEnvelope = committed ? JSON.parse(committed) as Envelope : null;
+    let envelope: Envelope = loadedEnvelope ?? {
       version: 2, deviceId: options.deviceId, nextLocalSeq: 1,
-      domain: Object.fromEntries(initialNodes.map((node) => [node.id, { value: nodeToV2Value(node), revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
+      domain: Object.fromEntries(normalizedInitialNodes.map((node) => [node.id, { value: nodeToV2Value(node), revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
       history: { past: [], future: [] }, sync: { outbox: [], seenOpIds: [] },
     };
     if (!committed && options.bootstrapInitialNodes) {
-      for (const node of initialNodes) {
+      for (const node of normalizedInitialNodes) {
         const localSeq = envelope.nextLocalSeq++;
         const operation: SyncOperation = { opId: `${envelope.deviceId}:${localSeq}`, deviceId: envelope.deviceId, localSeq, targetNodeId: node.id, type: "import", baseRevision: 0, payload: { node: nodeToV2Value(node) }, createdAt: (options.now ?? (() => new Date()))().toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
         envelope.domain[node.id] = candidateForOperation(operation);
@@ -51,7 +54,9 @@ export class TaskMemoV2ApplicationStore {
       }
     }
     const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()));
-    if (!committed) await store.commit(envelope);
+    envelope = store.repairSortKeys(envelope, options.now?.() ?? new Date());
+    store.envelope = envelope;
+    if (!committed || envelope !== loadedEnvelope) await store.commit(envelope);
     return store;
   }
 
@@ -102,7 +107,7 @@ export class TaskMemoV2ApplicationStore {
     const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
     const current = this.envelope.domain[incoming.value.id];
     const winner = selfEcho ? current : chooseVersionedNode(current, incoming);
-    const next: Envelope = {
+    let next: Envelope = {
       ...this.envelope,
       domain: winner ? { ...this.envelope.domain, [incoming.value.id]: winner } : this.envelope.domain,
       history: this.envelope.history,
@@ -111,6 +116,7 @@ export class TaskMemoV2ApplicationStore {
         seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
       },
     };
+    next = this.repairSortKeys(next, this.now());
     await this.commit(next);
     return selfEcho ? "self-echo" as const : "remote" as const;
   }
@@ -146,7 +152,7 @@ export class TaskMemoV2ApplicationStore {
     let localSeq = this.envelope.nextLocalSeq;
     const operations: SyncOperation[] = [];
     const domain = { ...this.envelope.domain };
-    const after = new Map(nodes.map((node) => [node.id, nodeToV2Value(node)]));
+    const after = new Map(normalizeNodeSortKeys(nodes).map((node) => [node.id, nodeToV2Value(node)]));
     for (const [id, current] of Object.entries(domain)) {
       if (!after.has(id)) after.set(id, { ...current.value, deletedAt: commandTime.toISOString(), deletionBatchId: null });
     }
@@ -163,6 +169,27 @@ export class TaskMemoV2ApplicationStore {
     const next: Envelope = { ...this.envelope, nextLocalSeq: localSeq, domain, history, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, ...operations] } };
     await this.commit(next);
     return operations;
+  }
+
+  private repairSortKeys(source: Envelope, commandTime: Date) {
+    const nodes = Object.values(source.domain).map((record) => nodeFromV2Value(record.value));
+    const normalized = normalizeNodeSortKeys(nodes);
+    if (same(encodeNodes(nodes), encodeNodes(normalized))) return source;
+    let localSeq = source.nextLocalSeq;
+    const domain = { ...source.domain };
+    const operations: SyncOperation[] = [];
+    for (const node of normalized) {
+      const current = domain[node.id];
+      const value = nodeToV2Value(node);
+      if (same(current.value, value)) continue;
+      const operation: SyncOperation = {
+        opId: `${source.deviceId}:${localSeq}`, deviceId: source.deviceId, localSeq,
+        targetNodeId: node.id, type: "update", baseRevision: current.revision, payload: { node: value },
+        createdAt: commandTime.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+      };
+      localSeq += 1; operations.push(operation); domain[node.id] = candidateForOperation(operation);
+    }
+    return { ...source, nextLocalSeq: localSeq, domain, sync: { ...source.sync, outbox: [...source.sync.outbox, ...operations] } };
   }
 
   private async commit(next: Envelope) {

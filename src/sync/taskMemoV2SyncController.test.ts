@@ -1,22 +1,90 @@
-import { describe, expect, it } from "vitest";
-import type { MemoNode } from "../models/node";
+import { describe, expect, it, vi } from "vitest";
+import { createNode } from "../domain/nodeOperations";
+import type { CategoryNode, MemoNode } from "../models/node";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { InMemoryRevisionServer } from "./revisionModel";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
+import { nodeToV2Value } from "./nodeV2Codec";
 import type { SyncAdapter, SyncOperation, VersionedNode } from "./types";
 
 class MemoryPersistence implements ApplicationJournalPersistence { value: string | null = null; journal: string | null = null; loadCommitted = async () => this.value; loadJournal = async () => this.journal; writeJournal = async (v: string) => { this.journal = v; }; writeCommitted = async (v: string) => { this.value = v; }; clearJournal = async () => { this.journal = null; }; }
 class ListenerAdapter implements SyncAdapter {
-  server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); online = true;
+  server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
   async connect() { if (!this.online) throw { kind: "offline" }; }
-  subscribe(onRecord: (record: VersionedNode) => void | Promise<void>) { this.listeners.add(onRecord); for (const id of ["memo-a"]) { const record = this.server.get(id); if (record) void onRecord(record); } return () => { this.listeners.delete(onRecord); }; }
-  async upload(operation: SyncOperation) { if (!this.online) throw { kind: "offline" }; const ack = this.server.apply(operation); if (ack.record) for (const listener of this.listeners) await listener(ack.record); return ack; }
+  subscribe(onRecord: (record: VersionedNode) => void | Promise<void>) { this.listeners.add(onRecord); for (const id of this.initialIds) { const record = this.server.get(id); if (record) void onRecord(record); } return () => { this.listeners.delete(onRecord); }; }
+  async upload(operation: SyncOperation) { if (!this.online) throw { kind: "offline" }; this.uploads.push(operation); const ack = this.server.apply(operation); if (ack.record) for (const listener of this.listeners) await listener(ack.record); return ack; }
   async replay(id: string) { const record = this.server.get(id); if (record) for (const listener of this.listeners) await listener(record); }
 }
 const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sortKey: "a", title: "A", body: "", dueAt: null, duePreset: "none", status: "active", completedAt: null, createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null });
+const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it("repairs and uploads an invalid remote sort key instead of retaining it authoritatively", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
+    const root = provisionedRoutineRoot();
+    const incoming: VersionedNode = { value: nodeToV2Value(root), revision: 0, lastOpId: "legacy-root", lastDeviceId: "migration", lastLocalSeq: 0, operationType: "import" };
+    const adapter = new ListenerAdapter();
+    adapter.server = new InMemoryRevisionServer([incoming]); adapter.initialIds = ["system-routine"];
+    const controller = new TaskMemoV2SyncController(store, adapter);
+
+    await controller.start();
+    await vi.waitFor(() => expect(adapter.uploads.some((operation) => operation.targetNodeId === "system-routine")).toBe(true));
+
+    expect(store.nodes[0].sortKey).not.toBe("zzzz");
+    expect(adapter.server.get("system-routine")?.value.sortKey).not.toBe("zzzz");
+  });
+
+  it("keeps a UI-created memo durable after receiving the provisioned RC routine root", async () => {
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a" });
+    const root = provisionedRoutineRoot();
+    await store.receive({ value: nodeToV2Value(root), revision: 0, lastOpId: "migration:v2-rc-20260919:system-routine", lastDeviceId: "migration:v2-rc-20260919", lastLocalSeq: 0, operationType: "import" });
+    expect(store.nodes[0].sortKey).not.toBe("zzzz");
+    expect(store.outbox).toHaveLength(1);
+    let applicationNodes = store.nodes;
+    const adapter = new ListenerAdapter();
+    const controller = new TaskMemoV2SyncController(store, adapter, () => {
+      applicationNodes = store.nodes;
+    });
+
+    await controller.command("Nodeを作成", "create", (nodes) =>
+      createNode(nodes, "memo", { title: "new memo", parentId: null }, new Date("2026-09-19T05:52:50.700Z"), "memo-new"),
+    );
+
+    expect(applicationNodes.some((node) => node.id === "memo-new")).toBe(true);
+    expect(store.nodes.some((node) => node.id === "memo-new")).toBe(true);
+    expect(JSON.parse(persistence.value!).domain["memo-new"]).toBeDefined();
+    expect(adapter.uploads.some((operation) => operation.targetNodeId === "memo-new")).toBe(true);
+  });
+
+  it("persists and queues memo creation under a real category", async () => {
+    const persistence = new MemoryPersistence();
+    const category: CategoryNode = { ...provisionedRoutineRoot(), id: "category-a", categoryKind: undefined, sortKey: "a0", title: "Category" };
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [category], { deviceId: "device-a" });
+    const controller = new TaskMemoV2SyncController(store, new ListenerAdapter());
+    controller.pause();
+    await controller.command("Nodeを作成", "create", (nodes) =>
+      createNode(nodes, "memo", { title: "child", parentId: "category-a" }, new Date("2026-09-19T05:52:50.700Z"), "memo-child"),
+    );
+    expect(store.nodes.find((node) => node.id === "memo-child")?.parentId).toBe("category-a");
+    expect(JSON.parse(persistence.value!).domain["memo-child"]).toBeDefined();
+    expect(store.outbox.some((operation) => operation.targetNodeId === "memo-child")).toBe(true);
+  });
+
+  it("persists and queues memo creation through the virtual unassigned root", async () => {
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [provisionedRoutineRoot()], { deviceId: "device-a" });
+    const controller = new TaskMemoV2SyncController(store, new ListenerAdapter());
+    controller.pause();
+    await controller.command("Nodeを作成", "create", (nodes) =>
+      createNode(nodes, "memo", { title: "unassigned", parentId: null }, new Date("2026-09-19T05:52:50.700Z"), "memo-unassigned"),
+    );
+    expect(store.nodes.find((node) => node.id === "memo-unassigned")?.parentId).toBeNull();
+    expect(JSON.parse(persistence.value!).domain["memo-unassigned"]).toBeDefined();
+    expect(store.outbox.some((operation) => operation.targetNodeId === "memo-unassigned")).toBe(true);
+  });
+
   it("does not subscribe after stop while connection is still resolving", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
     const adapter = new ListenerAdapter();

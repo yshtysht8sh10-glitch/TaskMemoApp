@@ -15,6 +15,7 @@ import { inferSyncOperationType } from "../sync/operationType";
 import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
 import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
 import { subscribeToWebOnline } from "./webOnlineListener";
+import { normalizeLegacyRanks } from "../services/nodeStorage";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase;
 
@@ -105,7 +106,10 @@ export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory:
   const firebase = firebaseConfiguration();
   const environment = firebase.environment;
   const useV2 = isConfiguredV2SyncEnabled(environment, process.env.EXPO_PUBLIC_SYNC_V2_ENABLED, firebase.config !== null);
-  const v1 = useFirebaseSync(history.nodes, ready, (nodes) => onHistory(reconcileSyncedNodeHistory(history, nodes)), !useV2);
+  const v1 = useFirebaseSync(history.nodes, ready, (nodes) => {
+    const next = reconcileSyncedNodeHistory(history, nodes);
+    onHistory({ ...next, nodes: normalizeLegacyRanks(next.nodes) });
+  }, !useV2);
   const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2);
   return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, undo: () => false, redo: () => false };
 }

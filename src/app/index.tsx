@@ -233,10 +233,7 @@ export default function HomeScreen() {
   const [ideasEnabled, setIdeasEnabled] = useState(
     DEFAULT_FEATURE_PREFERENCES.ideasEnabled,
   );
-  const sync = useTaskMemoSync(history, ready, (nextHistory) => setHistory({
-    ...nextHistory,
-    nodes: normalizeLegacyRanks(nextHistory.nodes),
-  }));
+  const sync = useTaskMemoSync(history, ready, setHistory);
   useEffect(() => {
     const traceId = currentTreeTraceId();
     treeDiagnosticLog("hydrate/reload-start", {

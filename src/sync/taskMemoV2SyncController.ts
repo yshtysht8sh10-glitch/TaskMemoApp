@@ -31,7 +31,13 @@ export class TaskMemoV2SyncController {
       await this.adapter.connect();
       if (generation !== this.generation) return;
       this.unsubscribe = this.adapter.subscribe?.(
-        async (record) => { if (generation !== this.generation) return; await this.store.receive(record); this.refresh(); this.onChange(); },
+        async (record) => {
+          if (generation !== this.generation) return;
+          await this.store.receive(record);
+          this.refresh();
+          await this.flush();
+          this.onChange();
+        },
         (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.outbox.length, ...problem }); this.onChange(); },
       );
       this.state = transitionSyncState(this.state, { type: "connected", pendingCount: this.store.outbox.length });

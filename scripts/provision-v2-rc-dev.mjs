@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { createProvisionedSortKey } from "./lib/v2Provisioning.mjs";
 
 const [credentialOutput, confirmation] = process.argv.slice(2);
 if (!credentialOutput || confirmation !== "write-dev-only:taskmemoapp-dev") throw new Error("Exact dev-only confirmation is required.");
@@ -31,7 +32,8 @@ const patch = async (path, fields) => {
 await patch("syncControl/current", { schemaVersion: integerValue(1), writesEnabled: { booleanValue: true } });
 await patch(`users/${account.localId}/syncMetadataV2/compatibility`, { schemaVersion: integerValue(1), minimumSyncProtocol: integerValue(2), v1WritesAllowed: { booleanValue: false }, v2Enabled: { booleanValue: true } });
 const initialAt = "2026-09-19T00:00:00.000Z";
-const value = { id: stringValue("system-routine"), type: stringValue("category"), categoryKind: stringValue("routineRoot"), parentId: { nullValue: null }, sortKey: stringValue("zzzz"), title: stringValue("ルーティーン"), createdAt: stringValue(initialAt), updatedAt: stringValue(initialAt), deletedAt: { nullValue: null } };
+const routineRootSortKey = createProvisionedSortKey();
+const value = { id: stringValue("system-routine"), type: stringValue("category"), categoryKind: stringValue("routineRoot"), parentId: { nullValue: null }, sortKey: stringValue(routineRootSortKey), title: stringValue("ルーティーン"), createdAt: stringValue(initialAt), updatedAt: stringValue(initialAt), deletedAt: { nullValue: null } };
 const record = { value: mapValue(value), revision: integerValue(0), lastOpId: stringValue("migration:v2-rc-20260919:system-routine"), lastDeviceId: stringValue("migration:v2-rc-20260919"), lastLocalSeq: integerValue(0), operationType: stringValue("import") };
 await patch(`users/${account.localId}/nodesV2/system-routine`, { ownerUid: stringValue(account.localId), schemaVersion: integerValue(2), record: mapValue(record), serverUpdatedAt: { timestampValue: new Date().toISOString() } });
 console.log(JSON.stringify({ projectId: "taskmemoapp-dev", uid: account.localId, credentialOutput, productionTouched: false }));

@@ -1,6 +1,7 @@
 import type { Node } from "../models/node";
 import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
 import type { VersionedNode } from "./types";
+import { normalizeNodeSortKeys } from "../domain/sortKeys";
 
 export type MigrationIssue = { kind: "duplicate-id" | "orphan-parent" | "invalid-node" | "field-loss"; nodeId: string; detail: string };
 export type MigrationDryRun = {
@@ -41,7 +42,10 @@ export function planV1ToV2Migration(nodes: Node[], migrationId: string): Migrati
   for (const node of nodes) if (node.parentId && !ids.has(node.parentId)) issues.push({ kind: "orphan-parent", nodeId: node.id, detail: `親Category ${node.parentId} がありません。` });
   const known = new Set("id type parentId sortKey title createdAt updatedAt deletedAt deletionBatchId purgedAt categoryKind routineWeekday routineDayOfMonth routineMonth memoType deadlineSortKey body dueAt duePreset status completedAt routineHistory repeatRule".split(" "));
   const unknownFields = nodes.map(node => ({ nodeId: node.id, fields: Object.keys(node).filter(key => !known.has(key)) })).filter(item => item.fields.length);
-  const changedFields: MigrationDryRun["changedFields"] = [];
+  const normalizedNodes = normalizeNodeSortKeys(nodes);
+  const changedFields: MigrationDryRun["changedFields"] = normalizedNodes
+    .filter((node, index) => node.sortKey !== nodes[index].sortKey)
+    .map((node) => ({ nodeId: node.id, fields: ["sortKey"] }));
   let lostFieldCount = 0;
   let unexpectedDataCount = 0;
   for (const node of nodes) {
@@ -54,7 +58,7 @@ export function planV1ToV2Migration(nodes: Node[], migrationId: string): Migrati
     }
   }
   // IDs (not input array order or updatedAt) define deterministic migration identity.
-  const records = nodes.map((node): VersionedNode => ({
+  const records = normalizedNodes.map((node): VersionedNode => ({
     value: nodeToV2Value(node), revision: 0,
     lastOpId: `migration:${encodeURIComponent(migrationId)}:${encodeURIComponent(node.id)}`,
     lastDeviceId: `migration:${migrationId}`, lastLocalSeq: 0, operationType: "import",
