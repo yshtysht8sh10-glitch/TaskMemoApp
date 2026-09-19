@@ -1,4 +1,4 @@
-import type { SyncAcknowledgement, SyncNodeValue, SyncOperation, VersionedNode } from "./types";
+import type { PinnedNoteValue, SyncAcknowledgement, SyncNodeValue, SyncOperation, VersionedNode, VersionedPinnedNote } from "./types";
 
 const deletionRank = (node: SyncNodeValue) => node.purgedAt ? 2 : node.deletedAt ? 1 : 0;
 
@@ -38,8 +38,28 @@ export function applyRevisionOperation(current: VersionedNode | undefined, opera
   };
 }
 
+export function candidateForPinnedNoteOperation(operation: SyncOperation): VersionedPinnedNote {
+  const value = operation.payload.pinnedNote as PinnedNoteValue | undefined;
+  if (operation.targetType !== "pinnedNote" || operation.targetNodeId !== "pinnedNote" || !value || typeof value.body !== "string")
+    throw new Error("同期operationの常設メモpayloadが不正です。");
+  return { value, revision: operation.baseRevision + 1, lastOpId: operation.opId, lastDeviceId: operation.deviceId, lastLocalSeq: operation.localSeq };
+}
+
+export function chooseVersionedPinnedNote(current: VersionedPinnedNote | undefined, candidate: VersionedPinnedNote) {
+  if (!current) return candidate;
+  if (candidate.revision !== current.revision) return candidate.revision > current.revision ? candidate : current;
+  return candidate.lastOpId > current.lastOpId ? candidate : current;
+}
+
+export function applyPinnedNoteOperation(current: VersionedPinnedNote | undefined, operation: SyncOperation): SyncAcknowledgement {
+  const candidate = candidateForPinnedNoteOperation(operation);
+  const winner = chooseVersionedPinnedNote(current, candidate);
+  return { opId: operation.opId, revision: winner.revision, result: winner.lastOpId === operation.opId ? "applied" : "superseded", pinnedNoteRecord: winner };
+}
+
 export class InMemoryRevisionServer {
   private readonly nodes = new Map<string, VersionedNode>();
+  private pinnedNote?: VersionedPinnedNote;
   private readonly operations = new Map<string, SyncAcknowledgement>();
 
   constructor(nodes: VersionedNode[] = []) {
@@ -48,14 +68,18 @@ export class InMemoryRevisionServer {
 
   get processedOperationCount() { return this.operations.size; }
   get(nodeId: string) { return this.nodes.get(nodeId); }
+  getPinnedNote() { return this.pinnedNote; }
   acknowledgement(opId: string) { return this.operations.get(opId); }
 
   apply(operation: SyncOperation) {
     const previous = this.operations.get(operation.opId);
     if (previous) return previous;
-    const acknowledgement = applyRevisionOperation(this.nodes.get(operation.targetNodeId), operation);
+    const acknowledgement = operation.targetType === "pinnedNote"
+      ? applyPinnedNoteOperation(this.pinnedNote, operation)
+      : applyRevisionOperation(this.nodes.get(operation.targetNodeId), operation);
     this.operations.set(operation.opId, acknowledgement);
     if (acknowledgement.record) this.nodes.set(operation.targetNodeId, acknowledgement.record);
+    if (acknowledgement.pinnedNoteRecord) this.pinnedNote = acknowledgement.pinnedNoteRecord;
     return acknowledgement;
   }
 }

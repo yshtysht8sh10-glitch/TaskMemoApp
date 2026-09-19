@@ -1,7 +1,7 @@
 import { collection, doc, getDocFromServer, onSnapshot, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
-import { applyRevisionOperation } from "./revisionModel";
+import { applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
 import { validateCompatibilityGate } from "./compatibilityGate";
 import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedNode } from "./types";
 
@@ -56,7 +56,10 @@ export function createFirebaseSyncAdapter(
     async upload(operation: SyncOperation) {
       try {
         const operationRef = doc(db, "users", uid, "syncOperationsV2", operation.opId);
-        const nodeRef = doc(db, "users", uid, "nodesV2", operation.targetNodeId);
+        const pinnedNote = operation.targetType === "pinnedNote";
+        const targetRef = pinnedNote
+          ? doc(db, "users", uid, "profileV2", "pinnedNote")
+          : doc(db, "users", uid, "nodesV2", operation.targetNodeId);
         return await runTransaction(db, async (transaction) => {
           const existing = await transaction.get(operationRef);
           if (existing.exists()) {
@@ -66,16 +69,22 @@ export function createFirebaseSyncAdapter(
             }
             return data.acknowledgement as SyncAcknowledgement;
           }
-          const nodeSnapshot = await transaction.get(nodeRef);
-          const current = nodeSnapshot.exists() ? nodeSnapshot.data().record as VersionedNode : undefined;
-          const acknowledgement = applyRevisionOperation(current, operation);
-          if (acknowledgement.result === "applied") transaction.set(nodeRef, { ownerUid: uid, schemaVersion: 2, record: acknowledgement.record, serverUpdatedAt: serverTimestamp() });
+          const targetSnapshot = await transaction.get(targetRef);
+          const acknowledgement = pinnedNote
+            ? applyPinnedNoteOperation(targetSnapshot.exists() ? targetSnapshot.data().record : undefined, operation)
+            : applyRevisionOperation(targetSnapshot.exists() ? targetSnapshot.data().record as VersionedNode : undefined, operation);
+          if (acknowledgement.result === "applied") transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
           transaction.set(operationRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
           return acknowledgement;
         });
       } catch (reason) {
         throw adapterError(reason);
       }
+    },
+
+    async readPinnedNote() {
+      const snapshot = await getDocFromServer(doc(db, "users", uid, "profileV2", "pinnedNote"));
+      return snapshot.exists() ? snapshot.data().record : undefined;
     },
 
     subscribe(onRecord, onError) {
@@ -85,6 +94,12 @@ export function createFirebaseSyncAdapter(
           const record = change.doc.data().record as VersionedNode | undefined;
           if (record) void Promise.resolve(onRecord(record)).catch(onError);
         }
+      }, onError);
+    },
+    subscribePinnedNote(onRecord, onError) {
+      return onSnapshot(doc(db, "users", uid, "profileV2", "pinnedNote"), { includeMetadataChanges: true }, (snapshot) => {
+        const record = snapshot.data()?.record;
+        if (record) void Promise.resolve(onRecord(record)).catch(onError);
       }, onError);
     },
   };

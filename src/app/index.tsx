@@ -173,6 +173,7 @@ export default function HomeScreen() {
   const nodes = history.nodes;
   const [ready, setReady] = useState(false);
   const [pinnedNote, setPinnedNote] = useState("");
+  const [pinnedNoteUpdatedAt, setPinnedNoteUpdatedAt] = useState(new Date(0));
   const pinnedSaveQueue = useRef(Promise.resolve());
   const [visibleGroupIds, setVisibleGroupIds] = useState<Set<DeadlineGroupKey>>(
     () => new Set(DEFAULT_LIST_DISPLAY_PREFERENCES.visibleGroupIds),
@@ -233,7 +234,11 @@ export default function HomeScreen() {
   const [ideasEnabled, setIdeasEnabled] = useState(
     DEFAULT_FEATURE_PREFERENCES.ideasEnabled,
   );
-  const sync = useTaskMemoSync(history, ready, setHistory);
+  const sync = useTaskMemoSync(history, ready, setHistory, { body: pinnedNote, updatedAt: pinnedNoteUpdatedAt }, (body) => {
+    setPinnedNoteUpdatedAt(new Date());
+    setPinnedNote(body);
+    void savePinnedNote(body);
+  });
   useEffect(() => {
     const traceId = currentTreeTraceId();
     treeDiagnosticLog("hydrate/reload-start", {
@@ -265,6 +270,7 @@ export default function HomeScreen() {
           });
           setHistory((current) => replaceNodeHistory(current, loaded));
           setPinnedNote(note.body);
+          setPinnedNoteUpdatedAt(note.updatedAt);
           setVisibleGroupIds(new Set(listDisplay.visibleGroupIds));
           setShowPinnedNote(listDisplay.showPinnedNote);
           setTodayGranularity(listDisplay.todayGranularity);
@@ -381,7 +387,9 @@ export default function HomeScreen() {
     }
   };
   const changePinnedNote = (body: string) => {
+    setPinnedNoteUpdatedAt(new Date());
     setPinnedNote(body);
+    if (sync.updatePinnedNote(body)) return;
     pinnedSaveQueue.current = pinnedSaveQueue.current
       .then(() => savePinnedNote(body))
       .then(() => undefined)
@@ -464,7 +472,7 @@ export default function HomeScreen() {
   };
   const exportData = async () => {
     try {
-      await exportNodesToFile(nodes);
+      await exportNodesToFile(nodes, { body: pinnedNote, updatedAt: pinnedNoteUpdatedAt });
     } catch (error) {
       appAlert(
         "書き出しエラー",
@@ -480,7 +488,7 @@ export default function HomeScreen() {
       if (!imported) return;
       appAlert(
         "データを読み込む",
-        `現在のデータを、選択した${imported.length}件のNodeで置き換えます。先に書き出しておくことを推奨します。`,
+        `現在のデータを、選択した${imported.nodes.length}件のNodeで置き換えます。先に書き出しておくことを推奨します。`,
         [
           { text: "キャンセル", style: "cancel" },
           {
@@ -488,10 +496,14 @@ export default function HomeScreen() {
             style: "destructive",
             onPress: async () => {
               try {
-                const normalized = normalizeLegacyRanks(imported);
+                const normalized = normalizeLegacyRanks(imported.nodes);
                 if (!sync.command("データを読み込む", () => normalized)) {
                   await saveNodes(normalized);
                   setHistory((current) => replaceNodeHistory(current, normalized));
+                }
+                if (imported.pinnedNote) {
+                  setPinnedNoteUpdatedAt(imported.pinnedNote.updatedAt);
+                  changePinnedNote(imported.pinnedNote.body);
                 }
                 setSettingsOpen(false);
               } catch {

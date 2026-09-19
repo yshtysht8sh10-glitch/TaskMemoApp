@@ -1,6 +1,6 @@
 import type { DuePreset, MemoStatus, Node } from "@/models/node";
 
-export const BACKUP_SCHEMA_VERSION = 1;
+export const BACKUP_SCHEMA_VERSION = 2;
 const DATE_FIELDS = [
   "createdAt",
   "updatedAt",
@@ -23,10 +23,12 @@ const DUE_PRESETS = new Set<DuePreset>([
 const MEMO_STATUSES = new Set<MemoStatus>(["active", "completed"]);
 
 export type NodeBackup = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   exportedAt: string;
   nodes: Node[];
+  pinnedNote?: { body: string; updatedAt: string };
 };
+export type TaskMemoBackupData = { nodes: Node[]; pinnedNote: { body: string; updatedAt: Date } | null };
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,7 +39,7 @@ const validDateString = (value: unknown, nullable = false) =>
 export function serializeNodeBackup(nodes: Node[], exportedAt = new Date()) {
   return JSON.stringify(
     {
-      schemaVersion: BACKUP_SCHEMA_VERSION,
+      schemaVersion: 1,
       exportedAt: exportedAt.toISOString(),
       nodes,
     },
@@ -46,14 +48,22 @@ export function serializeNodeBackup(nodes: Node[], exportedAt = new Date()) {
   );
 }
 
+export function serializeTaskMemoBackup(nodes: Node[], pinnedNote: { body: string; updatedAt: Date }, exportedAt = new Date()) {
+  return JSON.stringify({ schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: exportedAt.toISOString(), nodes, pinnedNote }, null, 2);
+}
+
 export function parseNodeBackup(raw: string): Node[] {
+  return parseTaskMemoBackup(raw).nodes;
+}
+
+export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
   let backup: unknown;
   try {
     backup = JSON.parse(raw);
   } catch {
     throw new Error("JSON形式が正しくありません。");
   }
-  if (!isObject(backup) || backup.schemaVersion !== BACKUP_SCHEMA_VERSION)
+  if (!isObject(backup) || (backup.schemaVersion !== 1 && backup.schemaVersion !== BACKUP_SCHEMA_VERSION))
     throw new Error("対応していないバックアップ形式です。");
   if (!validDateString(backup.exportedAt) || !Array.isArray(backup.nodes))
     throw new Error("バックアップの基本情報が不正です。");
@@ -123,7 +133,7 @@ export function parseNodeBackup(raw: string): Node[] {
     }
   }
 
-  return records.map((record) => {
+  const nodes = records.map((record) => {
     const restored = { ...record };
     for (const field of DATE_FIELDS)
       if (typeof restored[field] === "string")
@@ -132,4 +142,11 @@ export function parseNodeBackup(raw: string): Node[] {
       restored.memoType = "task";
     return restored as Node;
   });
+  let pinnedNote: TaskMemoBackupData["pinnedNote"] = null;
+  if (backup.schemaVersion === 2) {
+    if (!isObject(backup.pinnedNote) || typeof backup.pinnedNote.body !== "string" || !validDateString(backup.pinnedNote.updatedAt))
+      throw new Error("常設メモのデータが不正です。");
+    pinnedNote = { body: backup.pinnedNote.body, updatedAt: new Date(backup.pinnedNote.updatedAt as string) };
+  }
+  return { nodes, pinnedNote };
 }

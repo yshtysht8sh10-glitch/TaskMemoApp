@@ -110,4 +110,62 @@ describe("TaskMemo V2 application store", () => {
     expect(a.nodes).toEqual(b.nodes);
     expect(a.nodes.find((node) => node.id === "memo-a")?.purgedAt).toBeTruthy();
   });
+
+  it("persists a pinned-note draft immediately and restores it before an operation is queued", async () => {
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a", now: () => at(1) });
+    await store.setPinnedNoteDraft("draft", at(2));
+    expect(store.pinnedNote.body).toBe("draft");
+    expect(store.outbox).toHaveLength(0);
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", now: () => at(3) });
+    expect(store.pinnedNote.body).toBe("draft");
+    expect(store.pendingCount).toBe(1);
+    await store.queuePinnedNoteOperation(at(3));
+    expect(store.outbox[0]).toMatchObject({ targetType: "pinnedNote", targetNodeId: "pinnedNote", payload: { pinnedNote: { body: "draft" } } });
+  });
+
+  it("recovers a pinned-note draft from WAL after a crash boundary", async () => {
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a", now: () => at(1) });
+    persistence.failCommit = true;
+    await expect(store.setPinnedNoteDraft("recovered", at(2))).rejects.toThrow("crash");
+    persistence.failCommit = false;
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", now: () => at(3) });
+    expect(store.pinnedNote.body).toBe("recovered");
+    expect(store.pendingCount).toBe(1);
+  });
+
+  it("does not overwrite a different legacy local pinned note when cloud data already exists", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], {
+      deviceId: "device-a", now: () => at(2), initialPinnedNote: { body: "local legacy", updatedAt: at(1) },
+    });
+    await store.initializePinnedNote({ value: { body: "cloud" }, revision: 4, lastOpId: "cloud:4", lastDeviceId: "device-b", lastLocalSeq: 4 });
+    expect(store.pinnedNote.body).toBe("cloud");
+    expect(store.legacyPinnedNoteCandidates).toContainEqual({ body: "local legacy", updatedAt: at(1).toISOString() });
+    expect(store.outbox).toHaveLength(0);
+  });
+
+  it("keeps self echo and duplicate pinned-note delivery idempotent and resolves concurrent edits deterministically", async () => {
+    const self = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-self", now: () => at(1) });
+    await self.setPinnedNoteDraft("self", at(2)); await self.queuePinnedNoteOperation(at(2));
+    const selfRecord = new InMemoryRevisionServer().apply(self.outbox[0]).pinnedNoteRecord!;
+    expect(await self.receivePinnedNote(selfRecord)).toBe("self-echo");
+    expect(await self.receivePinnedNote(selfRecord)).toBe("duplicate");
+    expect(self.outbox).toHaveLength(0);
+
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", now: () => at(1) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-b", now: () => at(1) });
+    await a.setPinnedNoteDraft("A", at(2)); await a.queuePinnedNoteOperation(at(2));
+    await b.setPinnedNoteDraft("B", at(2)); await b.queuePinnedNoteOperation(at(2));
+    const server = new InMemoryRevisionServer();
+    const operations = [...a.outbox, ...b.outbox];
+    for (const operation of [...operations].reverse()) server.apply(operation);
+    for (const operation of operations) server.apply(operation);
+    const winner = server.getPinnedNote()!;
+    await a.receivePinnedNote(winner);
+    await b.receivePinnedNote(winner);
+    expect(await a.receivePinnedNote(winner)).toBe("duplicate");
+    expect(a.pinnedNote.body).toBe(b.pinnedNote.body);
+    expect(a.pinnedNote.body).toBe(winner.value.body);
+  });
 });

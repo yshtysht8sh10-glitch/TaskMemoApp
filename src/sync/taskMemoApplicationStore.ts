@@ -3,8 +3,8 @@ import type { Node } from "../models/node";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
-import { candidateForOperation, chooseVersionedNode } from "./revisionModel";
-import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedNode } from "./types";
+import { candidateForOperation, candidateForPinnedNoteOperation, chooseVersionedNode, chooseVersionedPinnedNote } from "./revisionModel";
+import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedNode, VersionedPinnedNote } from "./types";
 
 type StoredHistoryEntry = { label: string; before: SyncNodeValue[]; after: SyncNodeValue[] };
 type Envelope = {
@@ -14,8 +14,12 @@ type Envelope = {
   domain: Record<string, VersionedNode>;
   history: { past: StoredHistoryEntry[]; future: StoredHistoryEntry[] };
   sync: { outbox: SyncOperation[]; seenOpIds: string[] };
+  profile: {
+    pinnedNote: { localBody: string; synced: VersionedPinnedNote | null; dirtySince: string | null; migrationPending: boolean; legacyUpdatedAt: string | null };
+    legacyPinnedNoteCandidates: { body: string; updatedAt: string }[];
+  };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean };
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; initialPinnedNote?: { body: string; updatedAt: Date } };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
 const decodeNodes = (nodes: SyncNodeValue[]) => nodes.map(nodeFromV2Value);
@@ -44,6 +48,21 @@ export class TaskMemoV2ApplicationStore {
       version: 2, deviceId: options.deviceId, nextLocalSeq: 1,
       domain: Object.fromEntries(normalizedInitialNodes.map((node) => [node.id, { value: nodeToV2Value(node), revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
       history: { past: [], future: [] }, sync: { outbox: [], seenOpIds: [] },
+      profile: {
+        pinnedNote: { localBody: options.initialPinnedNote?.body ?? "", synced: null, dirtySince: null, migrationPending: Boolean(options.initialPinnedNote?.body), legacyUpdatedAt: options.initialPinnedNote?.updatedAt.toISOString() ?? null },
+        legacyPinnedNoteCandidates: [],
+      },
+    };
+    if (!envelope.profile) envelope = {
+      ...envelope,
+      profile: {
+        pinnedNote: { localBody: options.initialPinnedNote?.body ?? "", synced: null, dirtySince: null, migrationPending: Boolean(options.initialPinnedNote?.body), legacyUpdatedAt: options.initialPinnedNote?.updatedAt.toISOString() ?? null },
+        legacyPinnedNoteCandidates: [],
+      },
+    };
+    if (envelope.profile.pinnedNote.legacyUpdatedAt === undefined) envelope = {
+      ...envelope,
+      profile: { ...envelope.profile, pinnedNote: { ...envelope.profile.pinnedNote, legacyUpdatedAt: null } },
     };
     if (!committed && options.bootstrapInitialNodes) {
       for (const node of normalizedInitialNodes) {
@@ -62,8 +81,11 @@ export class TaskMemoV2ApplicationStore {
 
   get nodes() { return Object.values(this.envelope.domain).map((record) => nodeFromV2Value(record.value)); }
   get outbox() { return [...this.envelope.sync.outbox]; }
+  get pendingCount() { return this.envelope.sync.outbox.length + (this.envelope.profile.pinnedNote.dirtySince ? 1 : 0); }
   get historyDepths() { return { past: this.envelope.history.past.length, future: this.envelope.history.future.length }; }
   get history(): NodeHistory { return this.nodeHistory(); }
+  get pinnedNote() { return { body: this.envelope.profile.pinnedNote.localBody }; }
+  get legacyPinnedNoteCandidates() { return [...this.envelope.profile.legacyPinnedNoteCandidates]; }
   versionedNode(id: string) { return this.envelope.domain[id]; }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
@@ -102,6 +124,68 @@ export class TaskMemoV2ApplicationStore {
   async receive(incoming: VersionedNode) {
     return this.serialize(() => this.receiveSerialized(incoming));
   }
+
+  async initializePinnedNote(remote?: VersionedPinnedNote) {
+    return this.serialize(async () => {
+      const profile = this.envelope.profile;
+      const pinned = profile.pinnedNote;
+      let nextPinned = pinned;
+      let candidates = profile.legacyPinnedNoteCandidates;
+      if (pinned.migrationPending) {
+        if (!remote) nextPinned = { ...pinned, dirtySince: pinned.localBody ? this.now().toISOString() : null, migrationPending: false, legacyUpdatedAt: null };
+        else if (!pinned.localBody || pinned.localBody === remote.value.body) nextPinned = { localBody: remote.value.body, synced: remote, dirtySince: null, migrationPending: false, legacyUpdatedAt: null };
+        else {
+          const updatedAt = pinned.legacyUpdatedAt ?? this.now().toISOString();
+          candidates = [...candidates, { body: pinned.localBody, updatedAt }];
+          nextPinned = { localBody: remote.value.body, synced: remote, dirtySince: null, migrationPending: false, legacyUpdatedAt: null };
+        }
+      } else if (remote) {
+        const winner = chooseVersionedPinnedNote(pinned.synced ?? undefined, remote);
+        nextPinned = { ...pinned, synced: winner, localBody: pinned.dirtySince ? pinned.localBody : winner.value.body };
+      }
+      const next = { ...this.envelope, profile: { pinnedNote: nextPinned, legacyPinnedNoteCandidates: candidates } };
+      if (!same(next, this.envelope)) await this.commit(next);
+    });
+  }
+
+  async setPinnedNoteDraft(body: string, now = this.now()) {
+    return this.serialize(async () => {
+      const current = this.envelope.profile.pinnedNote;
+      if (current.localBody === body) return;
+      await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, pinnedNote: { ...current, localBody: body, dirtySince: now.toISOString(), migrationPending: false } } });
+    });
+  }
+
+  async queuePinnedNoteOperation(now = this.now()) {
+    return this.serialize(async () => {
+      const current = this.envelope.profile.pinnedNote;
+      if (!current.dirtySince) return undefined;
+      const localSeq = this.envelope.nextLocalSeq;
+      const operation: SyncOperation = {
+        opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
+        targetNodeId: "pinnedNote", targetType: "pinnedNote", type: "update", baseRevision: current.synced?.revision ?? 0,
+        payload: { pinnedNote: { body: current.localBody } }, createdAt: now.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+      };
+      const synced = candidateForPinnedNoteOperation(operation);
+      await this.commit({ ...this.envelope, nextLocalSeq: localSeq + 1, profile: { ...this.envelope.profile, pinnedNote: { ...current, synced, dirtySince: null } }, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, operation] } });
+      return operation;
+    });
+  }
+
+  async receivePinnedNote(incoming: VersionedPinnedNote) {
+    return this.serialize(async () => {
+      if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
+      const current = this.envelope.profile.pinnedNote;
+      const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
+      const winner = selfEcho ? current.synced : chooseVersionedPinnedNote(current.synced ?? undefined, incoming);
+      const pinnedNote = { ...current, synced: winner ?? current.synced, localBody: current.dirtySince ? current.localBody : (winner?.value.body ?? current.localBody) };
+      await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, pinnedNote }, sync: {
+        outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
+        seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
+      } });
+      return selfEcho ? "self-echo" as const : "remote" as const;
+    });
+  }
   private async receiveSerialized(incoming: VersionedNode) {
     if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
     const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
@@ -121,10 +205,10 @@ export class TaskMemoV2ApplicationStore {
     return selfEcho ? "self-echo" as const : "remote" as const;
   }
 
-  async acknowledge(opId: string, record?: VersionedNode) {
-    return this.serialize(() => this.acknowledgeSerialized(opId, record));
+  async acknowledge(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote) {
+    return this.serialize(() => this.acknowledgeSerialized(opId, record, pinnedNoteRecord));
   }
-  private async acknowledgeSerialized(opId: string, record?: VersionedNode) {
+  private async acknowledgeSerialized(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote) {
     const operation = this.envelope.sync.outbox.find((item) => item.opId === opId);
     let domain = this.envelope.domain;
     if (record && record.lastDeviceId !== this.envelope.deviceId) {
@@ -132,16 +216,23 @@ export class TaskMemoV2ApplicationStore {
       const winner = chooseVersionedNode(current, record);
       domain = { ...domain, [record.value.id]: winner };
     }
+    let profile = this.envelope.profile;
+    if (pinnedNoteRecord) {
+      const current = profile.pinnedNote;
+      const winner = chooseVersionedPinnedNote(current.synced ?? undefined, pinnedNoteRecord);
+      profile = { ...profile, pinnedNote: { ...current, synced: winner, localBody: current.dirtySince ? current.localBody : winner.value.body } };
+    }
     const next: Envelope = {
       ...this.envelope,
       domain,
+      profile,
       history: this.envelope.history,
       sync: {
         outbox: this.envelope.sync.outbox.filter((item) => item.opId !== opId),
-        seenOpIds: record ? [...new Set([...this.envelope.sync.seenOpIds, record.lastOpId])].slice(-500) : this.envelope.sync.seenOpIds,
+        seenOpIds: record || pinnedNoteRecord ? [...new Set([...this.envelope.sync.seenOpIds, (record ?? pinnedNoteRecord)!.lastOpId])].slice(-500) : this.envelope.sync.seenOpIds,
       },
     };
-    if (operation || domain !== this.envelope.domain) await this.commit(next);
+    if (operation || domain !== this.envelope.domain || profile !== this.envelope.profile) await this.commit(next);
   }
 
   private nodeHistory(): NodeHistory {

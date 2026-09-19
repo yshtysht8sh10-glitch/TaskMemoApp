@@ -44,6 +44,18 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await assertFails(setDoc(doc(owner, "users/owner/syncOperationsV2/wrong"), { ownerUid: "owner", schemaVersion: 2, operation: { opId: "different" }, acknowledgement: { opId: "different" } }));
   });
 
+  it("isolates and validates the separate pinned-note profile resource", async () => {
+    const owner = environment.authenticatedContext("owner").firestore();
+    const other = environment.authenticatedContext("other").firestore();
+    const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { body: "shared" }, revision: 2, lastOpId: "device:2", lastDeviceId: "device", lastLocalSeq: 2 } };
+    const ref = doc(owner, "users/owner/profileV2/pinnedNote");
+    await assertSucceeds(setDoc(ref, valid));
+    await assertFails(getDoc(doc(other, "users/owner/profileV2/pinnedNote")));
+    await assertFails(setDoc(ref, { ...valid, ownerUid: "other" }));
+    await assertFails(setDoc(ref, { ...valid, record: { ...valid.record, revision: 1 } }));
+    await assertFails(setDoc(ref, { ...valid, record: { ...valid.record, value: {} } }));
+  });
+
   it("rejects stale V1, dual-write, missing markers, and both protocols during maintenance", async () => {
     const owner = environment.authenticatedContext("owner").firestore();
     const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { id: "a" }, revision: 1, lastOpId: "device:1", lastDeviceId: "device", lastLocalSeq: 1, operationType: "create" } };
@@ -88,6 +100,11 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await waitFor(() => b.nodes.find((node) => node.id === "memo-a")?.title === "B");
     await b.command("edit", "update", (nodes) => updateNode(nodes, "memo-a", { title: "C" }, now(3))); await controllerB.flush();
     await waitFor(() => a.nodes.find((node) => node.id === "memo-a")?.title === "C");
+
+    await a.setPinnedNoteDraft("from A", now(3)); await a.queuePinnedNoteOperation(now(3)); await controllerA.flush();
+    await waitFor(() => b.pinnedNote.body === "from A");
+    await b.setPinnedNoteDraft("from B", now(4)); await b.queuePinnedNoteOperation(now(4)); await controllerB.flush();
+    await waitFor(() => a.pinnedNote.body === "from B");
 
     controllerA.stop(); controllerB.stop();
     await a.command("offline A", "update", (nodes) => updateNode(nodes, "memo-a", { title: "offline-A" }, now(4)));

@@ -16,12 +16,13 @@ import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
 import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
 import { subscribeToWebOnline } from "./webOnlineListener";
 import { normalizeLegacyRanks } from "../services/nodeStorage";
+import type { PinnedNote } from "../services/pinnedNoteStorage";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase;
 
 const message = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
 
-function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean) {
+function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void) {
   const firebase = firebaseConfiguration();
   const configured = enabled && firebase.config !== null;
   const [user, setUser] = useState<User | null>(null);
@@ -31,12 +32,28 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const [networkPaused, setNetworkPaused] = useState(false);
   const onHistoryRef = useRef(onHistory);
   useEffect(() => { onHistoryRef.current = onHistory; }, [onHistory]);
+  const onPinnedNoteRef = useRef(onPinnedNote);
+  useEffect(() => { onPinnedNoteRef.current = onPinnedNote; }, [onPinnedNote]);
+  const initialPinnedNoteRef = useRef(initialPinnedNote);
+  const publishedPinnedNoteRef = useRef(initialPinnedNote.body);
   const storeRef = useRef<TaskMemoV2ApplicationStore | null>(null);
   const controllerRef = useRef<TaskMemoV2SyncController | null>(null);
+  const initialPinnedBody = initialPinnedNote.body;
+  const initialPinnedUpdatedAt = initialPinnedNote.updatedAt.getTime();
+  useEffect(() => {
+    if (!storeRef.current) {
+      initialPinnedNoteRef.current = { body: initialPinnedBody, updatedAt: new Date(initialPinnedUpdatedAt) };
+      publishedPinnedNoteRef.current = initialPinnedBody;
+    }
+  }, [initialPinnedBody, initialPinnedUpdatedAt]);
 
   const publish = () => {
     const store = storeRef.current; const controller = controllerRef.current;
     if (store) onHistoryRef.current(store.history);
+    if (store && store.pinnedNote.body !== publishedPinnedNoteRef.current) {
+      publishedPinnedNoteRef.current = store.pinnedNote.body;
+      onPinnedNoteRef.current(store.pinnedNote.body);
+    }
     if (controller) setStatus(controller.state.phase);
   };
 
@@ -53,7 +70,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setStatus("connecting");
       try {
         // Never implicitly import V1 or the previous account's UI state.
-        const store = await TaskMemoV2ApplicationStore.open(new TaskMemoV2ApplicationJournal(`${db.app.options.projectId}/${nextUser.uid}`), [], { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` });
+        const store = await TaskMemoV2ApplicationStore.open(new TaskMemoV2ApplicationJournal(`${db.app.options.projectId}/${nextUser.uid}`), [], { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current });
         if (currentGeneration !== generation) return;
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const controller = new TaskMemoV2SyncController(store, createFirebaseSyncAdapter(db, nextUser.uid, emulator ? "test" : "development", { emulator }), publish);
@@ -98,11 +115,12 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp,
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),
+    updatePinnedNote: (body: string) => run((controller) => controller.updatePinnedNote(body)),
     undo: () => run((controller) => controller.undo()), redo: () => run((controller) => controller.redo()),
   };
 }
 
-export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void) {
+export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, initialPinnedNote: PinnedNote = { body: "", updatedAt: new Date(0) }, onPinnedNote: (body: string) => void = () => undefined) {
   const firebase = firebaseConfiguration();
   const environment = firebase.environment;
   const useV2 = isConfiguredV2SyncEnabled(environment, process.env.EXPO_PUBLIC_SYNC_V2_ENABLED, firebase.config !== null);
@@ -110,6 +128,6 @@ export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory:
     const next = reconcileSyncedNodeHistory(history, nodes);
     onHistory({ ...next, nodes: normalizeLegacyRanks(next.nodes) });
   }, !useV2);
-  const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2);
-  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, undo: () => false, redo: () => false };
+  const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2, initialPinnedNote, onPinnedNote);
+  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, updatePinnedNote: () => false, undo: () => false, redo: () => false };
 }

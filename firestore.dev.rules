@@ -37,6 +37,21 @@ service cloud.firestore {
         && record.operationType is string;
     }
 
+    function validPinnedNoteRecord() {
+      let record = request.resource.data.record;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && record is map
+        && record.keys().hasAll(['value', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq'])
+        && record.value is map
+        && record.value.body is string
+        && record.revision is int && record.revision >= 0
+        && record.lastOpId is string && record.lastOpId.size() > 0
+        && record.lastDeviceId is string && record.lastDeviceId.size() > 0
+        && record.lastLocalSeq is int && record.lastLocalSeq >= 0;
+    }
+
     function validOperation(opId) {
       let operation = request.resource.data.operation;
       let acknowledgement = request.resource.data.acknowledgement;
@@ -50,8 +65,14 @@ service cloud.firestore {
         && operation.localSeq is int && operation.localSeq > 0
         && operation.targetNodeId is string && operation.targetNodeId.size() > 0
         && operation.baseRevision is int && operation.baseRevision >= 0
-        && operation.payload is map && operation.payload.node is map
-        && operation.payload.node.id == operation.targetNodeId
+        && operation.payload is map
+        && ((operation.targetType == 'pinnedNote'
+          && operation.targetNodeId == 'pinnedNote'
+          && operation.payload.pinnedNote is map
+          && operation.payload.pinnedNote.body is string)
+        || ((!operation.keys().hasAny(['targetType']) || operation.targetType == 'node')
+          && operation.payload.node is map
+          && operation.payload.node.id == operation.targetNodeId))
         && acknowledgement is map && acknowledgement.opId == opId;
     }
 
@@ -76,6 +97,16 @@ service cloud.firestore {
         && protocolAllowed(userId, 2)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && validVersionedRecord(nodeId)
+        && request.resource.data.record.revision >= resource.data.record.revision;
+      allow delete: if false;
+    }
+    match /users/{userId}/profileV2/pinnedNote {
+      allow read: if ownsUser(userId);
+      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validPinnedNoteRecord();
+      allow update: if ownsUser(userId)
+        && protocolAllowed(userId, 2)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validPinnedNoteRecord()
         && request.resource.data.record.revision >= resource.data.record.revision;
       allow delete: if false;
     }

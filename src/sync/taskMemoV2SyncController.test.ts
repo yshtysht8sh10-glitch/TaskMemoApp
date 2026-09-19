@@ -6,14 +6,16 @@ import { InMemoryRevisionServer } from "./revisionModel";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
 import { nodeToV2Value } from "./nodeV2Codec";
-import type { SyncAdapter, SyncOperation, VersionedNode } from "./types";
+import type { SyncAdapter, SyncOperation, VersionedNode, VersionedPinnedNote } from "./types";
 
 class MemoryPersistence implements ApplicationJournalPersistence { value: string | null = null; journal: string | null = null; loadCommitted = async () => this.value; loadJournal = async () => this.journal; writeJournal = async (v: string) => { this.journal = v; }; writeCommitted = async (v: string) => { this.value = v; }; clearJournal = async () => { this.journal = null; }; }
 class ListenerAdapter implements SyncAdapter {
-  server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
+  server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); pinnedListeners = new Set<(record: VersionedPinnedNote) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
   async connect() { if (!this.online) throw { kind: "offline" }; }
   subscribe(onRecord: (record: VersionedNode) => void | Promise<void>) { this.listeners.add(onRecord); for (const id of this.initialIds) { const record = this.server.get(id); if (record) void onRecord(record); } return () => { this.listeners.delete(onRecord); }; }
-  async upload(operation: SyncOperation) { if (!this.online) throw { kind: "offline" }; this.uploads.push(operation); const ack = this.server.apply(operation); if (ack.record) for (const listener of this.listeners) await listener(ack.record); return ack; }
+  async upload(operation: SyncOperation) { if (!this.online) throw { kind: "offline" }; this.uploads.push(operation); const ack = this.server.apply(operation); if (ack.record) for (const listener of this.listeners) await listener(ack.record); if (ack.pinnedNoteRecord) for (const listener of this.pinnedListeners) await listener(ack.pinnedNoteRecord); return ack; }
+  async readPinnedNote() { return this.server.getPinnedNote(); }
+  subscribePinnedNote(onRecord: (record: VersionedPinnedNote) => void | Promise<void>) { this.pinnedListeners.add(onRecord); const record = this.server.getPinnedNote(); if (record) void onRecord(record); return () => { this.pinnedListeners.delete(onRecord); }; }
   async replay(id: string) { const record = this.server.get(id); if (record) for (const listener of this.listeners) await listener(record); }
 }
 const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sortKey: "a", title: "A", body: "", dueAt: null, duePreset: "none", status: "active", completedAt: null, createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null });
@@ -123,6 +125,35 @@ describe("V2 listener controller", () => {
     expect(adapter.server.get("memo-a")).toBeUndefined();
     await controller.resume();
     expect(store.outbox).toHaveLength(0); expect(adapter.server.get("memo-a")?.value.title).toBe("offline");
+  });
+  it("persists pinned-note input before debounce and flushes it after reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const persistence = new MemoryPersistence(); const adapter = new ListenerAdapter();
+      let store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a" });
+      let controller = new TaskMemoV2SyncController(store, adapter); await controller.start();
+      await controller.updatePinnedNote("offline draft", 500);
+      expect(store.pinnedNote.body).toBe("offline draft"); expect(store.outbox).toHaveLength(0); expect(controller.state.phase).toBe("pending");
+      controller.stop();
+      store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
+      expect(store.pinnedNote.body).toBe("offline draft");
+      controller = new TaskMemoV2SyncController(store, adapter); await controller.start();
+      expect(adapter.server.getPinnedNote()?.value.body).toBe("offline draft");
+      expect(store.outbox).toHaveLength(0); expect(controller.state.phase).toBe("synced");
+    } finally { vi.useRealTimers(); }
+  });
+  it("keeps a debounced pinned-note operation offline and sends it on resume", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
+      const adapter = new ListenerAdapter(); const controller = new TaskMemoV2SyncController(store, adapter);
+      await controller.start(); controller.pause();
+      await controller.updatePinnedNote("offline", 500);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(store.outbox).toHaveLength(1); expect(adapter.server.getPinnedNote()).toBeUndefined();
+      await controller.resume();
+      expect(store.outbox).toHaveLength(0); expect(adapter.server.getPinnedNote()?.value.body).toBe("offline");
+    } finally { vi.useRealTimers(); }
   });
   it("self echo and replay do not change history or create operations, and pending never reports synced", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [memo()], { deviceId: "device-a" });
