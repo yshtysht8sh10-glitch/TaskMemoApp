@@ -6,6 +6,7 @@
 
 - [TaskMemo設計書](docs/DESIGN.md) — Node、期限、完了、削除などのドメイン設計
 - [Data Management Matrix](docs/DATA_MANAGEMENT_MATRIX.md) — 永続化、Cloud Sync、Undo/Redo、Export/Importの横断基準
+- [V1 / Legacy Inventory](docs/V1_LEGACY_INVENTORY.md) — V1資産、Firestore/AsyncStorage、migration・rollback、削除時期の棚卸し
 - [Sync V2 foundation](docs/SYNC_V2.md) — V2同期状態、outbox、revision、WALの設計
 - [Testing guide](docs/TESTING.md) — 変更時の検証・回帰テスト方針
 
