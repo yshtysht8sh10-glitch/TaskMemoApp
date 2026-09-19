@@ -2,6 +2,13 @@
 
 外部AI向けRemote MCPの構成とローカル検証方法は [docs/external-ai-mcp.md](docs/external-ai-mcp.md) を参照してください。
 
+## Design documentation
+
+- [TaskMemo設計書](docs/DESIGN.md) — Node、期限、完了、削除などのドメイン設計
+- [Data Management Matrix](docs/DATA_MANAGEMENT_MATRIX.md) — 永続化、Cloud Sync、Undo/Redo、Export/Importの横断基準
+- [Sync V2 foundation](docs/SYNC_V2.md) — V2同期状態、outbox、revision、WALの設計
+- [Testing guide](docs/TESTING.md) — 変更時の検証・回帰テスト方針
+
 OneNoteで行っていたタスク・メモ管理を置き換えることを目的としたスマートフォンアプリ。
 
 ## Tech Stack
