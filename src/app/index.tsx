@@ -92,6 +92,7 @@ import {
   parseLocalDateTime,
 } from "@/utils/dueDates";
 import { useAppTheme, type ThemeColors, type ThemeMode } from "@/theme/theme";
+import { saveBackupSettings } from "@/services/backupSettingsStorage";
 import {
   COMPLETION_HISTORY_CRITERIA,
   completionHistoryGroups,
@@ -472,7 +473,13 @@ export default function HomeScreen() {
   };
   const exportData = async () => {
     try {
-      await exportNodesToFile(nodes, { body: pinnedNote, updatedAt: pinnedNoteUpdatedAt });
+      await exportNodesToFile(nodes, { body: pinnedNote, updatedAt: pinnedNoteUpdatedAt }, {
+        listDisplay: { visibleGroupIds: [...visibleGroupIds], showPinnedNote, todayGranularity, pinnedNoteHeight },
+        treeDisplay: { showCompletedMemos: showCompletedTreeMemos },
+        reminders,
+        theme: mode,
+        features: { ideasEnabled },
+      });
     } catch (error) {
       appAlert(
         "書き出しエラー",
@@ -497,13 +504,28 @@ export default function HomeScreen() {
             onPress: async () => {
               try {
                 const normalized = normalizeLegacyRanks(imported.nodes);
-                if (!sync.command("データを読み込む", () => normalized)) {
+                if (imported.settings) {
+                  await listDisplaySaveQueue.current;
+                  await saveBackupSettings(imported.settings);
+                }
+                if (!sync.command("データを読み込む", () => normalized, false)) {
                   await saveNodes(normalized);
                   setHistory((current) => replaceNodeHistory(current, normalized));
                 }
                 if (imported.pinnedNote) {
                   setPinnedNoteUpdatedAt(imported.pinnedNote.updatedAt);
                   changePinnedNote(imported.pinnedNote.body);
+                }
+                if (imported.settings) {
+                  const settings = imported.settings;
+                  setVisibleGroupIds(new Set(settings.listDisplay.visibleGroupIds));
+                  setShowPinnedNote(settings.listDisplay.showPinnedNote);
+                  setTodayGranularity(settings.listDisplay.todayGranularity);
+                  setPinnedNoteHeight(settings.listDisplay.pinnedNoteHeight);
+                  setShowCompletedTreeMemos(settings.treeDisplay.showCompletedMemos);
+                  setReminders(settings.reminders);
+                  setIdeasEnabled(settings.features.ideasEnabled);
+                  setMode(settings.theme);
                 }
                 setSettingsOpen(false);
               } catch {

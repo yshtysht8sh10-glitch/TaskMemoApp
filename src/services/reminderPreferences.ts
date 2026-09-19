@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { DEFAULT_REMINDER_PREFERENCES, type ReminderPreferences } from '@/domain/reminders';
+import { DEFAULT_REMINDER_PREFERENCES, type ReminderPreferences } from '../domain/reminders';
 
 const KEY = '@taskmemo/settings/reminders/v1';
 

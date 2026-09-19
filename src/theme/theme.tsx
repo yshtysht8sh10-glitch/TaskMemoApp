@@ -35,6 +35,7 @@ export type ThemeColors = {
 };
 
 const THEME_MODE_KEY = "@taskmemo/settings/theme/v1";
+export async function saveThemeMode(value: ThemeMode) { await AsyncStorage.setItem(THEME_MODE_KEY, value); }
 export const THEME_COLORS: Record<"light" | "dark", ThemeColors> = {
   light: {
     background: "#f8f9fb",
@@ -105,7 +106,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
   const setMode = (value: ThemeMode) => {
     setModeState(value);
-    AsyncStorage.setItem(THEME_MODE_KEY, value).catch(() => {});
+    saveThemeMode(value).catch(() => {});
   };
   const resolved =
     mode === "system" ? (system === "dark" ? "dark" : "light") : mode;

@@ -1,6 +1,11 @@
 import type { DuePreset, MemoStatus, Node } from "@/models/node";
+import { allDeadlineGroupIds, TODAY_GRANULARITIES, type DeadlineGroupKey, type TodayGranularity } from "../domain/deadlineView";
+import type { ReminderPreferences } from "@/domain/reminders";
+import type { FeaturePreferences } from "@/services/featurePreferences";
+import type { ListDisplayPreferences, TreeDisplayPreferences } from "./viewPreferences";
+import type { ThemeMode } from "@/theme/theme";
 
-export const BACKUP_SCHEMA_VERSION = 2;
+export const BACKUP_SCHEMA_VERSION = 3;
 const DATE_FIELDS = [
   "createdAt",
   "updatedAt",
@@ -21,14 +26,23 @@ const DUE_PRESETS = new Set<DuePreset>([
   "custom",
 ]);
 const MEMO_STATUSES = new Set<MemoStatus>(["active", "completed"]);
+const PINNED_NOTE_HEIGHT_MIN = 72;
+const PINNED_NOTE_HEIGHT_MAX = 280;
 
 export type NodeBackup = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   exportedAt: string;
-  nodes: Node[];
+  nodes?: Node[];
   pinnedNote?: { body: string; updatedAt: string };
 };
-export type TaskMemoBackupData = { nodes: Node[]; pinnedNote: { body: string; updatedAt: Date } | null };
+export type TaskMemoBackupSettings = {
+  listDisplay: ListDisplayPreferences;
+  treeDisplay: TreeDisplayPreferences;
+  reminders: ReminderPreferences;
+  theme: ThemeMode;
+  features: FeaturePreferences;
+};
+export type TaskMemoBackupData = { nodes: Node[]; pinnedNote: { body: string; updatedAt: Date } | null; settings: TaskMemoBackupSettings | null };
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,8 +62,8 @@ export function serializeNodeBackup(nodes: Node[], exportedAt = new Date()) {
   );
 }
 
-export function serializeTaskMemoBackup(nodes: Node[], pinnedNote: { body: string; updatedAt: Date }, exportedAt = new Date()) {
-  return JSON.stringify({ schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: exportedAt.toISOString(), nodes, pinnedNote }, null, 2);
+export function serializeTaskMemoBackup(nodes: Node[], pinnedNote: { body: string; updatedAt: Date }, settings: TaskMemoBackupSettings, exportedAt = new Date()) {
+  return JSON.stringify({ schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: exportedAt.toISOString(), content: { nodes, pinnedNote }, settings }, null, 2);
 }
 
 export function parseNodeBackup(raw: string): Node[] {
@@ -63,13 +77,14 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
   } catch {
     throw new Error("JSON形式が正しくありません。");
   }
-  if (!isObject(backup) || (backup.schemaVersion !== 1 && backup.schemaVersion !== BACKUP_SCHEMA_VERSION))
+  if (!isObject(backup) || ![1, 2, BACKUP_SCHEMA_VERSION].includes(backup.schemaVersion as number))
     throw new Error("対応していないバックアップ形式です。");
-  if (!validDateString(backup.exportedAt) || !Array.isArray(backup.nodes))
+  const content = backup.schemaVersion === 3 && isObject(backup.content) ? backup.content : backup;
+  if (!validDateString(backup.exportedAt) || !Array.isArray(content.nodes))
     throw new Error("バックアップの基本情報が不正です。");
 
   const ids = new Set<string>();
-  const records = backup.nodes.map((value, index) => {
+  const records = content.nodes.map((value, index) => {
     if (!isObject(value)) throw new Error(`${index + 1}件目のNodeが不正です。`);
     if (typeof value.id !== "string" || !value.id || ids.has(value.id))
       throw new Error("Node IDが空または重複しています。");
@@ -143,10 +158,34 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
     return restored as Node;
   });
   let pinnedNote: TaskMemoBackupData["pinnedNote"] = null;
-  if (backup.schemaVersion === 2) {
-    if (!isObject(backup.pinnedNote) || typeof backup.pinnedNote.body !== "string" || !validDateString(backup.pinnedNote.updatedAt))
+  if (backup.schemaVersion === 2 || backup.schemaVersion === 3) {
+    if (!isObject(content.pinnedNote) || typeof content.pinnedNote.body !== "string" || !validDateString(content.pinnedNote.updatedAt))
       throw new Error("常設メモのデータが不正です。");
-    pinnedNote = { body: backup.pinnedNote.body, updatedAt: new Date(backup.pinnedNote.updatedAt as string) };
+    pinnedNote = { body: content.pinnedNote.body, updatedAt: new Date(content.pinnedNote.updatedAt as string) };
   }
-  return { nodes, pinnedNote };
+  const settings = backup.schemaVersion === 3 ? parseSettings(backup.settings) : null;
+  return { nodes, pinnedNote, settings };
+}
+
+function parseSettings(value: unknown): TaskMemoBackupSettings {
+  if (!isObject(value) || !isObject(value.listDisplay) || !isObject(value.treeDisplay) || !isObject(value.reminders) || !isObject(value.features))
+    throw new Error("設定データが不正です。");
+  const list = value.listDisplay;
+  const validGroups = new Set(allDeadlineGroupIds());
+  const validGranularities = new Set(TODAY_GRANULARITIES.map((item) => item.id));
+  if (!Array.isArray(list.visibleGroupIds) || list.visibleGroupIds.some((id) => typeof id !== "string" || !validGroups.has(id as DeadlineGroupKey))
+    || typeof list.showPinnedNote !== "boolean" || !validGranularities.has(list.todayGranularity as TodayGranularity)
+    || typeof list.pinnedNoteHeight !== "number" || !Number.isFinite(list.pinnedNoteHeight)
+    || list.pinnedNoteHeight < PINNED_NOTE_HEIGHT_MIN || list.pinnedNoteHeight > PINNED_NOTE_HEIGHT_MAX
+    || typeof value.treeDisplay.showCompletedMemos !== "boolean"
+    || typeof value.reminders.enabled !== "boolean" || typeof value.reminders.sameDay !== "boolean" || typeof value.reminders.dayBefore !== "boolean"
+    || !["system", "light", "dark"].includes(value.theme as string)
+    || typeof value.features.ideasEnabled !== "boolean") throw new Error("設定値が不正です。");
+  return {
+    listDisplay: { visibleGroupIds: [...list.visibleGroupIds] as DeadlineGroupKey[], showPinnedNote: list.showPinnedNote, todayGranularity: list.todayGranularity as TodayGranularity, pinnedNoteHeight: list.pinnedNoteHeight },
+    treeDisplay: { showCompletedMemos: value.treeDisplay.showCompletedMemos },
+    reminders: { enabled: value.reminders.enabled, sameDay: value.reminders.sameDay, dayBefore: value.reminders.dayBefore },
+    theme: value.theme as ThemeMode,
+    features: { ideasEnabled: value.features.ideasEnabled },
+  };
 }

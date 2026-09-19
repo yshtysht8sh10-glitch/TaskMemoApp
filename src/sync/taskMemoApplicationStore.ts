@@ -390,6 +390,9 @@ export class TaskMemoV2ApplicationStore {
     }
     for (const [id, value] of after) {
       const current = domain[id];
+      // Import and other whole-state commands must never turn a permanent
+      // tombstone back into a normal Node, even temporarily before server ack.
+      if (current?.value.purgedAt && !value.purgedAt) continue;
       if (current && same(current.value, value)) continue;
       const operation: SyncOperation = {
         opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,

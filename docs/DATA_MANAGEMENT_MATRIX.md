@@ -163,11 +163,11 @@ This table records current behavior, not desired behavior. `Cloud Sync ○` for 
 | Purge tombstone | Node fields | ○ | △ | ○ | ○ | Content lifecycle | Single purge omits history; batch path currently records a history entry |
 | Pinned note | Legacy key + V2 envelope + `profileV2` | ○ | ○ | ○ | ○ | User content | V2 has WAL, History, outbox, revision, echo handling |
 | Legacy pinned-note candidates | V2 envelope only | × | ― | × | × | Recovery content | Preserved locally but has no user-facing recovery/export path |
-| List display preferences | AsyncStorage | × | ― | × | × | Persistent setting | Four settings share one record |
-| Tree display preferences | AsyncStorage | × | ― | × | × | Persistent setting | `showCompletedMemos` |
-| Reminder preferences | AsyncStorage | × | ― | × | × | Persistent setting | OS permission and scheduled notifications are separate |
-| Theme | AsyncStorage | × | ― | × | × | Persistent setting | `system`/`light`/`dark` |
-| Feature preferences | AsyncStorage | × | ― | × | × | Persistent setting | Currently only `ideasEnabled` |
+| List display preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | Four settings share one record |
+| Tree display preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | `showCompletedMemos` |
+| Reminder preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | OS permission and scheduled notifications are separate |
+| Theme | AsyncStorage | × | ― | ○ | ○ | Persistent setting | `system`/`light`/`dark` |
+| Feature preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | Currently only `ideasEnabled`; backup does not make it Cloud Sync data |
 | V2 History | Scoped V2 envelope | × | ― | × | × | Local operational state | Persists across restart; remote/self echo preserves it |
 | V1 History | React state | × | ― | × | × | Session state | Node-only and lost on restart |
 | V2 WAL/outbox | Scoped V2 envelope/journal | △ | ― | × | × | Sync/recovery state | Receipt is uploaded; local queue itself is not restored from cloud |
@@ -182,13 +182,12 @@ This table records current behavior, not desired behavior. `Cloud Sync ○` for 
 
 The UI uses `serializeTaskMemoBackup` and `parseTaskMemoBackup` in [`nodeBackup.ts`](../src/services/nodeBackup.ts).
 
-- Current export `schemaVersion`: `2`
-- Schema 2 exports all Nodes and `{ body, updatedAt }` for pinnedNote.
+- Current export `schemaVersion`: `3`
+- Schema 3 separates `content` (all Nodes and `{ body, updatedAt }` pinnedNote) from validated `settings` (list/tree display, reminders, theme, features).
 - Deleted and purged Node records remain in the exported Node array.
-- Schema 2 import restores Nodes and pinnedNote.
-- Schema 1 remains import-compatible and contains Nodes only.
-- Importing schema 1 leaves the current pinnedNote unchanged.
-- Persistent preferences, recovery candidates, History, WAL, outbox, revision, authentication, and audit records are not exported.
+- Schema 3 import restores Nodes, pinnedNote and settings. Settings are persisted with one AsyncStorage `multiSet` batch.
+- Schemas 1 and 2 remain import-compatible. Missing pinnedNote/settings are represented as absent and leave the importing device's current values unchanged.
+- Recovery candidates, History, WAL, outbox, revision, device identity, authentication, Firebase internals and audit records are not exported.
 
 ## Target matrix
 
@@ -219,11 +218,9 @@ This table is a proposal and does not claim implementation.
 
 The facts below describe the current implementation. The recommendations are separate and require their own approved implementation work.
 
-### 1. Persistent preferences are absent from Export/Import
+### 1. Persistent preferences Export/Import — resolved
 
-**Current fact:** schema 2 contains Nodes and pinnedNote only. List/tree display, reminders, theme, and feature preferences remain outside the backup.
-
-**Target proposal:** add validated preference sections in a future schema while preserving schema 1/2 import compatibility. Device-specific values should be applied only to the device performing the import.
+**Current fact:** schema 3 includes validated list/tree display, reminder, theme and feature preferences. Import applies them only to the importing device. This does not change their Cloud Sync classification. Schemas 1/2 preserve current device settings because those schemas have no settings section.
 
 ### 2. `ideasEnabled` is not synchronized
 

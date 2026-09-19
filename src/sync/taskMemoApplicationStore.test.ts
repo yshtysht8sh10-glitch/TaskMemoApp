@@ -447,4 +447,18 @@ describe("TaskMemo V2 application store", () => {
     expect(store.outbox).toHaveLength(1);
     expect(store.historyDepths).toEqual({ past: 0, future: 0 });
   });
+
+  it("treats imported content as new V2 operations without reviving a purge tombstone", async () => {
+    const persistence = new MemoryPersistence();
+    const purged = hardDeleteNode([initialMemo()], "memo-a", at(1));
+    let store = await TaskMemoV2ApplicationStore.open(persistence, purged, { deviceId: "device-a", now: () => at(9) });
+    const before = store.versionedNode("memo-a")!;
+    const operations = await store.command("データを読み込む", "import", () => [initialMemo()], { recordHistory: false });
+    expect(operations).toEqual([]);
+    expect(store.versionedNode("memo-a")).toEqual(before);
+    expect(store.nodes[0].purgedAt).toEqual(at(1));
+    expect(store.historyDepths).toEqual({ past: 0, future: 0 });
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
+    expect(store.nodes[0].purgedAt).toEqual(at(1));
+  });
 });
