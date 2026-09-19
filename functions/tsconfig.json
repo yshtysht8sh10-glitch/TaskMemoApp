@@ -22,6 +22,8 @@
     "../src/external-ai/usageQuotaGate.ts",
     "../src/domain/nodeOperations.ts",
     "../src/domain/routine.ts",
+    "../src/sync/revisionModel.ts",
+    "../src/sync/types.ts",
     "../src/models/node.ts"
   ],
   "exclude": ["**/*.test.ts"]

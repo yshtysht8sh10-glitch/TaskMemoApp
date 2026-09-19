@@ -50,6 +50,18 @@ At every step print and independently compare the project ID. STOP on any mismat
 - STOP: any source issue in a formal rehearsal, partial migration, equality failure, old-client access, or V2 smoke failure. The orphan-preservation switch is diagnostic only and cannot produce cutover approval.
 - Rollback: while frozen, remove only records proven to belong to that rehearsal migration. For production, preserve the post-freeze export and never infer ownership by timestamp alone.
 
+### External AI phase policy
+
+| Phase | External AI read/write |
+| --- | --- |
+| migration前（V1 gate） | V2 repositoryはfail-closed。V1 fallbackは禁止 |
+| write freeze中 | read/writeとも停止し、AI requestを成功扱いにしない |
+| V2 migration後・再開前 | V2 gateまたはglobal freezeにより停止 |
+| V2 cutover後 | V2-only gate確認後、`nodesV2`とoperation/request receipt経由で許可 |
+| rollback検討時 | まずfreezeしV2 winner/receiptを保存。AI変更をV1へ暗黙変換せず、forward migrationまたは監査付きreconciliationを行う |
+
+FunctionsをV2対応版へ切り替えること自体もcutover操作である。V1期間へ先行deployしてV2 dataを書かせず、旧FunctionsをV2 cutover後に残してV1へ書かせない。rollbackでV1 snapshotを復元するとV2-only AI変更が失われるため、V2 edit後はV1への単純rollbackを禁止する。
+
 ## Production execution — requires separate authorization
 
 ### 5. Preflight and managed backup

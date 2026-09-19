@@ -8,6 +8,7 @@ import type { ExternalAiOperation, ExternalAiUsageQuotaGate } from '../../src/ex
 import { AllowAllExternalAiUsageQuotaGate } from '../../src/external-ai/usageQuotaGate.js';
 
 const selector = { memoId: z.string().min(1).optional(), title: z.string().min(1).optional() };
+const writeIdentity = { requestId: z.uuid(), expectedRevision: z.number().int().nonnegative() };
 const duePreset = z.enum(['none', 'today', 'tomorrow', 'morning', 'afternoon', 'thisWeek', 'thisMonth', 'thisYear', 'custom']);
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: { result: value } });
 const toolError = (error: unknown) => {
@@ -43,29 +44,29 @@ export function createTaskMemoMcpServer(
 
   server.registerTool('create_memo', {
     description: 'TaskMemoへMemoを作成します。日時はタイムゾーン付きISO 8601で指定してください。',
-    inputSchema: z.object({ title: z.string().min(1).max(500), body: z.string().max(20_000).optional(), parentId: z.string().nullable().optional(), dueAt: z.iso.datetime({ offset: true }).nullable().optional(), duePreset: duePreset.optional() }),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: z.object({ requestId: z.uuid(), title: z.string().min(1).max(500), body: z.string().max(20_000).optional(), parentId: z.string().nullable().optional(), dueAt: z.iso.datetime({ offset: true }).nullable().optional(), duePreset: duePreset.optional() }),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, (input) => invoke(() => run('create_memo', 'write', () => service.createMemo(user, input))));
 
   server.registerTool('update_memo', {
     description: 'Memoを更新します。可能ならmemoIdを使用してください。同名候補が複数の場合は更新しません。',
-    inputSchema: z.object({ ...selector, newTitle: z.string().min(1).max(500).optional(), body: z.string().max(20_000).optional(), parentId: z.string().nullable().optional(), dueAt: z.iso.datetime({ offset: true }).nullable().optional(), duePreset: duePreset.optional() }),
+    inputSchema: z.object({ ...selector, ...writeIdentity, newTitle: z.string().min(1).max(500).optional(), body: z.string().max(20_000).optional(), parentId: z.string().nullable().optional(), dueAt: z.iso.datetime({ offset: true }).nullable().optional(), duePreset: duePreset.optional() }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, (input) => invoke(() => run('update_memo', 'write', () => service.updateMemo(user, input))));
 
   server.registerTool('complete_memo', {
-    description: 'Memoを完了にします。同名候補が複数の場合は変更しません。', inputSchema: z.object(selector),
+    description: 'Memoを完了にします。同名候補が複数の場合は変更しません。', inputSchema: z.object({ ...selector, ...writeIdentity }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, (input) => invoke(() => run('complete_memo', 'write', () => service.completeMemo(user, input))));
 
   server.registerTool('delete_memo', {
-    description: 'Memoをゴミ箱へ移動する論理削除です。完全削除は行いません。同名候補が複数の場合は変更しません。', inputSchema: z.object(selector),
+    description: 'Memoをゴミ箱へ移動する論理削除です。完全削除は行いません。同名候補が複数の場合は変更しません。', inputSchema: z.object({ ...selector, ...writeIdentity }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, (input) => invoke(() => run('delete_memo', 'write', () => service.deleteMemo(user, input))));
 
   server.registerTool('restore_memo', {
-    description: '論理削除されたMemoを復元します。purgedAtを持つ完全削除済みNodeは復元しません。', inputSchema: z.object(selector),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    description: '論理削除されたMemoを復元します。purgedAtを持つ完全削除済みNodeは復元しません。', inputSchema: z.object({ ...selector, ...writeIdentity }),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, (input) => invoke(() => run('restore_memo', 'write', () => service.restoreMemo(user, input))));
 
   server.registerTool('list_categories', {

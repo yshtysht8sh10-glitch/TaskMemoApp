@@ -5,7 +5,7 @@
   "engines": { "node": "22" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run src/oauthService.test.ts src/mcpServer.test.ts",
+    "test": "vitest run src/oauthService.test.ts src/mcpServer.test.ts src/firestoreNodeRepository.test.ts",
     "check": "npm run build && npm test"
   },
   "dependencies": {

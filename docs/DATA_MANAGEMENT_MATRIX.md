@@ -245,9 +245,9 @@ The facts below describe the current implementation. The recommendations are sep
 
 ### 5. External AI directly operates V1 `nodes`
 
-**Current fact:** the implemented [`firestoreNodeRepository.ts`](../functions/src/firestoreNodeRepository.ts) reads and writes `users/{uid}/nodes` with Admin Firestore. It does not use `nodesV2`, V2 operations, revision, outbox, or compatibility-gate enforcement. Production Functions deployment has not occurred, as recorded in [external-ai-mcp.md](external-ai-mcp.md).
+**Current fact:** [`firestoreNodeRepository.ts`](../functions/src/firestoreNodeRepository.ts) now reads V2 winners and produces transactional V2 operations with revision preconditions, stable producer/request identity, operation/request receipts, compatibility-gate enforcement, and audit. It has no V1 Node fallback. Production Functions deployment has not occurred, as recorded in [external-ai-mcp.md](external-ai-mcp.md).
 
-**Target proposal:** before production V2 cutover, route External-AI writes through a V2-compatible application-command boundary so a successful AI change participates in deterministic sync and audit.
+**Remaining deployment gate:** deploy only as an explicitly coordinated part of V2 cutover; never enable this V2-only Functions build during a V1 phase or retain a V1-writing Functions build after cutover.
 
 ### 6. V1/V2 local-storage retirement is undefined
 

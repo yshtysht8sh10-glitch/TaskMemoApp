@@ -120,7 +120,7 @@ app.all('/mcp', async (request, response) => {
     return response.status(401).json({ error: 'invalid_token' });
   }
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  const server = createTaskMemoMcpServer(taskMemo, { uid: auth.uid }, auth.clientId);
+  const server = createTaskMemoMcpServer(taskMemo, { uid: auth.uid, producerId: `external-ai:${auth.clientId}` }, auth.clientId);
   response.on('close', () => { void transport.close(); void server.close(); });
   await server.connect(transport);
   await transport.handleRequest(request, response, request.body);

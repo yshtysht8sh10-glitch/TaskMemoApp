@@ -7,9 +7,10 @@ import { TaskMemoApplicationService } from './taskMemoApplicationService';
 
 class MemoryRepository implements TaskMemoNodeRepository {
   constructor(public readonly users: Record<string, Node[]>) {}
-  async read(uid: string) { return structuredClone(this.users[uid] ?? []); }
-  async transact<T>(uid: string, mutate: (nodes: Node[]) => { nodes: Node[]; result: T }) {
-    const changed = mutate(structuredClone(this.users[uid] ?? []));
+  async read(uid: string) { const nodes = structuredClone(this.users[uid] ?? []); return { nodes, revisions: Object.fromEntries(nodes.map((node) => [node.id, 0])) }; }
+  async transact<T>(uid: string, mutate: (snapshot: { nodes: Node[]; revisions: Record<string, number> }) => { nodes: Node[]; result: T }) {
+    const nodes = structuredClone(this.users[uid] ?? []);
+    const changed = mutate({ nodes, revisions: Object.fromEntries(nodes.map((node) => [node.id, 0])) });
     this.users[uid] = changed.nodes;
     return changed.result;
   }

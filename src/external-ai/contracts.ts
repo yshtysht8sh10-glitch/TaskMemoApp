@@ -1,6 +1,6 @@
 import type { DuePreset, MemoStatus } from '../models/node';
 
-export type MemoSelector = { memoId?: string; title?: string };
+export type MemoSelector = { memoId?: string; title?: string; requestId?: string; expectedRevision?: number };
 
 export type ListMemosInput = {
   from?: string;
@@ -10,6 +10,7 @@ export type ListMemosInput = {
 };
 
 export type CreateMemoInput = {
+  requestId?: string;
   title: string;
   body?: string;
   parentId?: string | null;
@@ -39,6 +40,7 @@ export type MemoView = {
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  revision: number;
 };
 
 export type CategoryView = {
@@ -46,4 +48,5 @@ export type CategoryView = {
   title: string;
   parentId: string | null;
   sortKey: string;
+  revision: number;
 };

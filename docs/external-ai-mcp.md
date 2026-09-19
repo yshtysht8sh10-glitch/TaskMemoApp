@@ -13,7 +13,7 @@ src/external-ai/taskMemoApplicationService.ts
         ↓
 TaskMemoNodeRepository
         ↓
-users/{uid}/nodes
+users/{uid}/nodesV2
 ```
 
 ## Tool contract
@@ -43,6 +43,14 @@ users/{uid}/nodes
 ## Usage / quota extension point
 
 全MCP toolはApplication Serviceを呼ぶ前に`ExternalAiUsageQuotaGate`を必ず通る。渡す情報は認証済みUID、OAuth client ID、tool名、read/write区分だけで、Memo本文やtokenは含まない。
+
+## V2 sync participation
+
+External AIはV1 `users/{uid}/nodes`をread/writeしない。readはowner/schemaを検証した`nodesV2` winnerをread modelへdecodeする。write toolはUUID `requestId`を必須とし、既存Node操作ではread時に返した`expectedRevision`も必須とする。Functions transactionはglobal/per-user compatibility gateをfail-closedで検証し、`nodesV2` winner、`syncOperationsV2` operation receipt、`externalAiRequestsV2` request receipt、auditを一つのtransactionで更新する。
+
+producer identityはOAuth client由来の`external-ai:{clientId}`を入力にした安定hashで、operationには`deviceId`と決定的`opId/localSeq`を保存する。同一producer/requestIdは保存済みrequest resultを返すため、timeout後のretryでもcreateやrevisionを重複適用しない。
+
+AIはcreate/update/complete/soft delete/restoreを利用できる。purgeとpinnedNote操作は提供しない。AI operationは通常のremote V2 operationとして端末へ届き、端末のlocal Historyへは追加されない。同一resourceのlocal Historyはremote-safe preconditionによりblockされる。
 
 現在は`AllowAllExternalAiUsageQuotaGate`を使用し、全操作を許可する。料金プラン、決済、Free/Pro判定、具体的な上限、課金用DBは実装しない。将来コスト管理が必要になった場合は、この実装を日次/月次カウンターやquota判定を行う実装へ差し替えられる。MCP AdapterやApplication Serviceの業務ロジックを変更する必要はない。
 

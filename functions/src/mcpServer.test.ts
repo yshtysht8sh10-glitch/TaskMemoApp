@@ -10,8 +10,8 @@ import { createTaskMemoMcpServer } from './mcpServer.js';
 
 class MemoryRepository implements TaskMemoNodeRepository {
   nodes: Node[] = [];
-  async read() { return structuredClone(this.nodes); }
-  async transact<T>(_uid: string, mutate: (nodes: Node[]) => { nodes: Node[]; result: T }) { const value = mutate(structuredClone(this.nodes)); this.nodes = value.nodes; return value.result; }
+  async read() { const nodes = structuredClone(this.nodes); return { nodes, revisions: Object.fromEntries(nodes.map((node) => [node.id, 0])) }; }
+  async transact<T>(_uid: string, mutate: (snapshot: { nodes: Node[]; revisions: Record<string, number> }) => { nodes: Node[]; result: T }) { const nodes = structuredClone(this.nodes); const value = mutate({ nodes, revisions: Object.fromEntries(nodes.map((node) => [node.id, 0])) }); this.nodes = value.nodes; return value.result; }
 }
 
 describe('TaskMemo MCP tool contract', () => {
@@ -30,12 +30,13 @@ describe('TaskMemo MCP tool contract', () => {
     ]);
     expect(tools.tools.find((tool) => tool.name === 'delete_memo')?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     await client.callTool({ name: 'list_memos', arguments: {} });
-    const created = await client.callTool({ name: 'create_memo', arguments: { title: '確認' } }); expect(created.isError).not.toBe(true);
+    const requestId = (suffix: number) => `00000000-0000-4000-8000-${String(suffix).padStart(12, '0')}`;
+    const created = await client.callTool({ name: 'create_memo', arguments: { requestId: requestId(1), title: '確認' } }); expect(created.isError).not.toBe(true);
     await client.callTool({ name: 'get_memo', arguments: { memoId: 'memo-fixed' } });
-    await client.callTool({ name: 'update_memo', arguments: { memoId: 'memo-fixed', newTitle: '更新済み' } });
-    await client.callTool({ name: 'complete_memo', arguments: { memoId: 'memo-fixed' } });
-    await client.callTool({ name: 'delete_memo', arguments: { memoId: 'memo-fixed' } });
-    await client.callTool({ name: 'restore_memo', arguments: { memoId: 'memo-fixed' } });
+    await client.callTool({ name: 'update_memo', arguments: { requestId: requestId(2), expectedRevision: 0, memoId: 'memo-fixed', newTitle: '更新済み' } });
+    await client.callTool({ name: 'complete_memo', arguments: { requestId: requestId(3), expectedRevision: 0, memoId: 'memo-fixed' } });
+    await client.callTool({ name: 'delete_memo', arguments: { requestId: requestId(4), expectedRevision: 0, memoId: 'memo-fixed' } });
+    await client.callTool({ name: 'restore_memo', arguments: { requestId: requestId(5), expectedRevision: 0, memoId: 'memo-fixed' } });
     await client.callTool({ name: 'list_categories', arguments: {} });
     expect(repository.nodes[0]).toMatchObject({ id: 'memo-fixed', status: 'completed' });
     expect(repository.nodes[0].purgedAt).toBeUndefined();
