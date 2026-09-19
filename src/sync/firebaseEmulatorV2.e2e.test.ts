@@ -105,6 +105,10 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await waitFor(() => b.pinnedNote.body === "from A");
     await b.setPinnedNoteDraft("from B", now(4)); await b.queuePinnedNoteOperation(now(4)); await controllerB.flush();
     await waitFor(() => a.pinnedNote.body === "from B");
+    await a.setPinnedNoteDraft("undoable pinned note", now(6)); await a.queuePinnedNoteOperation(now(6)); await controllerA.flush();
+    await waitFor(() => b.pinnedNote.body === "undoable pinned note");
+    await a.undo(now(7)); await controllerA.flush(); await waitFor(() => b.pinnedNote.body === "from B");
+    await a.redo(now(8)); await controllerA.flush(); await waitFor(() => b.pinnedNote.body === "undoable pinned note");
 
     controllerA.stop(); controllerB.stop();
     await a.command("offline A", "update", (nodes) => updateNode(nodes, "memo-a", { title: "offline-A" }, now(4)));
@@ -117,7 +121,7 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await a.command("edit before undo", "update", (nodes) => updateNode(nodes, "memo-a", { title: "undo-target" }, now(6))); await controllerA.flush();
     await a.undo(now(7)); await controllerA.flush(); await a.redo(now(8)); await controllerA.flush();
     await waitFor(() => b.nodes.find((node) => node.id === "memo-a")?.title === "undo-target");
-    expect(a.historyDepths).toEqual({ past: 4, future: 0 });
+    expect(a.historyDepths).toEqual({ past: 6, future: 0 });
 
     for (let index = 0; index < 15; index += 1) await a.command(`bulk-${index}`, "update", (nodes) => updateNode(nodes, "memo-a", { body: String(index) }, now(10 + index)));
     expect(a.outbox).toHaveLength(15);

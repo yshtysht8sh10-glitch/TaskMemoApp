@@ -168,4 +168,77 @@ describe("TaskMemo V2 application store", () => {
     expect(a.pinnedNote.body).toBe(b.pinnedNote.body);
     expect(a.pinnedNote.body).toBe(winner.value.body);
   });
+
+  it("undoes and redoes a pinned-note edit as new synchronized operations", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], {
+      deviceId: "device-a", now: () => at(1), initialPinnedNote: { body: "A", updatedAt: at(0) },
+    });
+    await store.initializePinnedNote();
+    await store.queuePinnedNoteOperation(at(1));
+    await store.acknowledge(store.outbox[0].opId, undefined, new InMemoryRevisionServer().apply(store.outbox[0]).pinnedNoteRecord);
+    await store.setPinnedNoteDraft("B", at(2));
+    await store.undo(at(3));
+    expect(store.pinnedNote.body).toBe("A");
+    expect(store.outbox.at(-1)).toMatchObject({ targetType: "pinnedNote", type: "undo", payload: { pinnedNote: { body: "A" } } });
+    expect(store.historyDepths.future).toBe(1);
+    await store.redo(at(4));
+    expect(store.pinnedNote.body).toBe("B");
+    expect(store.outbox.at(-1)).toMatchObject({ targetType: "pinnedNote", type: "redo", payload: { pinnedNote: { body: "B" } } });
+    expect(store.historyDepths.future).toBe(0);
+  });
+
+  it("coalesces continuous pinned-note typing independently from cloud operation debounce", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", now: () => at(1) });
+    await store.setPinnedNoteDraft("a", at(1));
+    await store.setPinnedNoteDraft("ab", at(2));
+    await store.setPinnedNoteDraft("abc", at(3));
+    expect(store.historyDepths).toEqual({ past: 1, future: 0 });
+    expect(store.outbox).toHaveLength(0);
+    await store.undo(at(4));
+    expect(store.pinnedNote.body).toBe("");
+  });
+
+  it("keeps pinned-note and ordinary Node edits in one ordered history", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    await store.setPinnedNoteDraft("pinned", at(1));
+    await store.command("memo edit", "update", nodes => updateNode(nodes, "memo-a", { title: "B" }, at(2)));
+    expect(store.historyDepths.past).toBe(2);
+    await store.undo(at(3));
+    expect(store.nodes[0].title).toBe("A");
+    expect(store.pinnedNote.body).toBe("pinned");
+    await store.undo(at(4));
+    expect(store.pinnedNote.body).toBe("");
+  });
+
+  it("recovers pinned-note history and its Undo operation atomically from WAL", async () => {
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a", now: () => at(1) });
+    await store.setPinnedNoteDraft("B", at(2));
+    persistence.failCommit = true;
+    await expect(store.undo(at(3))).rejects.toThrow("crash");
+    persistence.failCommit = false;
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", now: () => at(4) });
+    expect(store.pinnedNote.body).toBe("");
+    expect(store.outbox.at(-1)).toMatchObject({ targetType: "pinnedNote", type: "undo" });
+    expect(store.historyDepths).toEqual({ past: 0, future: 1 });
+  });
+
+  it("converges another device after pinned-note Undo and Redo synchronization", async () => {
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", now: () => at(1) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-b", now: () => at(1) });
+    const server = new InMemoryRevisionServer();
+    const flush = async () => {
+      for (const operation of a.outbox) {
+        const ack = server.apply(operation);
+        await a.acknowledge(operation.opId, ack.record, ack.pinnedNoteRecord);
+        if (ack.pinnedNoteRecord) await b.receivePinnedNote(ack.pinnedNoteRecord);
+      }
+    };
+    await a.setPinnedNoteDraft("B", at(2)); await a.queuePinnedNoteOperation(at(2)); await flush();
+    await a.undo(at(3)); await flush();
+    expect(b.pinnedNote.body).toBe("");
+    await a.redo(at(4)); await flush();
+    expect(b.pinnedNote.body).toBe("B");
+    expect(a.pinnedNote.body).toBe(b.pinnedNote.body);
+  });
 });
