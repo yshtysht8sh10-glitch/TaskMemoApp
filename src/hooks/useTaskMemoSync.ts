@@ -11,7 +11,7 @@ import { TaskMemoV2ApplicationStore } from "../sync/taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
-import { isV2SyncEnabled } from "../sync/featureFlag";
+import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
 import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase;
@@ -96,8 +96,9 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
 }
 
 export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void) {
-  const environment = firebaseConfiguration().environment;
-  const useV2 = isV2SyncEnabled(environment, process.env.EXPO_PUBLIC_SYNC_V2_ENABLED);
+  const firebase = firebaseConfiguration();
+  const environment = firebase.environment;
+  const useV2 = isConfiguredV2SyncEnabled(environment, process.env.EXPO_PUBLIC_SYNC_V2_ENABLED, firebase.config !== null);
   const v1 = useFirebaseSync(history.nodes, ready, (nodes) => onHistory(reconcileSyncedNodeHistory(history, nodes)), !useV2);
   const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2);
   return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, undo: () => false, redo: () => false };

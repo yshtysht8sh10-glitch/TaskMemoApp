@@ -45,7 +45,11 @@ export function validateFirebaseConfiguration(
 }
 
 export function firebaseConfiguration(): FirebaseConfiguration {
-  const hostname = typeof window === "undefined" ? undefined : window.location.hostname;
+  // React Native exposes a partial `window` global, but it has no browser Location API.
+  // Hostname is only an input to the Web localhost safety guard; native builds omit it.
+  const hostname = typeof window !== "undefined" && typeof window.location !== "undefined"
+    ? window.location.hostname
+    : undefined;
   return validateFirebaseConfiguration(process.env.EXPO_PUBLIC_TASKMEMO_ENV, {
     apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
     authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
