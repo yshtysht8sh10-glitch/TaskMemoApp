@@ -3,8 +3,8 @@ import type { Node } from "../models/node";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
-import { candidateForOperation, candidateForPinnedNoteOperation, chooseVersionedNode, chooseVersionedPinnedNote } from "./revisionModel";
-import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedNode, VersionedPinnedNote } from "./types";
+import { candidateForFeaturesOperation, candidateForOperation, candidateForPinnedNoteOperation, chooseVersionedFeatures, chooseVersionedNode, chooseVersionedPinnedNote } from "./revisionModel";
+import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
 type NodeHistoryTarget = {
   resourceType: "node";
@@ -43,9 +43,10 @@ type Envelope = {
   profile: {
     pinnedNote: { localBody: string; synced: VersionedPinnedNote | null; dirtySince: string | null; migrationPending: boolean; legacyUpdatedAt: string | null };
     legacyPinnedNoteCandidates: { body: string; updatedAt: string }[];
+    features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; initialPinnedNote?: { body: string; updatedAt: Date } };
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -75,6 +76,7 @@ export class TaskMemoV2ApplicationStore {
       profile: {
         pinnedNote: { localBody: options.initialPinnedNote?.body ?? "", synced: null, dirtySince: null, migrationPending: Boolean(options.initialPinnedNote?.body), legacyUpdatedAt: options.initialPinnedNote?.updatedAt.toISOString() ?? null },
         legacyPinnedNoteCandidates: [],
+        features: { localIdeasEnabled: options.initialIdeasEnabled === true, synced: null, migrationPending: true },
       },
     };
     if (!envelope.profile) envelope = {
@@ -82,7 +84,12 @@ export class TaskMemoV2ApplicationStore {
       profile: {
         pinnedNote: { localBody: options.initialPinnedNote?.body ?? "", synced: null, dirtySince: null, migrationPending: Boolean(options.initialPinnedNote?.body), legacyUpdatedAt: options.initialPinnedNote?.updatedAt.toISOString() ?? null },
         legacyPinnedNoteCandidates: [],
+        features: { localIdeasEnabled: options.initialIdeasEnabled === true, synced: null, migrationPending: true },
       },
+    };
+    if (!envelope.profile.features) envelope = {
+      ...envelope,
+      profile: { ...envelope.profile, features: { localIdeasEnabled: options.initialIdeasEnabled === true, synced: null, migrationPending: true } },
     };
     if (envelope.profile.pinnedNote.legacyUpdatedAt === undefined) envelope = {
       ...envelope,
@@ -118,6 +125,7 @@ export class TaskMemoV2ApplicationStore {
     return { nodes, past: this.envelope.history.past.map(placeholder), future: this.envelope.history.future.map(placeholder) };
   }
   get pinnedNote() { return { body: this.envelope.profile.pinnedNote.localBody }; }
+  get ideasEnabled() { return this.envelope.profile.features.localIdeasEnabled; }
   get legacyPinnedNoteCandidates() { return [...this.envelope.profile.legacyPinnedNoteCandidates]; }
   versionedNode(id: string) { return this.envelope.domain[id]; }
 
@@ -174,8 +182,65 @@ export class TaskMemoV2ApplicationStore {
         const winner = chooseVersionedPinnedNote(pinned.synced ?? undefined, remote);
         nextPinned = { ...pinned, synced: winner, localBody: pinned.dirtySince ? pinned.localBody : winner.value.body };
       }
-      const next = { ...this.envelope, profile: { pinnedNote: nextPinned, legacyPinnedNoteCandidates: candidates } };
+      const next = { ...this.envelope, profile: { ...profile, pinnedNote: nextPinned, legacyPinnedNoteCandidates: candidates } };
       if (!same(next, this.envelope)) await this.commit(next);
+    });
+  }
+
+  async initializeFeatures(remote?: VersionedFeatures) {
+    return this.serialize(async () => {
+      const current = this.envelope.profile.features;
+      if (current.migrationPending) {
+        if (remote) {
+          await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, features: { localIdeasEnabled: remote.value.ideasEnabled, synced: remote, migrationPending: false } } });
+        } else if (current.localIdeasEnabled) {
+          await this.setIdeasEnabledSerialized(true, "import", true);
+        } else {
+          await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, features: { ...current, migrationPending: false } } });
+        }
+        return;
+      }
+      if (!remote) return;
+      const winner = chooseVersionedFeatures(current.synced ?? undefined, remote);
+      const next = { localIdeasEnabled: winner.value.ideasEnabled, synced: winner, migrationPending: false };
+      if (!same(next, current)) await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, features: next } });
+    });
+  }
+
+  async setIdeasEnabled(value: boolean, type: SyncOperationType = "update", force = false) {
+    return this.serialize(() => this.setIdeasEnabledSerialized(value, type, force));
+  }
+  private async setIdeasEnabledSerialized(value: boolean, type: SyncOperationType, force: boolean) {
+    const current = this.envelope.profile.features;
+    if (!force && current.localIdeasEnabled === value) return undefined;
+    const localSeq = this.envelope.nextLocalSeq;
+    const operation: SyncOperation = {
+      opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
+      targetNodeId: "features", targetType: "features", type, baseRevision: current.synced?.revision ?? 0,
+      payload: { features: { ideasEnabled: value } }, createdAt: this.now().toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+    };
+    const synced = candidateForFeaturesOperation(operation);
+    await this.commit({
+      ...this.envelope,
+      nextLocalSeq: localSeq + 1,
+      profile: { ...this.envelope.profile, features: { localIdeasEnabled: value, synced, migrationPending: false } },
+      sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, operation] },
+    });
+    return operation;
+  }
+
+  async receiveFeatures(incoming: VersionedFeatures) {
+    return this.serialize(async () => {
+      if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
+      const current = this.envelope.profile.features;
+      const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
+      const winner = selfEcho ? current.synced : chooseVersionedFeatures(current.synced ?? undefined, incoming);
+      const features = winner ? { localIdeasEnabled: winner.value.ideasEnabled, synced: winner, migrationPending: false } : current;
+      await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, features }, sync: {
+        outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
+        seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
+      } });
+      return selfEcho ? "self-echo" as const : "remote" as const;
     });
   }
 
@@ -259,10 +324,10 @@ export class TaskMemoV2ApplicationStore {
     return selfEcho ? "self-echo" as const : "remote" as const;
   }
 
-  async acknowledge(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote) {
-    return this.serialize(() => this.acknowledgeSerialized(opId, record, pinnedNoteRecord));
+  async acknowledge(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote, featuresRecord?: VersionedFeatures) {
+    return this.serialize(() => this.acknowledgeSerialized(opId, record, pinnedNoteRecord, featuresRecord));
   }
-  private async acknowledgeSerialized(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote) {
+  private async acknowledgeSerialized(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote, featuresRecord?: VersionedFeatures) {
     const operation = this.envelope.sync.outbox.find((item) => item.opId === opId);
     let domain = this.envelope.domain;
     if (record && record.lastDeviceId !== this.envelope.deviceId) {
@@ -276,6 +341,11 @@ export class TaskMemoV2ApplicationStore {
       const winner = chooseVersionedPinnedNote(current.synced ?? undefined, pinnedNoteRecord);
       profile = { ...profile, pinnedNote: { ...current, synced: winner, localBody: current.dirtySince ? current.localBody : winner.value.body } };
     }
+    if (featuresRecord) {
+      const current = profile.features;
+      const winner = chooseVersionedFeatures(current.synced ?? undefined, featuresRecord);
+      profile = { ...profile, features: { localIdeasEnabled: winner.value.ideasEnabled, synced: winner, migrationPending: false } };
+    }
     const next: Envelope = {
       ...this.envelope,
       domain,
@@ -283,7 +353,7 @@ export class TaskMemoV2ApplicationStore {
       history: this.envelope.history,
       sync: {
         outbox: this.envelope.sync.outbox.filter((item) => item.opId !== opId),
-        seenOpIds: record || pinnedNoteRecord ? [...new Set([...this.envelope.sync.seenOpIds, (record ?? pinnedNoteRecord)!.lastOpId])].slice(-500) : this.envelope.sync.seenOpIds,
+        seenOpIds: record || pinnedNoteRecord || featuresRecord ? [...new Set([...this.envelope.sync.seenOpIds, (record ?? pinnedNoteRecord ?? featuresRecord)!.lastOpId])].slice(-500) : this.envelope.sync.seenOpIds,
       },
     };
     if (operation || domain !== this.envelope.domain || profile !== this.envelope.profile) await this.commit(next);

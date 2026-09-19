@@ -6,22 +6,47 @@ import { InMemoryRevisionServer } from "./revisionModel";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
 import { nodeToV2Value } from "./nodeV2Codec";
-import type { SyncAdapter, SyncOperation, VersionedNode, VersionedPinnedNote } from "./types";
+import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
 class MemoryPersistence implements ApplicationJournalPersistence { value: string | null = null; journal: string | null = null; loadCommitted = async () => this.value; loadJournal = async () => this.journal; writeJournal = async (v: string) => { this.journal = v; }; writeCommitted = async (v: string) => { this.value = v; }; clearJournal = async () => { this.journal = null; }; }
 class ListenerAdapter implements SyncAdapter {
-  server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); pinnedListeners = new Set<(record: VersionedPinnedNote) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
+  server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); pinnedListeners = new Set<(record: VersionedPinnedNote) => void | Promise<void>>(); featureListeners = new Set<(record: VersionedFeatures) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
   async connect() { if (!this.online) throw { kind: "offline" }; }
   subscribe(onRecord: (record: VersionedNode) => void | Promise<void>) { this.listeners.add(onRecord); for (const id of this.initialIds) { const record = this.server.get(id); if (record) void onRecord(record); } return () => { this.listeners.delete(onRecord); }; }
-  async upload(operation: SyncOperation) { if (!this.online) throw { kind: "offline" }; this.uploads.push(operation); const ack = this.server.apply(operation); if (ack.record) for (const listener of this.listeners) await listener(ack.record); if (ack.pinnedNoteRecord) for (const listener of this.pinnedListeners) await listener(ack.pinnedNoteRecord); return ack; }
+  async upload(operation: SyncOperation) { if (!this.online) throw { kind: "offline" }; this.uploads.push(operation); const ack = this.server.apply(operation); if (ack.record) for (const listener of this.listeners) await listener(ack.record); if (ack.pinnedNoteRecord) for (const listener of this.pinnedListeners) await listener(ack.pinnedNoteRecord); if (ack.featuresRecord) for (const listener of this.featureListeners) await listener(ack.featuresRecord); return ack; }
   async readPinnedNote() { return this.server.getPinnedNote(); }
   subscribePinnedNote(onRecord: (record: VersionedPinnedNote) => void | Promise<void>) { this.pinnedListeners.add(onRecord); const record = this.server.getPinnedNote(); if (record) void onRecord(record); return () => { this.pinnedListeners.delete(onRecord); }; }
+  async readFeatures() { return this.server.getFeatures(); }
+  subscribeFeatures(onRecord: (record: VersionedFeatures) => void | Promise<void>) { this.featureListeners.add(onRecord); const record = this.server.getFeatures(); if (record) void onRecord(record); return () => { this.featureListeners.delete(onRecord); }; }
   async replay(id: string) { const record = this.server.get(id); if (record) for (const listener of this.listeners) await listener(record); }
 }
 const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sortKey: "a", title: "A", body: "", dueAt: null, duePreset: "none", status: "active", completedAt: null, createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null });
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it("syncs ideasEnabled both ways without adding History and restores an offline change after restart", async () => {
+    const adapter = new ListenerAdapter();
+    const persistenceA = new MemoryPersistence();
+    let a = await TaskMemoV2ApplicationStore.open(persistenceA, [], { deviceId: "device-a", initialIdeasEnabled: false });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-b", initialIdeasEnabled: false });
+    let ca = new TaskMemoV2SyncController(a, adapter);
+    const cb = new TaskMemoV2SyncController(b, adapter);
+    await Promise.all([ca.start(), cb.start()]);
+    const depths = a.historyDepths;
+    await ca.updateIdeasEnabled(true);
+    await vi.waitFor(() => expect(b.ideasEnabled).toBe(true));
+    expect(a.historyDepths).toEqual(depths);
+    await cb.updateIdeasEnabled(false);
+    await vi.waitFor(() => expect(a.ideasEnabled).toBe(false));
+    ca.pause();
+    await a.setIdeasEnabled(true, "import");
+    expect(a.outbox).toHaveLength(1);
+    a = await TaskMemoV2ApplicationStore.open(persistenceA, [], { deviceId: "ignored" });
+    ca = new TaskMemoV2SyncController(a, adapter);
+    await ca.start();
+    await vi.waitFor(() => expect(b.ideasEnabled).toBe(true));
+    expect(a.outbox).toHaveLength(0);
+  });
   it("repairs and uploads an invalid remote sort key instead of retaining it authoritatively", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
     const root = provisionedRoutineRoot();

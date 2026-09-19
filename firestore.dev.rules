@@ -52,6 +52,22 @@ service cloud.firestore {
         && record.lastLocalSeq is int && record.lastLocalSeq >= 0;
     }
 
+    function validFeaturesRecord() {
+      let record = request.resource.data.record;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && record is map
+        && record.keys().hasAll(['value', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq'])
+        && record.value is map
+        && record.value.keys().hasOnly(['ideasEnabled'])
+        && record.value.ideasEnabled is bool
+        && record.revision is int && record.revision >= 0
+        && record.lastOpId is string && record.lastOpId.size() > 0
+        && record.lastDeviceId is string && record.lastDeviceId.size() > 0
+        && record.lastLocalSeq is int && record.lastLocalSeq >= 0;
+    }
+
     function validOperation(opId) {
       let operation = request.resource.data.operation;
       let acknowledgement = request.resource.data.acknowledgement;
@@ -70,6 +86,11 @@ service cloud.firestore {
           && operation.targetNodeId == 'pinnedNote'
           && operation.payload.pinnedNote is map
           && operation.payload.pinnedNote.body is string)
+        || (operation.targetType == 'features'
+          && operation.targetNodeId == 'features'
+          && operation.payload.features is map
+          && operation.payload.features.keys().hasOnly(['ideasEnabled'])
+          && operation.payload.features.ideasEnabled is bool)
         || ((!operation.keys().hasAny(['targetType']) || operation.targetType == 'node')
           && operation.payload.node is map
           && operation.payload.node.id == operation.targetNodeId))
@@ -107,6 +128,16 @@ service cloud.firestore {
         && protocolAllowed(userId, 2)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && validPinnedNoteRecord()
+        && request.resource.data.record.revision >= resource.data.record.revision;
+      allow delete: if false;
+    }
+    match /users/{userId}/profileV2/features {
+      allow read: if ownsUser(userId);
+      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validFeaturesRecord();
+      allow update: if ownsUser(userId)
+        && protocolAllowed(userId, 2)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validFeaturesRecord()
         && request.resource.data.record.revision >= resource.data.record.revision;
       allow delete: if false;
     }

@@ -1,4 +1,4 @@
-import type { PinnedNoteValue, SyncAcknowledgement, SyncNodeValue, SyncOperation, VersionedNode, VersionedPinnedNote } from "./types";
+import type { FeaturesValue, PinnedNoteValue, SyncAcknowledgement, SyncNodeValue, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
 const deletionRank = (node: SyncNodeValue) => node.purgedAt ? 2 : node.deletedAt ? 1 : 0;
 
@@ -57,9 +57,29 @@ export function applyPinnedNoteOperation(current: VersionedPinnedNote | undefine
   return { opId: operation.opId, revision: winner.revision, result: winner.lastOpId === operation.opId ? "applied" : "superseded", pinnedNoteRecord: winner };
 }
 
+export function candidateForFeaturesOperation(operation: SyncOperation): VersionedFeatures {
+  const value = operation.payload.features as FeaturesValue | undefined;
+  if (operation.targetType !== "features" || operation.targetNodeId !== "features" || !value || typeof value.ideasEnabled !== "boolean")
+    throw new Error("同期operationの機能設定payloadが不正です。");
+  return { value, revision: operation.baseRevision + 1, lastOpId: operation.opId, lastDeviceId: operation.deviceId, lastLocalSeq: operation.localSeq };
+}
+
+export function chooseVersionedFeatures(current: VersionedFeatures | undefined, candidate: VersionedFeatures) {
+  if (!current) return candidate;
+  if (candidate.revision !== current.revision) return candidate.revision > current.revision ? candidate : current;
+  return candidate.lastOpId > current.lastOpId ? candidate : current;
+}
+
+export function applyFeaturesOperation(current: VersionedFeatures | undefined, operation: SyncOperation): SyncAcknowledgement {
+  const candidate = candidateForFeaturesOperation(operation);
+  const winner = chooseVersionedFeatures(current, candidate);
+  return { opId: operation.opId, revision: winner.revision, result: winner.lastOpId === operation.opId ? "applied" : "superseded", featuresRecord: winner };
+}
+
 export class InMemoryRevisionServer {
   private readonly nodes = new Map<string, VersionedNode>();
   private pinnedNote?: VersionedPinnedNote;
+  private features?: VersionedFeatures;
   private readonly operations = new Map<string, SyncAcknowledgement>();
 
   constructor(nodes: VersionedNode[] = []) {
@@ -69,6 +89,7 @@ export class InMemoryRevisionServer {
   get processedOperationCount() { return this.operations.size; }
   get(nodeId: string) { return this.nodes.get(nodeId); }
   getPinnedNote() { return this.pinnedNote; }
+  getFeatures() { return this.features; }
   acknowledgement(opId: string) { return this.operations.get(opId); }
 
   apply(operation: SyncOperation) {
@@ -76,10 +97,13 @@ export class InMemoryRevisionServer {
     if (previous) return previous;
     const acknowledgement = operation.targetType === "pinnedNote"
       ? applyPinnedNoteOperation(this.pinnedNote, operation)
-      : applyRevisionOperation(this.nodes.get(operation.targetNodeId), operation);
+      : operation.targetType === "features"
+        ? applyFeaturesOperation(this.features, operation)
+        : applyRevisionOperation(this.nodes.get(operation.targetNodeId), operation);
     this.operations.set(operation.opId, acknowledgement);
     if (acknowledgement.record) this.nodes.set(operation.targetNodeId, acknowledgement.record);
     if (acknowledgement.pinnedNoteRecord) this.pinnedNote = acknowledgement.pinnedNoteRecord;
+    if (acknowledgement.featuresRecord) this.features = acknowledgement.featuresRecord;
     return acknowledgement;
   }
 }

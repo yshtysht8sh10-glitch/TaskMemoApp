@@ -239,6 +239,9 @@ export default function HomeScreen() {
     setPinnedNoteUpdatedAt(new Date());
     setPinnedNote(body);
     void savePinnedNote(body);
+  }, ideasEnabled, (value) => {
+    setIdeasEnabled(value);
+    void saveFeaturePreferences({ ideasEnabled: value });
   });
   useEffect(() => {
     const traceId = currentTreeTraceId();
@@ -525,6 +528,7 @@ export default function HomeScreen() {
                   setShowCompletedTreeMemos(settings.treeDisplay.showCompletedMemos);
                   setReminders(settings.reminders);
                   setIdeasEnabled(settings.features.ideasEnabled);
+                  sync.updateIdeasEnabled(settings.features.ideasEnabled, "import");
                   setMode(settings.theme);
                 }
                 setSettingsOpen(false);
@@ -1136,6 +1140,7 @@ export default function HomeScreen() {
             description="Taskとは別に、期限や完了を持たないIdeaを利用します"
             value={ideasEnabled}
             onValueChange={(next) => {
+              if (sync.updateIdeasEnabled(next)) return;
               setIdeasEnabled(next);
               saveFeaturePreferences({ ideasEnabled: next }).catch(() =>
                 appAlert("保存エラー", "設定を保存できませんでした。"),

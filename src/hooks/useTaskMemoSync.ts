@@ -22,7 +22,7 @@ export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase;
 
 const message = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
 
-function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void) {
+function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void, initialIdeasEnabled: boolean, onIdeasEnabled: (value: boolean) => void) {
   const firebase = firebaseConfiguration();
   const configured = enabled && firebase.config !== null;
   const [user, setUser] = useState<User | null>(null);
@@ -35,7 +35,11 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const onPinnedNoteRef = useRef(onPinnedNote);
   useEffect(() => { onPinnedNoteRef.current = onPinnedNote; }, [onPinnedNote]);
   const initialPinnedNoteRef = useRef(initialPinnedNote);
+  const initialIdeasEnabledRef = useRef(initialIdeasEnabled);
+  const onIdeasEnabledRef = useRef(onIdeasEnabled);
+  useEffect(() => { onIdeasEnabledRef.current = onIdeasEnabled; }, [onIdeasEnabled]);
   const publishedPinnedNoteRef = useRef(initialPinnedNote.body);
+  const publishedIdeasEnabledRef = useRef(initialIdeasEnabled);
   const storeRef = useRef<TaskMemoV2ApplicationStore | null>(null);
   const controllerRef = useRef<TaskMemoV2SyncController | null>(null);
   const initialPinnedBody = initialPinnedNote.body;
@@ -46,6 +50,12 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       publishedPinnedNoteRef.current = initialPinnedBody;
     }
   }, [initialPinnedBody, initialPinnedUpdatedAt]);
+  useEffect(() => {
+    if (!storeRef.current) {
+      initialIdeasEnabledRef.current = initialIdeasEnabled;
+      publishedIdeasEnabledRef.current = initialIdeasEnabled;
+    }
+  }, [initialIdeasEnabled]);
 
   const publish = () => {
     const store = storeRef.current; const controller = controllerRef.current;
@@ -53,6 +63,10 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     if (store && store.pinnedNote.body !== publishedPinnedNoteRef.current) {
       publishedPinnedNoteRef.current = store.pinnedNote.body;
       onPinnedNoteRef.current(store.pinnedNote.body);
+    }
+    if (store && store.ideasEnabled !== publishedIdeasEnabledRef.current) {
+      publishedIdeasEnabledRef.current = store.ideasEnabled;
+      onIdeasEnabledRef.current(store.ideasEnabled);
     }
     if (controller) setStatus(controller.state.phase);
   };
@@ -70,7 +84,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setStatus("connecting");
       try {
         // Never implicitly import V1 or the previous account's UI state.
-        const store = await TaskMemoV2ApplicationStore.open(new TaskMemoV2ApplicationJournal(`${db.app.options.projectId}/${nextUser.uid}`), [], { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current });
+        const store = await TaskMemoV2ApplicationStore.open(new TaskMemoV2ApplicationJournal(`${db.app.options.projectId}/${nextUser.uid}`), [], { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current });
         if (currentGeneration !== generation) return;
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const controller = new TaskMemoV2SyncController(store, createFirebaseSyncAdapter(db, nextUser.uid, emulator ? "test" : "development", { emulator }), publish);
@@ -116,11 +130,12 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),
     updatePinnedNote: (body: string) => run((controller) => controller.updatePinnedNote(body)),
+    updateIdeasEnabled: (value: boolean, type: "update" | "import" = "update") => run((controller) => controller.updateIdeasEnabled(value, type)),
     undo: () => run((controller) => controller.undo()), redo: () => run((controller) => controller.redo()),
   };
 }
 
-export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, initialPinnedNote: PinnedNote = { body: "", updatedAt: new Date(0) }, onPinnedNote: (body: string) => void = () => undefined) {
+export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, initialPinnedNote: PinnedNote = { body: "", updatedAt: new Date(0) }, onPinnedNote: (body: string) => void = () => undefined, initialIdeasEnabled = false, onIdeasEnabled: (value: boolean) => void = () => undefined) {
   const firebase = firebaseConfiguration();
   const environment = firebase.environment;
   const useV2 = isConfiguredV2SyncEnabled(environment, process.env.EXPO_PUBLIC_SYNC_V2_ENABLED, firebase.config !== null);
@@ -128,6 +143,6 @@ export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory:
     const next = reconcileSyncedNodeHistory(history, nodes);
     onHistory({ ...next, nodes: normalizeLegacyRanks(next.nodes) });
   }, !useV2);
-  const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2, initialPinnedNote, onPinnedNote);
-  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, updatePinnedNote: () => false, undo: () => false, redo: () => false };
+  const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2, initialPinnedNote, onPinnedNote, initialIdeasEnabled, onIdeasEnabled);
+  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, command: () => false, updatePinnedNote: () => false, updateIdeasEnabled: () => false, undo: () => false, redo: () => false };
 }

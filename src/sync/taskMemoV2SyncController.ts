@@ -32,6 +32,7 @@ export class TaskMemoV2SyncController {
       await this.adapter.connect();
       if (generation !== this.generation) return;
       await this.store.initializePinnedNote(await this.adapter.readPinnedNote?.());
+      await this.store.initializeFeatures(await this.adapter.readFeatures?.());
       await this.store.queuePinnedNoteOperation();
       this.unsubscribe = this.adapter.subscribe?.(
         async (record) => {
@@ -51,8 +52,16 @@ export class TaskMemoV2SyncController {
         },
         (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
+      const unsubscribeFeatures = this.adapter.subscribeFeatures?.(
+        async (record) => {
+          if (generation !== this.generation) return;
+          await this.store.receiveFeatures(record);
+          this.refresh(); this.onChange();
+        },
+        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+      );
       const unsubscribeNodes = this.unsubscribe;
-      this.unsubscribe = () => { unsubscribeNodes?.(); unsubscribePinnedNote?.(); };
+      this.unsubscribe = () => { unsubscribeNodes?.(); unsubscribePinnedNote?.(); unsubscribeFeatures?.(); };
       this.state = transitionSyncState(this.state, { type: "connected", pendingCount: this.store.pendingCount });
       await this.flush();
       this.onChange();
@@ -87,6 +96,15 @@ export class TaskMemoV2SyncController {
       this.pinnedNoteTimer = undefined;
       void this.store.queuePinnedNoteOperation().then(() => this.flush()).then(() => this.onChange());
     }, debounceMs);
+  }
+
+  async updateIdeasEnabled(value: boolean, type: SyncOperationType = "update") {
+    const operation = await this.store.setIdeasEnabled(value, type);
+    if (operation) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
+    this.onChange();
+    await this.flush();
+    this.onChange();
+    return operation;
   }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
@@ -130,7 +148,7 @@ export class TaskMemoV2SyncController {
         try {
           const acknowledgement = await this.adapter.upload(operation);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
-          await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord);
+          await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
           this.refresh();
         } catch (reason) {
           const problem = classify(reason);

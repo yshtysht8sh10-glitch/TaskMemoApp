@@ -19,6 +19,44 @@ const initialMemo = (): MemoNode => ({ id: "memo-a", type: "memo", memoType: "ta
 const unrelatedMemo = (): MemoNode => ({ ...initialMemo(), id: "memo-b", sortKey: "b0", title: "B", routineHistory: {} });
 
 describe("TaskMemo V2 application store", () => {
+  it("uses deterministic feature revisions, suppresses duplicate/self echo, and never touches History", async () => {
+    const server = new InMemoryRevisionServer();
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", initialIdeasEnabled: false });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-b", initialIdeasEnabled: false });
+    await Promise.all([a.initializeFeatures(), b.initializeFeatures()]);
+    const depths = a.historyDepths;
+    await a.setIdeasEnabled(true);
+    const opA = a.outbox[0];
+    const ackA = server.apply(opA);
+    await a.receiveFeatures(ackA.featuresRecord!);
+    expect(a.outbox).toHaveLength(0);
+    expect(a.historyDepths).toEqual(depths);
+    expect(await a.receiveFeatures(ackA.featuresRecord!)).toBe("duplicate");
+    await b.initializeFeatures(ackA.featuresRecord!);
+    const c = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-c", initialIdeasEnabled: false });
+    await c.initializeFeatures(ackA.featuresRecord!);
+    await b.setIdeasEnabled(false);
+    await c.setIdeasEnabled(true, "update", true);
+    const reverse = new InMemoryRevisionServer();
+    reverse.apply(opA);
+    reverse.apply(c.outbox[0]);
+    const second = reverse.apply(b.outbox[0]).featuresRecord!;
+    const winner = [b.outbox[0], c.outbox[0]].sort((left, right) => left.opId.localeCompare(right.opId)).at(-1)!;
+    expect(second.lastOpId).toBe(winner.opId);
+    await Promise.all([b.receiveFeatures(second), c.receiveFeatures(second)]);
+    expect(b.ideasEnabled).toBe(c.ideasEnabled);
+  });
+
+  it("migrates only legacy ON when cloud is absent and lets an existing cloud value win", async () => {
+    const on = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-on", initialIdeasEnabled: true });
+    await on.initializeFeatures();
+    expect(on.outbox[0]).toMatchObject({ targetType: "features", type: "import", payload: { features: { ideasEnabled: true } } });
+    const remote = new InMemoryRevisionServer().apply(on.outbox[0]).featuresRecord!;
+    const localFalse = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-off", initialIdeasEnabled: false });
+    await localFalse.initializeFeatures(remote);
+    expect(localFalse.ideasEnabled).toBe(true);
+    expect(localFalse.outbox).toHaveLength(0);
+  });
   it("serializes overlapping UI commands without losing history, fields, or operation IDs", async () => {
     const persistence = new MemoryPersistence();
     const store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: "device-a" });

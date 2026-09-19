@@ -136,6 +136,7 @@ Scheduled native notifications are stored by the operating system. Web reminder 
 | `users/{uid}/nodes/{nodeId}` | V1 Node document | Active V1/legacy path |
 | `users/{uid}/nodesV2/{nodeId}` | V2 versioned Node | Active V2 path |
 | `users/{uid}/profileV2/pinnedNote` | V2 versioned pinned note | Active V2 path |
+| `users/{uid}/profileV2/features` | V2 versioned user-wide feature preferences (`ideasEnabled` only) | Active V2 path; local AsyncStorage remains migration source/cache |
 | `users/{uid}/syncOperationsV2/{opId}` | Immutable operation receipt and acknowledgement | Active V2 protocol data |
 | `users/{uid}/syncMetadataV2/compatibility` | Per-user protocol gate | Active operational metadata |
 | `syncControl/current` | Global write/maintenance control | Active operational metadata |
@@ -167,7 +168,7 @@ This table records current behavior, not desired behavior. `Cloud Sync ○` for 
 | Tree display preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | `showCompletedMemos` |
 | Reminder preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | OS permission and scheduled notifications are separate |
 | Theme | AsyncStorage | × | ― | ○ | ○ | Persistent setting | `system`/`light`/`dark` |
-| Feature preferences | AsyncStorage | × | ― | ○ | ○ | Persistent setting | Currently only `ideasEnabled`; backup does not make it Cloud Sync data |
+| Feature preferences | AsyncStorage + V2 envelope + `profileV2/features` | ○ | ― | ○ | ○ | Persistent user setting | Only `ideasEnabled` is synchronized; other preference records remain device-local |
 | V2 History | Scoped V2 envelope | × | ― | × | × | Local operational state | Persists across restart; remote/self echo preserves it |
 | V1 History | React state | × | ― | × | × | Session state | Node-only and lost on restart |
 | V2 WAL/outbox | Scoped V2 envelope/journal | △ | ― | × | × | Sync/recovery state | Receipt is uploaded; local queue itself is not restored from cloud |
@@ -185,7 +186,7 @@ The UI uses `serializeTaskMemoBackup` and `parseTaskMemoBackup` in [`nodeBackup.
 - Current export `schemaVersion`: `3`
 - Schema 3 separates `content` (all Nodes and `{ body, updatedAt }` pinnedNote) from validated `settings` (list/tree display, reminders, theme, features).
 - Deleted and purged Node records remain in the exported Node array.
-- Schema 3 import restores Nodes, pinnedNote and settings. Settings are persisted with one AsyncStorage `multiSet` batch.
+- Schema 3 import restores Nodes, pinnedNote and settings. Settings are persisted with one AsyncStorage `multiSet` batch; under V2, imported `ideasEnabled` additionally becomes a normal profile operation, while every other setting stays local-only.
 - Schemas 1 and 2 remain import-compatible. Missing pinnedNote/settings are represented as absent and leave the importing device's current values unchanged.
 - Recovery candidates, History, WAL, outbox, revision, device identity, authentication, Firebase internals and audit records are not exported.
 
@@ -220,13 +221,13 @@ The facts below describe the current implementation. The recommendations are sep
 
 ### 1. Persistent preferences Export/Import — resolved
 
-**Current fact:** schema 3 includes validated list/tree display, reminder, theme and feature preferences. Import applies them only to the importing device. This does not change their Cloud Sync classification. Schemas 1/2 preserve current device settings because those schemas have no settings section.
+**Current fact:** schema 3 includes validated list/tree display, reminder, theme and feature preferences. Import applies list/tree display, reminder and theme only to the importing device; imported `ideasEnabled` participates in its separately defined V2 Cloud Sync. Schemas 1/2 preserve current device settings because those schemas have no settings section.
 
-### 2. `ideasEnabled` is not synchronized
+### 2. `ideasEnabled` Cloud Sync — resolved
 
-**Current fact:** Idea Nodes synchronize, but `ideasEnabled` is stored only in `@taskmemo/settings/features/v1`.
+**Current fact:** `ideasEnabled` is a separate versioned V2 profile resource at `users/{uid}/profileV2/features`. Changes and schema-3 imports produce durable operations with revision, operation identity, echo/duplicate handling, restart recovery, and deterministic Node-style winner selection. It is intentionally excluded from Undo/Redo History. The AsyncStorage value is retained as the pre-V2 migration source and local cache.
 
-**Target proposal:** treat it as a user-wide V2 preference with the same revision, echo, and idempotency guarantees as other V2 profile resources.
+Initial migration is deterministic: an existing Cloud record is authoritative; when no Cloud record exists, legacy `true` is promoted and legacy `false`/default emits no write. This prevents an arbitrary first OFF/default device from erasing an existing ON preference.
 
 ### 3. `legacyPinnedNoteCandidates` have no recovery workflow
 

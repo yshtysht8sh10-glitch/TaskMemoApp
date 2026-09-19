@@ -26,7 +26,7 @@ export type SyncOperation = {
   localSeq: number;
   targetNodeId: string;
   /** Missing means node for persisted V2 backward compatibility. */
-  targetType?: "node" | "pinnedNote";
+  targetType?: "node" | "pinnedNote" | "features";
   type: SyncOperationType;
   baseRevision: number;
   payload: Record<string, unknown>;
@@ -66,12 +66,22 @@ export type VersionedPinnedNote = {
   lastLocalSeq: number;
 };
 
+export type FeaturesValue = { ideasEnabled: boolean };
+export type VersionedFeatures = {
+  value: FeaturesValue;
+  revision: number;
+  lastOpId: string;
+  lastDeviceId: string;
+  lastLocalSeq: number;
+};
+
 export type SyncAcknowledgement = {
   opId: string;
   revision?: number;
   result?: "applied" | "superseded";
   record?: VersionedNode;
   pinnedNoteRecord?: VersionedPinnedNote;
+  featuresRecord?: VersionedFeatures;
 };
 
 export interface SyncAdapter {
@@ -84,6 +94,11 @@ export interface SyncAdapter {
   readPinnedNote?(): Promise<VersionedPinnedNote | undefined>;
   subscribePinnedNote?(
     onRecord: (record: VersionedPinnedNote) => void | Promise<void>,
+    onError: (reason: unknown) => void,
+  ): () => void;
+  readFeatures?(): Promise<VersionedFeatures | undefined>;
+  subscribeFeatures?(
+    onRecord: (record: VersionedFeatures) => void | Promise<void>,
     onError: (reason: unknown) => void,
   ): () => void;
 }

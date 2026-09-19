@@ -1,9 +1,9 @@
 import { collection, doc, getDocFromServer, onSnapshot, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
-import { applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
+import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
 import { validateCompatibilityGate } from "./compatibilityGate";
-import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedNode } from "./types";
+import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode } from "./types";
 
 type AdapterOptions = { emulator?: boolean };
 
@@ -57,9 +57,12 @@ export function createFirebaseSyncAdapter(
       try {
         const operationRef = doc(db, "users", uid, "syncOperationsV2", operation.opId);
         const pinnedNote = operation.targetType === "pinnedNote";
+        const features = operation.targetType === "features";
         const targetRef = pinnedNote
           ? doc(db, "users", uid, "profileV2", "pinnedNote")
-          : doc(db, "users", uid, "nodesV2", operation.targetNodeId);
+          : features
+            ? doc(db, "users", uid, "profileV2", "features")
+            : doc(db, "users", uid, "nodesV2", operation.targetNodeId);
         return await runTransaction(db, async (transaction) => {
           const existing = await transaction.get(operationRef);
           if (existing.exists()) {
@@ -72,8 +75,10 @@ export function createFirebaseSyncAdapter(
           const targetSnapshot = await transaction.get(targetRef);
           const acknowledgement = pinnedNote
             ? applyPinnedNoteOperation(targetSnapshot.exists() ? targetSnapshot.data().record : undefined, operation)
-            : applyRevisionOperation(targetSnapshot.exists() ? targetSnapshot.data().record as VersionedNode : undefined, operation);
-          if (acknowledgement.result === "applied") transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
+            : features
+              ? applyFeaturesOperation(targetSnapshot.exists() ? targetSnapshot.data().record : undefined, operation)
+              : applyRevisionOperation(targetSnapshot.exists() ? targetSnapshot.data().record as VersionedNode : undefined, operation);
+          if (acknowledgement.result === "applied") transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : features ? acknowledgement.featuresRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
           transaction.set(operationRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
           return acknowledgement;
         });
@@ -85,6 +90,10 @@ export function createFirebaseSyncAdapter(
     async readPinnedNote() {
       const snapshot = await getDocFromServer(doc(db, "users", uid, "profileV2", "pinnedNote"));
       return snapshot.exists() ? snapshot.data().record : undefined;
+    },
+    async readFeatures() {
+      const snapshot = await getDocFromServer(doc(db, "users", uid, "profileV2", "features"));
+      return snapshot.exists() ? snapshot.data().record as VersionedFeatures : undefined;
     },
 
     subscribe(onRecord, onError) {
@@ -99,6 +108,12 @@ export function createFirebaseSyncAdapter(
     subscribePinnedNote(onRecord, onError) {
       return onSnapshot(doc(db, "users", uid, "profileV2", "pinnedNote"), { includeMetadataChanges: true }, (snapshot) => {
         const record = snapshot.data()?.record;
+        if (record) void Promise.resolve(onRecord(record)).catch(onError);
+      }, onError);
+    },
+    subscribeFeatures(onRecord, onError) {
+      return onSnapshot(doc(db, "users", uid, "profileV2", "features"), { includeMetadataChanges: true }, (snapshot) => {
+        const record = snapshot.data()?.record as VersionedFeatures | undefined;
         if (record) void Promise.resolve(onRecord(record)).catch(onError);
       }, onError);
     },

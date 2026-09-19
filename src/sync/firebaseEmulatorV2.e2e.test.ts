@@ -56,6 +56,19 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await assertFails(setDoc(ref, { ...valid, record: { ...valid.record, value: {} } }));
   });
 
+  it("isolates and validates the separate feature profile resource", async () => {
+    const owner = environment.authenticatedContext("owner").firestore();
+    const other = environment.authenticatedContext("other").firestore();
+    const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { ideasEnabled: true }, revision: 2, lastOpId: "device:2", lastDeviceId: "device", lastLocalSeq: 2 } };
+    const ref = doc(owner, "users/owner/profileV2/features");
+    await assertSucceeds(setDoc(ref, valid));
+    await assertFails(getDoc(doc(other, "users/owner/profileV2/features")));
+    await assertFails(setDoc(ref, { ...valid, ownerUid: "other" }));
+    await assertFails(setDoc(ref, { ...valid, record: { ...valid.record, revision: 1 } }));
+    await assertFails(setDoc(ref, { ...valid, record: { ...valid.record, value: { ideasEnabled: "yes" } } }));
+    await assertFails(setDoc(ref, { ...valid, record: { ...valid.record, value: { ideasEnabled: true, theme: "dark" } } }));
+  });
+
   it("rejects stale V1, dual-write, missing markers, and both protocols during maintenance", async () => {
     const owner = environment.authenticatedContext("owner").firestore();
     const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { id: "a" }, revision: 1, lastOpId: "device:1", lastDeviceId: "device", lastLocalSeq: 1, operationType: "create" } };
@@ -93,6 +106,13 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     let controllerA = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(dbA, uid, "test", { emulator: true }));
     const controllerB = new TaskMemoV2SyncController(b, createFirebaseSyncAdapter(dbB, uid, "test", { emulator: true }));
     await Promise.all([controllerA.start(), controllerB.start()]);
+
+    const historyBeforeFeatures = a.historyDepths;
+    await controllerA.updateIdeasEnabled(true);
+    await waitFor(() => b.ideasEnabled === true);
+    await controllerB.updateIdeasEnabled(false);
+    await waitFor(() => a.ideasEnabled === false);
+    expect(a.historyDepths).toEqual(historyBeforeFeatures);
 
     await a.command("create", "create", (nodes) => createNode(nodes, "memo", { title: "A", parentId: null }, now(1), "memo-a"));
     await controllerA.flush(); await waitFor(() => b.nodes.some((node) => node.id === "memo-a"));
