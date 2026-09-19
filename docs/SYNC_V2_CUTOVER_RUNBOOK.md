@@ -29,7 +29,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Target: local files only.
 - Expected: equal input/output Node counts, zero changed/lost fields, zero semantic changes, zero orphan/unknown/unexpected records.
 - Validation: inspect all reported counters and retained Node fields, including ID, `parentId`, `sortKey`, `deadlineSortKey`, deadline/due, `dayPart`, Routine configuration/history, completion, `deletedAt`, `purgedAt`, and unknown fields.
-- STOP: **any** issue. On 2026-09-19 this stopped on deleted orphan `ipa-morning` → missing parent `ipa`.
+- STOP: **any** issue. On 2026-09-19 this initially stopped on deleted orphan `ipa-morning` → missing parent `ipa`; after its explicit owner-approved deletion, the fresh 120-Node snapshot passed with zero issues.
 - Rollback: none; analysis is read-only. Escalate the exact source issue for an explicit data decision.
 
 ### 3. Isolated backup and exact restore
@@ -37,7 +37,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Command: start `firebase.rehearsal.json` with project `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- <snapshot> <migrationId> <new-backup> <new-report> --continue-after-validation-stop=orphan-preservation-only` only when deliberately testing post-STOP mechanics.
 - Target: local Auth/Firestore emulator only (9299/8280). Never substitute a deployable Firebase project.
 - Expected: create-only backup; restore count/IDs/fields/values/nested values/tombstones/unknown fields are byte-semantically equal.
-- Validation: automated recursive comparison. Rehearsal result on 2026-09-19: 121/121 exact, 237.79 ms restore plus 83.20 ms validation.
+- Validation: automated recursive comparison. Formal post-cleanup result on 2026-09-19: 120/120 exact, 511.81 ms restore plus 222.10 ms validation.
 - STOP: target is not `demo-taskmemo-rehearsal`, backup path already exists, or any equality/count mismatch.
 - Rollback: stop emulator and discard only the isolated emulator data/private rehearsal artifacts.
 
@@ -46,7 +46,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Command/operation: set emulator `syncControl/current.writesEnabled=false`; run V1→V2 create/import preserving IDs; compare all V2 records; set per-user compatibility to V2-only; re-enable writes.
 - Target: `demo-taskmemo-rehearsal` only.
 - Expected: zero semantic/lost-field change; old V1 read/write and tombstone resurrection rejected; real V2 adapter smoke operation applied.
-- Validation: automated Rules assertions and adapter upload. Diagnostic 2026-09-19 timings: migration 159.17 ms, validation 54.55 ms, gate 30.69 ms, freeze window 598.59 ms.
+- Validation: automated Rules assertions and adapter upload. Formal post-cleanup 2026-09-19 timings: migration 222.90 ms, validation 60.12 ms, gate 27.41 ms, freeze window 708.52 ms.
 - STOP: any source issue in a formal rehearsal, partial migration, equality failure, old-client access, or V2 smoke failure. The orphan-preservation switch is diagnostic only and cannot produce cutover approval.
 - Rollback: while frozen, remove only records proven to belong to that rehearsal migration. For production, preserve the post-freeze export and never infer ownership by timestamp alone.
 

@@ -1,6 +1,6 @@
 # V2 cutover rehearsal — 2026-09-19
 
-Status: `BLOCKED_SOURCE_VALIDATION`. This is not production-cutover approval.
+Status: `PASSED` after the explicitly approved deletion of the obsolete production orphan. This is not production-cutover approval.
 
 ## Environment separation
 
@@ -10,51 +10,53 @@ Status: `BLOCKED_SOURCE_VALIDATION`. This is not production-cutover approval.
 | Isolated rehearsal | `demo-taskmemo-rehearsal` | Local Auth/Firestore emulators on ports 9299/8280 |
 | Release candidate | `taskmemoapp-dev` | Dev-only Rules, Auth, Firestore and Hosting |
 
-Production received no Firestore writes, Rules changes, Hosting deployment, feature-flag change, or migration.
+Production received exactly one owner-approved deletion (`ipa-morning`). It received no other Firestore write, Rules change, Hosting deployment, feature-flag change, or migration.
 
 ## Read-only production dry-run
 
-The same production collection-group query was run twice. The decoded canonical snapshot SHA-256 was stable: `164e888bb393c40f1a9470398bb57c731507c73ee9c5314afa8700eb361e3d36`.
+The initial production collection-group query was run twice and stable. After the approved deletion, a fresh read-only snapshot SHA-256 was `b77cbe1b523e9656885ef54c1d0a7c1f01703ec993b57c51c95b48e94798f5ea`.
 
 | Metric | Result |
 | --- | ---: |
 | users | 1 |
-| Nodes before / after | 121 / 121 |
-| active / deleted / purged tombstones | 100 / 17 / 4 |
-| Category / Memo / Idea / Routine | 12 / 109 / 1 / 9 |
-| completed | 9 |
+| Nodes before / after migration | 120 / 120 |
+| active / deleted / purged tombstones | 100 / 16 / 4 |
+| Category / Memo / Idea / Routine | 12 / 108 / 1 / 9 |
+| completed | 8 |
 | Routine history entries | 8 |
-| due / dayPart | 72 / 8 |
+| due / dayPart | 71 / 7 |
 | unknown fields | 0 |
 | unexpected schema data | 0 |
 | changed fields / lost fields | 0 / 0 |
 | semantic meaning changes | 0 |
-| orphan Nodes | **1** |
+| orphan Nodes | 0 |
 
-The orphan is the deleted Memo `ipa-morning`, whose `parentId` is `ipa`; that parent is absent. The Node has no children and is not a purged tombstone. It was reported without modification. This fails the production migration validation gate.
+The first dry-run found the deleted Memo `ipa-morning`, whose `parentId` was `ipa`; that parent was absent. After the owner explicitly identified it as obsolete and authorized deletion of that exact ID, the live document was backed up privately and deleted with an `updateTime` precondition. The deletion verification proved 121 → 120 documents, zero children, and all 119 non-target documents unchanged.
+
+The post-deletion read-only dry-run produced 120 → 120 Nodes, orphan count 0, issue count 0, changed/lost fields 0, and semantic meaning changes 0. The migration validation STOP condition is therefore resolved.
 
 V2 migration adds only the transport metadata `revision`, `lastOpId`, `lastDeviceId`, `lastLocalSeq`, and `operationType`; V1 Node ID, parent/order/deadline/day-part/Routine/completion/deletion/tombstone fields remain semantically identical.
 
 ## Isolated backup / restore / migration rehearsal
 
-The production read-only snapshot was copied with create-only semantics, restored to the isolated emulator, and compared recursively by document count, document ID, every field/value, nested data, tombstones, and unknown fields. All 121 documents were identical after restore.
+The production read-only snapshot was copied with create-only semantics, restored to the isolated emulator, and compared recursively by document count, document ID, every field/value, nested data, tombstones, and unknown fields. All 120 documents were identical after restore.
 
-The formal runbook stops at the orphan validation failure. To test the later mechanics only, the isolated rehearsal was explicitly continued with `--continue-after-validation-stop=orphan-preservation-only`; the orphan was preserved unchanged. This diagnostic continuation does not convert the rehearsal to PASS.
+The earlier diagnostic continuation preserved the orphan unchanged. After the approved deletion, a new formal rehearsal used `--validation-must-pass`, which stops before migration on any source issue. The clean 120-Node snapshot passed without diagnostic continuation.
 
 | Step | Measured time |
 | --- | ---: |
-| backup copy | 51.99 ms |
-| restore | 237.79 ms |
-| restore validation | 83.20 ms |
-| V1→V2 write | 159.17 ms |
-| migration validation | 54.55 ms |
-| compatibility gate | 30.69 ms |
-| diagnostic write-freeze window | 598.59 ms |
-| total | 995.30 ms |
+| backup copy | 19.15 ms |
+| restore | 511.81 ms |
+| restore validation | 222.10 ms |
+| V1→V2 write | 222.90 ms |
+| migration validation | 60.12 ms |
+| compatibility gate | 27.41 ms |
+| write-freeze rehearsal window | 708.52 ms |
+| total | 2,327.02 ms |
 
-Results after diagnostic continuation:
+Formal post-cleanup results:
 
-- backup / restored / migrated: 121 / 121 / 121
+- backup / restored / migrated: 120 / 120 / 120
 - restore equality: exact
 - migration semantic changes / lost fields: 0 / 0
 - old V1 authenticated read: rejected
@@ -64,4 +66,4 @@ Results after diagnostic continuation:
 
 ## Decision
 
-Production cutover is **not ready**. Before a new formal rehearsal, an operator must explicitly decide how the pre-existing deleted orphan should be handled. It must not be silently repaired or ignored. The release-candidate device checklist must also pass before cutover authorization.
+The data-validation and formal-rehearsal blockers are resolved. Production cutover is still **not authorized**: the release-candidate device checklist and the remaining iOS signing/build preparation must pass first.

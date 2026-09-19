@@ -10,8 +10,10 @@ import type { SyncOperation } from "../src/sync/types";
 
 const PROJECT = "demo-taskmemo-rehearsal";
 const [input, migrationId, backup, reportPath, continuation] = process.argv.slice(2);
-if (!input || !migrationId || !backup || !reportPath || continuation !== "--continue-after-validation-stop=orphan-preservation-only")
-  throw new Error("Exact rehearsal arguments and isolated diagnostic-continuation acknowledgement are required.");
+const diagnosticContinuation = continuation === "--continue-after-validation-stop=orphan-preservation-only";
+const validationMustPass = continuation === "--validation-must-pass";
+if (!input || !migrationId || !backup || !reportPath || (!diagnosticContinuation && !validationMustPass))
+  throw new Error("Exact rehearsal arguments and either --validation-must-pass or the isolated diagnostic-continuation acknowledgement are required.");
 
 const elapsed = (start: number) => Math.round((performance.now() - start) * 100) / 100;
 const stable = (value: unknown): unknown => {
@@ -82,6 +84,7 @@ const plans = users.map(uid => ({ uid, plan: planV1ToV2Migration(source.nodes.fi
   return node as Node;
 }), migrationId) }));
 const sourceIssues = plans.flatMap(item => item.plan.issues);
+if (validationMustPass && sourceIssues.length) throw new Error(`Formal rehearsal stopped on ${sourceIssues.length} source validation issue(s).`);
 const migrationStarted = performance.now();
 await environment.withSecurityRulesDisabled(async context => {
   const db = context.firestore();
@@ -125,7 +128,7 @@ const freezeMs = elapsed(freezeStarted);
 const report = {
   schemaVersion: 1, rehearsalProject: PROJECT, sourceProject: source.projectId, sourceAccess: "read-only",
   status: sourceIssues.length ? "BLOCKED_SOURCE_VALIDATION" : "PASSED",
-  diagnosticContinuationAfterStop: true,
+  diagnosticContinuationAfterStop: diagnosticContinuation,
   counts: { backup: source.documentCount, restored: restoredCount, migrated: plans.reduce((sum, item) => sum + item.plan.outputCount, 0) },
   equality: { documentIdsFieldsValuesNestedTombstonesUnknownFields: true, migrationSemanticChanges: plans.reduce((sum, item) => sum + item.plan.changedFields.length, 0), lostFields: plans.reduce((sum, item) => sum + item.plan.lostFieldCount, 0) },
   sourceIssues, oldClient: { readRejected: true, writeRejected: true, tombstoneResurrectionRejected: Boolean(purged) }, v2SmokeApplied: true,
