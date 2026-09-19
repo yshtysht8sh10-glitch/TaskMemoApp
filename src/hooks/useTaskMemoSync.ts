@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Platform } from "react-native";
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 
 import type { Node } from "../models/node";
@@ -13,6 +14,7 @@ import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
 import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
 import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
+import { subscribeToWebOnline } from "./webOnlineListener";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase;
 
@@ -58,10 +60,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       } catch (reason) { if (currentGeneration === generation) { setStatus("error"); setError(message(reason)); } }
     });
     const reconnect = () => { void controllerRef.current?.start(); };
-    if (typeof window !== "undefined") window.addEventListener("online", reconnect);
+    const removeOnlineListener = subscribeToWebOnline(
+      Platform.OS,
+      typeof window === "undefined" ? undefined : window,
+      reconnect,
+    );
     return () => {
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
-      if (typeof window !== "undefined") window.removeEventListener("online", reconnect);
+      removeOnlineListener();
     };
   }, [configured, ready]);
   useEffect(() => () => controllerRef.current?.stop(), []);
