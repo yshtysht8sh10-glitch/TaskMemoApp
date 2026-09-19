@@ -1,4 +1,4 @@
-import { redoNodeHistory, undoNodeHistory, type NodeHistory, type NodeHistoryEntry } from "../domain/nodeHistory";
+import type { NodeHistory } from "../domain/nodeHistory";
 import type { Node } from "../models/node";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
@@ -6,13 +6,31 @@ import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
 import { candidateForOperation, candidateForPinnedNoteOperation, chooseVersionedNode, chooseVersionedPinnedNote } from "./revisionModel";
 import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedNode, VersionedPinnedNote } from "./types";
 
+type NodeHistoryTarget = {
+  resourceType: "node";
+  resourceId: string;
+  before: SyncNodeValue | null;
+  after: SyncNodeValue;
+  forwardOpId: string;
+  forwardRevision: number;
+  undoOpId?: string;
+  undoRevision?: number;
+};
+type PinnedNoteHistoryTarget = {
+  resourceType: "pinnedNote";
+  resourceId: "pinnedNote";
+  before: { body: string };
+  after: { body: string };
+  forwardOpId: string | null;
+  forwardRevision: number;
+  undoOpId?: string;
+  undoRevision?: number;
+};
+type HistoryTarget = NodeHistoryTarget | PinnedNoteHistoryTarget;
 type StoredHistoryEntry = {
+  commandId: string;
   label: string;
-  before: SyncNodeValue[];
-  after: SyncNodeValue[];
-  kind?: "nodes" | "pinnedNote";
-  beforePinnedNote?: string;
-  afterPinnedNote?: string;
+  targets: HistoryTarget[];
   coalesceUntil?: string;
 };
 type Envelope = {
@@ -30,9 +48,6 @@ type Envelope = {
 type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; initialPinnedNote?: { body: string; updatedAt: Date } };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
-const decodeNodes = (nodes: SyncNodeValue[]) => nodes.map(nodeFromV2Value);
-const encodeEntry = (entry: NodeHistoryEntry): StoredHistoryEntry => ({ ...entry, before: encodeNodes(entry.before), after: encodeNodes(entry.after) });
-const decodeEntry = (entry: StoredHistoryEntry): NodeHistoryEntry => ({ ...entry, before: decodeNodes(entry.before), after: decodeNodes(entry.after) });
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const PINNED_NOTE_HISTORY_COALESCE_MS = 1_000;
 
@@ -73,6 +88,11 @@ export class TaskMemoV2ApplicationStore {
       ...envelope,
       profile: { ...envelope.profile, pinnedNote: { ...envelope.profile.pinnedNote, legacyUpdatedAt: null } },
     };
+    // A whole-state snapshot cannot be converted safely after remote changes.
+    // Preserve domain/outbox/profile data and discard only legacy Undo/Redo stacks.
+    if ([...envelope.history.past, ...envelope.history.future].some((entry) => !Array.isArray((entry as StoredHistoryEntry).targets))) {
+      envelope = { ...envelope, history: { past: [], future: [] } };
+    }
     if (!committed && options.bootstrapInitialNodes) {
       for (const node of normalizedInitialNodes) {
         const localSeq = envelope.nextLocalSeq++;
@@ -92,7 +112,11 @@ export class TaskMemoV2ApplicationStore {
   get outbox() { return [...this.envelope.sync.outbox]; }
   get pendingCount() { return this.envelope.sync.outbox.length + (this.envelope.profile.pinnedNote.dirtySince ? 1 : 0); }
   get historyDepths() { return { past: this.envelope.history.past.length, future: this.envelope.history.future.length }; }
-  get history(): NodeHistory { return this.nodeHistory(); }
+  get history(): NodeHistory {
+    const nodes = this.nodes;
+    const placeholder = (entry: StoredHistoryEntry) => ({ label: entry.label, before: nodes, after: nodes });
+    return { nodes, past: this.envelope.history.past.map(placeholder), future: this.envelope.history.future.map(placeholder) };
+  }
   get pinnedNote() { return { body: this.envelope.profile.pinnedNote.localBody }; }
   get legacyPinnedNoteCandidates() { return [...this.envelope.profile.legacyPinnedNoteCandidates]; }
   versionedNode(id: string) { return this.envelope.domain[id]; }
@@ -105,10 +129,7 @@ export class TaskMemoV2ApplicationStore {
     const before = this.nodes;
     const after = transform(before);
     if (same(encodeNodes(before), encodeNodes(after))) return [];
-    const history = options.recordHistory === false ? this.envelope.history : {
-      past: [...this.envelope.history.past, encodeEntry({ label, before, after })].slice(-75), future: [],
-    };
-    return this.apply(type, after, history, this.now());
+    return this.applyCommand(type, after, label, options.recordHistory !== false && type !== "purge", this.now());
   }
 
   async undo(now = this.now()) {
@@ -117,17 +138,8 @@ export class TaskMemoV2ApplicationStore {
   private async undoSerialized(now: Date) {
     if (!this.envelope.history.past.length) return [];
     const entry = this.envelope.history.past.at(-1)!;
-    if (entry.kind === "pinnedNote") {
-      return this.applyPinnedNoteHistory(
-        entry.beforePinnedNote ?? "",
-        "undo",
-        { past: this.envelope.history.past.slice(0, -1), future: [entry, ...this.envelope.history.future] },
-        now,
-      );
-    }
-    const history = this.nodeHistory();
-    const next = undoNodeHistory(history, now);
-    return this.apply("undo", next.nodes, { past: next.past.map(encodeEntry), future: next.future.map(encodeEntry) }, now);
+    if (!this.canReplay(entry, "undo")) return [];
+    return this.replayHistory(entry, "undo", now);
   }
 
   async redo(now = this.now()) {
@@ -136,16 +148,8 @@ export class TaskMemoV2ApplicationStore {
   private async redoSerialized(now: Date) {
     if (!this.envelope.history.future.length) return [];
     const entry = this.envelope.history.future[0];
-    if (entry.kind === "pinnedNote") {
-      return this.applyPinnedNoteHistory(
-        entry.afterPinnedNote ?? "",
-        "redo",
-        { past: [...this.envelope.history.past, entry], future: this.envelope.history.future.slice(1) },
-        now,
-      );
-    }
-    const next = redoNodeHistory(this.nodeHistory(), now);
-    return this.apply("redo", next.nodes, { past: next.past.map(encodeEntry), future: next.future.map(encodeEntry) }, now);
+    if (!this.canReplay(entry, "redo")) return [];
+    return this.replayHistory(entry, "redo", now);
   }
 
   async receive(incoming: VersionedNode) {
@@ -180,16 +184,18 @@ export class TaskMemoV2ApplicationStore {
       const current = this.envelope.profile.pinnedNote;
       if (current.localBody === body) return;
       const latest = this.envelope.history.past.at(-1);
-      const coalesce = latest?.kind === "pinnedNote"
+      const target = latest?.targets[0];
+      const coalesce = latest?.targets.length === 1
+        && target?.resourceType === "pinnedNote"
         && this.envelope.history.future.length === 0
         && typeof latest.coalesceUntil === "string"
         && now.getTime() <= Date.parse(latest.coalesceUntil);
-      const snapshots = encodeNodes(this.nodes);
       const entry: StoredHistoryEntry = coalesce
-        ? { ...latest, afterPinnedNote: body, coalesceUntil: new Date(now.getTime() + PINNED_NOTE_HISTORY_COALESCE_MS).toISOString() }
+        ? { ...latest, targets: [{ ...target, after: { body } }], coalesceUntil: new Date(now.getTime() + PINNED_NOTE_HISTORY_COALESCE_MS).toISOString() }
         : {
-            label: "常設メモを編集", kind: "pinnedNote", before: snapshots, after: snapshots,
-            beforePinnedNote: current.localBody, afterPinnedNote: body,
+            commandId: `${this.envelope.deviceId}:history:${this.envelope.nextLocalSeq}:${now.getTime()}`,
+            label: "常設メモを編集",
+            targets: [{ resourceType: "pinnedNote", resourceId: "pinnedNote", before: { body: current.localBody }, after: { body }, forwardOpId: current.synced?.lastOpId ?? null, forwardRevision: current.synced?.revision ?? 0 }],
             coalesceUntil: new Date(now.getTime() + PINNED_NOTE_HISTORY_COALESCE_MS).toISOString(),
           };
       const past = coalesce
@@ -214,7 +220,8 @@ export class TaskMemoV2ApplicationStore {
         payload: { pinnedNote: { body: current.localBody } }, createdAt: now.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
       };
       const synced = candidateForPinnedNoteOperation(operation);
-      await this.commit({ ...this.envelope, nextLocalSeq: localSeq + 1, profile: { ...this.envelope.profile, pinnedNote: { ...current, synced, dirtySince: null } }, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, operation] } });
+      const history = this.attachPinnedForwardIdentity(operation.opId, synced.revision);
+      await this.commit({ ...this.envelope, nextLocalSeq: localSeq + 1, history, profile: { ...this.envelope.profile, pinnedNote: { ...current, synced, dirtySince: null } }, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, operation] } });
       return operation;
     });
   }
@@ -282,34 +289,98 @@ export class TaskMemoV2ApplicationStore {
     if (operation || domain !== this.envelope.domain || profile !== this.envelope.profile) await this.commit(next);
   }
 
-  private nodeHistory(): NodeHistory {
-    return { nodes: this.nodes, past: this.envelope.history.past.map(decodeEntry), future: this.envelope.history.future.map(decodeEntry) };
+  private attachPinnedForwardIdentity(opId: string, revision: number): Envelope["history"] {
+    const past = [...this.envelope.history.past];
+    const index = past.findLastIndex((entry) => entry.targets.length === 1
+      && entry.targets[0].resourceType === "pinnedNote"
+      && entry.targets[0].after.body === this.envelope.profile.pinnedNote.localBody);
+    if (index < 0) return this.envelope.history;
+    const entry = past[index];
+    const target = entry.targets[0] as PinnedNoteHistoryTarget;
+    past[index] = { ...entry, targets: [{ ...target, forwardOpId: opId, forwardRevision: revision }] };
+    return { ...this.envelope.history, past };
   }
 
-  private async applyPinnedNoteHistory(body: string, type: "undo" | "redo", history: Envelope["history"], now: Date) {
-    const current = this.envelope.profile.pinnedNote;
-    if (current.localBody === body) {
-      await this.commit({ ...this.envelope, history });
-      return [];
-    }
-    const localSeq = this.envelope.nextLocalSeq;
-    const operation: SyncOperation = {
-      opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
-      targetNodeId: "pinnedNote", targetType: "pinnedNote", type, baseRevision: current.synced?.revision ?? 0,
-      payload: { pinnedNote: { body } }, createdAt: now.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
-    };
-    const synced = candidateForPinnedNoteOperation(operation);
-    await this.commit({
-      ...this.envelope,
-      nextLocalSeq: localSeq + 1,
-      history,
-      profile: { ...this.envelope.profile, pinnedNote: { ...current, localBody: body, synced, dirtySince: null, migrationPending: false } },
-      sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, operation] },
+  private canReplay(entry: StoredHistoryEntry, direction: "undo" | "redo") {
+    return entry.targets.every((target) => {
+      if (target.resourceType === "node") {
+        const current = this.envelope.domain[target.resourceId];
+        if (!current) return false;
+        const expectedOpId = direction === "undo" ? target.forwardOpId : target.undoOpId;
+        const expectedRevision = direction === "undo" ? target.forwardRevision : target.undoRevision;
+        return !!expectedOpId && current.lastOpId === expectedOpId && current.revision === expectedRevision;
+      }
+      const current = this.envelope.profile.pinnedNote;
+      const expectedBody = direction === "undo" ? target.after.body : target.before.body;
+      const expectedOpId = direction === "undo" ? target.forwardOpId : target.undoOpId;
+      const expectedRevision = direction === "undo" ? target.forwardRevision : target.undoRevision;
+      const identityMatches = expectedOpId === null
+        ? current.synced === null || current.synced.revision === expectedRevision
+        : current.synced?.lastOpId === expectedOpId && current.synced?.revision === expectedRevision;
+      return current.localBody === expectedBody && identityMatches;
     });
-    return [operation];
   }
 
-  private async apply(type: SyncOperationType, nodes: Node[], history: Envelope["history"], commandTime: Date) {
+  private historyNodeValue(current: VersionedNode, target: SyncNodeValue | null, now: Date) {
+    if (!target) return { ...current.value, deletedAt: now.toISOString(), deletionBatchId: null, updatedAt: now.toISOString() };
+    const value = { ...target };
+    const previousTime = typeof current.value.updatedAt === "string" ? Date.parse(current.value.updatedAt) : 0;
+    value.updatedAt = new Date(Math.max(now.getTime(), previousTime + 1)).toISOString();
+    if (current.value.purgedAt && !value.purgedAt) return null;
+    return value;
+  }
+
+  private async replayHistory(entry: StoredHistoryEntry, direction: "undo" | "redo", now: Date) {
+    let localSeq = this.envelope.nextLocalSeq;
+    let domain = { ...this.envelope.domain };
+    let profile = this.envelope.profile;
+    const operations: SyncOperation[] = [];
+    const nextTargets: HistoryTarget[] = [];
+
+    for (const target of entry.targets) {
+      if (target.resourceType === "node") {
+        const current = domain[target.resourceId];
+        const value = this.historyNodeValue(current, direction === "undo" ? target.before : target.after, now);
+        if (!value) return [];
+        const operation: SyncOperation = {
+          opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
+          targetNodeId: target.resourceId, type: direction, baseRevision: current.revision, payload: { node: value },
+          createdAt: now.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+        };
+        localSeq += 1;
+        const record = candidateForOperation(operation);
+        domain[target.resourceId] = record;
+        operations.push(operation);
+        nextTargets.push(direction === "undo"
+          ? { ...target, undoOpId: operation.opId, undoRevision: record.revision }
+          : { ...target, forwardOpId: operation.opId, forwardRevision: record.revision, undoOpId: undefined, undoRevision: undefined });
+      } else {
+        const current = profile.pinnedNote;
+        const body = direction === "undo" ? target.before.body : target.after.body;
+        const operation: SyncOperation = {
+          opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
+          targetNodeId: "pinnedNote", targetType: "pinnedNote", type: direction, baseRevision: current.synced?.revision ?? 0,
+          payload: { pinnedNote: { body } }, createdAt: now.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+        };
+        localSeq += 1;
+        const synced = candidateForPinnedNoteOperation(operation);
+        profile = { ...profile, pinnedNote: { ...current, localBody: body, synced, dirtySince: null, migrationPending: false } };
+        operations.push(operation);
+        nextTargets.push(direction === "undo"
+          ? { ...target, undoOpId: operation.opId, undoRevision: synced.revision }
+          : { ...target, forwardOpId: operation.opId, forwardRevision: synced.revision, undoOpId: undefined, undoRevision: undefined });
+      }
+    }
+
+    const moved = { ...entry, targets: nextTargets };
+    const history = direction === "undo"
+      ? { past: this.envelope.history.past.slice(0, -1), future: [moved, ...this.envelope.history.future] }
+      : { past: [...this.envelope.history.past, moved].slice(-75), future: this.envelope.history.future.slice(1) };
+    await this.commit({ ...this.envelope, nextLocalSeq: localSeq, domain, profile, history, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, ...operations] } });
+    return operations;
+  }
+
+  private async applyCommand(type: SyncOperationType, nodes: Node[], label: string, recordHistory: boolean, commandTime: Date) {
     let localSeq = this.envelope.nextLocalSeq;
     const operations: SyncOperation[] = [];
     const domain = { ...this.envelope.domain };
@@ -327,6 +398,15 @@ export class TaskMemoV2ApplicationStore {
       };
       localSeq += 1; operations.push(operation); domain[id] = candidateForOperation(operation);
     }
+    const targets: NodeHistoryTarget[] = operations.map((operation) => {
+      const previous = this.envelope.domain[operation.targetNodeId];
+      const nextRecord = domain[operation.targetNodeId];
+      return { resourceType: "node", resourceId: operation.targetNodeId, before: previous?.value ?? null, after: nextRecord.value, forwardOpId: operation.opId, forwardRevision: nextRecord.revision };
+    });
+    const history = recordHistory && targets.length ? {
+      past: [...this.envelope.history.past, { commandId: `${this.envelope.deviceId}:history:${operations[0].localSeq}`, label, targets }].slice(-75),
+      future: [],
+    } : this.envelope.history;
     const next: Envelope = { ...this.envelope, nextLocalSeq: localSeq, domain, history, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, ...operations] } };
     await this.commit(next);
     return operations;

@@ -16,6 +16,7 @@ class MemoryPersistence implements ApplicationJournalPersistence {
 
 const at = (ms: number) => new Date(`2026-09-18T00:00:${String(ms).padStart(2, "0")}.000Z`);
 const initialMemo = (): MemoNode => ({ id: "memo-a", type: "memo", memoType: "task", parentId: null, sortKey: "a0", deadlineSortKey: "d0", title: "A", body: "body", dueAt: null, duePreset: "none", status: "active", completedAt: null, repeatRule: null, routineHistory: { "2026-09-17": at(1).toISOString() }, createdAt: at(0), updatedAt: at(0), deletedAt: null, deletionBatchId: null, purgedAt: null });
+const unrelatedMemo = (): MemoNode => ({ ...initialMemo(), id: "memo-b", sortKey: "b0", title: "B", routineHistory: {} });
 
 describe("TaskMemo V2 application store", () => {
   it("serializes overlapping UI commands without losing history, fields, or operation IDs", async () => {
@@ -59,6 +60,39 @@ describe("TaskMemo V2 application store", () => {
     expect(store.nodes[0].title).toBe("B");
     expect(store.outbox.slice(-2).map((operation) => operation.type)).toEqual(["undo", "redo"]);
     expect(store.historyDepths).toEqual({ past: 1, future: 0 });
+  });
+
+  it.each([
+    ["Category", { id: "category", type: "category", parentId: null, sortKey: "a0", title: "before", createdAt: at(0), updatedAt: at(0), deletedAt: null } as Node],
+    ["Idea", { ...initialMemo(), id: "idea", memoType: "idea", title: "before" } as Node],
+  ])("undoes and redoes a %s update through delta History", async (_name, node) => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [node], { deviceId: "device-a", now: () => at(9) });
+    await store.command("edit", "update", nodes => updateNode(nodes, node.id, { title: "after" }, at(1)));
+    await store.undo(at(2)); expect(store.nodes[0].title).toBe("before");
+    await store.redo(at(3)); expect(store.nodes[0].title).toBe("after");
+  });
+
+  it("undoes and redoes Routine completion through delta History", async () => {
+    const root: Node = { id: "routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "a0", title: "Routine", createdAt: at(0), updatedAt: at(0), deletedAt: null };
+    const memo: MemoNode = { ...initialMemo(), id: "routine-memo", parentId: "routine", repeatRule: { frequency: "day", interval: 1, startsOn: "2026-09-18" }, routineHistory: {} };
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [root, memo], { deviceId: "device-a", now: () => at(9) });
+    await store.command("complete routine", "complete", nodes => completeMemo(nodes, "routine-memo", at(1)));
+    expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).not.toEqual({});
+    await store.undo(at(2)); expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).toEqual({});
+    await store.redo(at(3)); expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).not.toEqual({});
+  });
+
+  it("keeps soft delete and restore undoable but never records purge in History", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    await store.command("delete", "softDelete", nodes => softDeleteNode(nodes, "memo-a", false, at(1)));
+    await store.undo(at(2)); expect(store.nodes[0].deletedAt).toBeNull();
+    await store.redo(at(3)); expect(store.nodes[0].deletedAt).toEqual(at(1));
+    await store.command("restore", "restore", nodes => restoreNode(nodes, "memo-a", at(4)));
+    await store.undo(at(5)); expect(store.nodes[0].deletedAt).toEqual(at(1));
+    await store.redo(at(6)); expect(store.nodes[0].deletedAt).toBeNull();
+    const depth = store.historyDepths;
+    await store.command("purge", "purge", nodes => hardDeleteNode(nodes, "memo-a", at(7)));
+    expect(store.historyDepths).toEqual(depth);
   });
 
   it("represents Undo of create as a synchronized soft tombstone and Redo as a newer restore", async () => {
@@ -210,6 +244,17 @@ describe("TaskMemo V2 application store", () => {
     expect(store.pinnedNote.body).toBe("");
   });
 
+  it("keeps pinned-note identity attached when another command precedes its debounced upload", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    await store.setPinnedNoteDraft("pinned", at(1));
+    await store.command("memo edit", "update", nodes => updateNode(nodes, "memo-a", { title: "B" }, at(2)));
+    await store.queuePinnedNoteOperation(at(3));
+    await store.undo(at(4));
+    expect(store.nodes[0].title).toBe("A");
+    await store.undo(at(5));
+    expect(store.pinnedNote.body).toBe("");
+  });
+
   it("recovers pinned-note history and its Undo operation atomically from WAL", async () => {
     const persistence = new MemoryPersistence();
     let store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a", now: () => at(1) });
@@ -240,5 +285,166 @@ describe("TaskMemo V2 application store", () => {
     await a.redo(at(4)); await flush();
     expect(b.pinnedNote.body).toBe("B");
     expect(a.pinnedNote.body).toBe(b.pinnedNote.body);
+  });
+
+  it("does not roll back an unrelated remotely edited Node when undoing a local edit", async () => {
+    const initial = [initialMemo(), unrelatedMemo()];
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-b", now: () => at(9) });
+    await a.command("local A edit", "update", nodes => updateNode(nodes, "memo-a", { title: "A-local" }, at(1)));
+    await b.command("remote B edit", "update", nodes => updateNode(nodes, "memo-b", { title: "B-remote" }, at(2)));
+    await a.receive(b.versionedNode("memo-b")!);
+
+    await a.undo(at(3));
+
+    expect(a.nodes.find(node => node.id === "memo-a")?.title).toBe("A");
+    expect(a.nodes.find(node => node.id === "memo-b")?.title).toBe("B-remote");
+    expect(a.outbox.filter(operation => operation.type === "undo").map(operation => operation.targetNodeId)).toEqual(["memo-a"]);
+  });
+
+  it("does not roll back an unrelated remotely edited Node when redoing a local edit", async () => {
+    const initial = [initialMemo(), unrelatedMemo()];
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-b", now: () => at(9) });
+    await a.command("local A edit", "update", nodes => updateNode(nodes, "memo-a", { title: "A-local" }, at(1)));
+    await a.undo(at(2));
+    await b.command("remote B edit", "update", nodes => updateNode(nodes, "memo-b", { title: "B-remote" }, at(3)));
+    await a.receive(b.versionedNode("memo-b")!);
+
+    await a.redo(at(4));
+
+    expect(a.nodes.find(node => node.id === "memo-a")?.title).toBe("A-local");
+    expect(a.nodes.find(node => node.id === "memo-b")?.title).toBe("B-remote");
+    expect(a.outbox.filter(operation => operation.type === "redo").map(operation => operation.targetNodeId)).toEqual(["memo-a"]);
+  });
+
+  it("does not silently overwrite a newer remote edit to the same Node with an older local Undo snapshot", async () => {
+    const server = new InMemoryRevisionServer();
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-b", now: () => at(9) });
+    await a.command("local edit", "update", nodes => updateNode(nodes, "memo-a", { title: "A-local" }, at(1)));
+    const localAck = server.apply(a.outbox[0]);
+    await a.acknowledge(localAck.opId, localAck.record);
+    await b.receive(localAck.record!);
+    await b.command("later remote edit", "update", nodes => updateNode(nodes, "memo-a", { title: "A-remote" }, at(2)));
+    const remoteAck = server.apply(b.outbox[0]);
+    await b.acknowledge(remoteAck.opId, remoteAck.record);
+    await a.receive(remoteAck.record!);
+
+    await a.undo(at(3));
+
+    expect(a.nodes.find(node => node.id === "memo-a")?.title).toBe("A-remote");
+    expect(a.outbox.filter(operation => operation.type === "undo")).toHaveLength(0);
+  });
+
+  it("does not silently overwrite a newer remote pinned note with an older local Undo snapshot", async () => {
+    const server = new InMemoryRevisionServer();
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-b", now: () => at(9) });
+    await a.setPinnedNoteDraft("local", at(1)); await a.queuePinnedNoteOperation(at(1));
+    const localAck = server.apply(a.outbox[0]);
+    await a.acknowledge(localAck.opId, undefined, localAck.pinnedNoteRecord);
+    await b.receivePinnedNote(localAck.pinnedNoteRecord!);
+    await b.setPinnedNoteDraft("remote", at(2)); await b.queuePinnedNoteOperation(at(2));
+    const remoteAck = server.apply(b.outbox[0]);
+    await b.acknowledge(remoteAck.opId, undefined, remoteAck.pinnedNoteRecord);
+    await a.receivePinnedNote(remoteAck.pinnedNoteRecord!);
+
+    await a.undo(at(3));
+
+    expect(a.pinnedNote.body).toBe("remote");
+    expect(a.outbox.filter(operation => operation.type === "undo")).toHaveLength(0);
+  });
+
+  it("preserves an unrelated remote Node through mixed Node and pinned-note Undo/Redo", async () => {
+    const initial = [initialMemo(), unrelatedMemo()];
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-b", now: () => at(9) });
+    await a.command("local A edit", "update", nodes => updateNode(nodes, "memo-a", { title: "A-local" }, at(1)));
+    await a.setPinnedNoteDraft("pinned-local", at(2));
+    await b.command("remote B edit", "update", nodes => updateNode(nodes, "memo-b", { title: "B-remote" }, at(3)));
+    await a.receive(b.versionedNode("memo-b")!);
+
+    await a.undo(at(4));
+    await a.redo(at(5));
+    await a.undo(at(6));
+    await a.undo(at(7));
+
+    expect(a.pinnedNote.body).toBe("");
+    expect(a.nodes.find(node => node.id === "memo-a")?.title).toBe("A");
+    expect(a.nodes.find(node => node.id === "memo-b")?.title).toBe("B-remote");
+  });
+
+  it("preserves a remotely created Node when undoing a local command", async () => {
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-b", now: () => at(9) });
+    await a.command("local edit", "update", nodes => updateNode(nodes, "memo-a", { title: "local" }, at(1)));
+    await b.command("remote create", "create", nodes => createNode(nodes, "memo", { title: "remote new", parentId: null }, at(2), "remote-new"));
+    await a.receive(b.versionedNode("remote-new")!);
+    await a.undo(at(3));
+    expect(a.nodes.find(node => node.id === "remote-new")).toMatchObject({ title: "remote new", deletedAt: null });
+    expect(a.outbox.filter(operation => operation.type === "undo").map(operation => operation.targetNodeId)).toEqual(["memo-a"]);
+  });
+
+  it("blocks Redo atomically when the same Node changed remotely after Undo", async () => {
+    const server = new InMemoryRevisionServer();
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-b", now: () => at(9) });
+    await a.command("local edit", "update", nodes => updateNode(nodes, "memo-a", { title: "local" }, at(1)));
+    let ack = server.apply(a.outbox[0]); await a.acknowledge(ack.opId, ack.record); await b.receive(ack.record!);
+    const undo = await a.undo(at(2)); ack = server.apply(undo[0]); await a.acknowledge(ack.opId, ack.record); await b.receive(ack.record!);
+    await b.command("remote edit", "update", nodes => updateNode(nodes, "memo-a", { title: "remote" }, at(3)));
+    ack = server.apply(b.outbox.at(-1)!); await a.receive(ack.record!);
+    expect(await a.redo(at(4))).toEqual([]);
+    expect(a.nodes[0].title).toBe("remote");
+    expect(a.historyDepths).toEqual({ past: 0, future: 1 });
+  });
+
+  it("does not resurrect a remotely purged Node from local History", async () => {
+    const server = new InMemoryRevisionServer();
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: "device-b", now: () => at(9) });
+    await a.command("local edit", "update", nodes => updateNode(nodes, "memo-a", { title: "local" }, at(1)));
+    let ack = server.apply(a.outbox[0]); await a.acknowledge(ack.opId, ack.record); await b.receive(ack.record!);
+    await b.command("remote purge", "purge", nodes => hardDeleteNode(nodes, "memo-a", at(2)));
+    ack = server.apply(b.outbox.at(-1)!); await a.receive(ack.record!);
+    expect(await a.undo(at(3))).toEqual([]);
+    expect(a.nodes[0].purgedAt).toEqual(at(2));
+    expect(a.historyDepths).toEqual({ past: 1, future: 0 });
+  });
+
+  it("blocks an entire multi-target command when one target changed remotely", async () => {
+    const server = new InMemoryRevisionServer();
+    const category: Node = { id: "category-a", type: "category", parentId: null, sortKey: "a0", title: "C", createdAt: at(0), updatedAt: at(0), deletedAt: null };
+    const child = { ...initialMemo(), parentId: "category-a" };
+    const initial = [category, child];
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-a", now: () => at(9) });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-b", now: () => at(9) });
+    await a.command("cascade delete", "softDelete", nodes => softDeleteNode(nodes, "category-a", true, at(1)));
+    for (const operation of a.outbox) {
+      const ack = server.apply(operation);
+      await a.acknowledge(ack.opId, ack.record);
+      await b.receive(ack.record!);
+    }
+    await b.command("remote child edit", "update", nodes => updateNode(nodes, "memo-a", { title: "remote" }, at(2)));
+    const remote = server.apply(b.outbox.at(-1)!);
+    await a.receive(remote.record!);
+    expect(await a.undo(at(3))).toEqual([]);
+    expect(a.nodes.find(node => node.id === "category-a")?.deletedAt).toEqual(at(1));
+    expect(a.nodes.find(node => node.id === "memo-a")?.title).toBe("remote");
+    expect(a.historyDepths).toEqual({ past: 1, future: 0 });
+  });
+
+  it("drops only unsafe legacy snapshot History while preserving recovered domain and outbox", async () => {
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: "device-a", now: () => at(9) });
+    await store.command("edit", "update", nodes => updateNode(nodes, "memo-a", { title: "B" }, at(1)));
+    const envelope = JSON.parse(persistence.committed!);
+    envelope.history = { past: [{ label: "legacy", before: [envelope.domain["memo-a"].value], after: [envelope.domain["memo-a"].value] }], future: [] };
+    persistence.committed = JSON.stringify(envelope);
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", now: () => at(9) });
+    expect(store.nodes[0].title).toBe("B");
+    expect(store.outbox).toHaveLength(1);
+    expect(store.historyDepths).toEqual({ past: 0, future: 0 });
   });
 });
