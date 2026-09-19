@@ -66,4 +66,4 @@ Formal post-cleanup results:
 
 ## Decision
 
-The data-validation and formal-rehearsal blockers are resolved. Production cutover is still **not authorized**: the release-candidate device checklist and the remaining iOS signing/build preparation must pass first.
+The data-validation and formal-rehearsal blockers are resolved. By owner decision, Apple Developer Program enrollment and an iOS native RC are outside this cutover's scope and are not blockers. Production cutover is still **not authorized** until the Windows PWA, iPhone Safari PWA, and Android APK checklist is reported complete.

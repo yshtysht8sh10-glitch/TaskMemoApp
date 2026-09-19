@@ -1,40 +1,45 @@
 # V2 release-candidate manual checklist
 
-RC identity: `v2-rc-20260919`. All builds and the PWA point to `taskmemoapp-dev`; production project `taskmemoapp-eabc3` is rejected by runtime configuration. The sync panel must display `DEV環境` and `同期プロトコル: V2` before testing.
+RC identity: `v2-rc-20260919`. Test only these three clients with the dedicated RC account:
 
-Use the dedicated RC account delivered with the RC links. Do not use a production account. Use the PWA in a normal browser plus iPhone/Android builds as three distinct clients.
+- Windows PC: PWA RC
+- iPhone: SafariでPWA RC（iOS native buildは今回の対象外）
+- Android: EAS internal RC APK
 
-## Safety preflight
+## 1. Safety check（各端末）
 
-1. Open Settings → Cloud sync.
-2. Confirm `DEV環境 · 本番データには接続しません` and `同期プロトコル: V2`.
-3. STOP immediately if either is absent or if the project/account is unexpected.
+- Settings → Cloud syncを開く。
+- `DEV環境 · 本番データには接続しません` と `同期プロトコル: V2` を確認する。
+- 表示が違う場合は直ちに中止する。production accountは使用しない。
 
-## Functional sequence
+## 2. 基本操作（いずれか1端末）
 
-- Create Category A/B; rename A; move A under B and back to root.
-- Create a Task Memo in A; change title/body; move within A and then to B.
-- Change due date through today/tomorrow/custom and each enabled day-part grouping.
-- Enable Idea, create/edit/move an Idea, and confirm it has no completion/due controls.
-- Under Routine, create daily and weekly items; edit, complete today's occurrence, then cancel completion.
-- Complete/uncomplete the normal Memo.
-- Delete the Memo, confirm Trash, restore it, and confirm its original parent/order.
+- CategoryとMemoを作成し、タイトル・本文・期限・所属・並び順を変更する。
+- 完了 → 完了取消を行う。
+- Routineを作成・編集・完了・完了取消する。
+- Memoを削除し、ゴミ箱から復元する。
+- 同期表示が処理中から同期済みに戻ることを確認する。
 
-## Multi-client and offline
+## 3. 端末間同期
 
-- iPhone create → verify Android/PWA receives it.
-- PWA edit → verify iPhone receives it.
-- On one client use the RC-only Emulator/transport pause when available, or disable connectivity; edit; edit the same Node on another client; reconnect and verify all clients converge.
-- Verify the sync label transitions through pending/offline and returns to synced.
+- PC PWAで作成 → iPhone PWAで反映を確認。
+- iPhone PWAで編集 → PC PWAで反映を確認。
+- PWAで編集 → Androidで反映を確認。
+- Androidで編集 → PWAで反映を確認。
 
-## Mandatory #45 regression
+## 4. Offline
 
-1. Edit a title.
-2. Undo.
-3. Wait until sync shows synced, then wait another five seconds.
-4. Confirm Redo is still enabled.
-5. Redo.
-6. Wait until synced, then another five seconds.
-7. Confirm the Redo result remains on every client and does not revert.
+- 1端末をofflineにし、Memoを編集する。
+- onlineへ戻し、同期済みになることと他端末へ反映されることを確認する。
 
-Record device/browser versions, timestamps, pass/fail, screenshots for failures, and whether pending outbox cleared. Issue #45 stays open until this checklist passes.
+## 5. 必須 #45 回帰
+
+1. 端末AでMemoを編集する。
+2. Undoする。
+3. 他端末への同期を待ち、同期済み後さらに5秒待つ。
+4. Redoが有効なままであることを確認する。
+5. Redoする。
+6. 同期済み後さらに5秒待つ。
+7. 変更後状態が全端末で維持され、勝手に戻らないことを確認する。
+
+端末・OS・ブラウザ版、PASS/FAIL、失敗時の画面と操作順を記録する。完了報告まではIssue #45をOPENのままにする。
