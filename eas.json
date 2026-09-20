@@ -23,6 +23,14 @@
     },
     "production": {
       "environment": "production"
+    },
+    "production-v2-cutover": {
+      "environment": "production",
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SYNC_V2_ENABLED": "true",
+        "EXPO_PUBLIC_RELEASE_CHANNEL": "production-v2-cutover"
+      }
     }
   }
 }

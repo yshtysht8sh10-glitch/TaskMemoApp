@@ -5,7 +5,7 @@ const clear = { events: [], clients: [{ id: "a", syncPhase: "synced", outboxOlde
 
 describe("cutover canary diagnostics", () => {
   it("continues only when critical counters are zero and clients converge", () => expect(assessCutoverDiagnostics(clear)).toEqual({ decision: "CONTINUE", reasons: [] }));
-  it.each(["v1-write-attempt", "schema-owner-failure", "receipt-missing", "revision-regression", "functions-partial-transaction"])("stops on one %s", (kind) => {
+  it.each(["v1-write-attempt", "schema-owner-failure", "receipt-missing", "duplicate-receipt", "revision-regression", "permanent-sync-error", "functions-partial-transaction"])("stops on one %s", (kind) => {
     expect(assessCutoverDiagnostics({ ...clear, events: [{ kind, count: 1 }] }).decision).toBe("STOP");
   });
   it("stops on an online outbox older than five minutes or convergence mismatch", () => {

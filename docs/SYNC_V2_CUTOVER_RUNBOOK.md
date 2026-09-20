@@ -1,6 +1,6 @@
 # TaskMemo V2 production cutover runbook
 
-Status: formal-rehearsal PASS; production execution is **BLOCKED until the missing production admin commands and release artifacts listed below exist and receive explicit authorization**. Issue #45 remains open. Nothing here authorizes a production change.
+Status: formal-rehearsal PASS; reviewed admin commands are defined in [PRODUCTION_ADMIN_TOOLING.md](PRODUCTION_ADMIN_TOOLING.md). Production execution still requires runtime evidence, release artifacts and explicit authorization. Issue #45 remains open. Nothing here authorizes a production change.
 
 ## Project identity guard
 
@@ -28,7 +28,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 
 ### 1. Read-only source snapshot
 
-- Command: `npm run migration:production-read-only -- <private-output.json> read-only:taskmemoapp-eabc3`, with a short-lived OAuth token supplied only through the process environment.
+- Command: `npm run migration:production-read-only -- "$Cutover/preflight-production-v1.json" read-only:taskmemoapp-eabc3`, with a short-lived OAuth token supplied only through the process environment.
 - Target: production `taskmemoapp-eabc3`, Firestore `documents:runQuery` against collection group `nodes`.
 - Expected: a private, gitignored snapshot; two consecutive reads produce the same canonical hash and count.
 - The Cloud reader must record `localProfileInventory.complete=false`. V1 pinnedNote, ideasEnabled and recovery candidates are device-local; absence from Firestore is not evidence of an empty value/candidate list.
@@ -38,7 +38,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 
 ### 2. Offline migration analysis
 
-- Command: `npm run migration:analyze-production-snapshot -- <private-snapshot.json> <private-report.json>`.
+- Command: `npm run migration:analyze-production-snapshot -- "$Cutover/preflight-production-v1.json" "$Migration" "$Cutover/preflight-analysis.json"`.
 - Target: local files only.
 - Expected: equal input/output Node counts, zero changed/lost fields, zero semantic changes, zero orphan/unknown/unexpected records.
 - Validation: inspect all reported counters and retained Node fields, including ID, `parentId`, `sortKey`, `deadlineSortKey`, deadline/due, `dayPart`, Routine configuration/history, completion, `deletedAt`, `purgedAt`, and unknown fields.
@@ -50,7 +50,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 Run after receiving the file:
 
 ```powershell
-npm run migration:intake-v1-export -- <iphone-schema1-export.json> <fresh-production-snapshot.json> <migration-id> <new-private-report.json>
+npm run migration:intake-v1-export -- artifacts/private/iphone-v1-export-original-20260920.json "$Cutover/preflight-production-v1.json" "$Migration" "$Cutover/intake-report.json"
 ```
 
 The command requires schema 1, validates exportedAt, all Nodes, IDs, types, required fields, dates, parent/category references, cycles, ranks, deleted/purged state and lossless codec behavior. It canonicalizes dates and object keys, compares every Node/field against the read-only Firestore snapshot, and classifies `IDENTICAL`, `EXPORT_ONLY`, `FIRESTORE_ONLY`, or `FIELD_DIFFERENCE`. The report is create-only and contains both values for private review. Any non-identical result exits with code 2 and requires an explicit user source decision; it never merges.
@@ -59,7 +59,7 @@ For the 2026-09-20 cutover source, the user approved the repaired iPhone Export 
 
 ### 3. Isolated backup and exact restore
 
-- Command: start `firebase.rehearsal.json` with project `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- <snapshot> <migrationId> <new-backup> <new-report> --continue-after-validation-stop=orphan-preservation-only` only when deliberately testing post-STOP mechanics.
+- Command: start `firebase.rehearsal.json` with project `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- artifacts/private/iphone-authoritative-rehearsal-source-20260920.json "$Migration" "$Cutover/diagnostic-rehearsal-backup.json" "$Cutover/diagnostic-rehearsal-report.json" --continue-after-validation-stop=orphan-preservation-only` only when deliberately testing post-STOP mechanics.
 - Target: local Auth/Firestore emulator only (9299/8280). Never substitute a deployable Firebase project.
 - Expected: create-only backup; restore count/IDs/fields/values/nested values/tombstones/unknown fields are byte-semantically equal.
 - Validation: automated recursive comparison. Formal post-cleanup result on 2026-09-19: 120/120 exact, 511.81 ms restore plus 222.10 ms validation.
@@ -93,6 +93,10 @@ FunctionsをV2対応版へ切り替えること自体もcutover操作である�
 
 ## Final linear production runbook (operator path)
 
+Use the fixed PowerShell variables and exact commands in [PRODUCTION_ADMIN_TOOLING.md](PRODUCTION_ADMIN_TOOLING.md). Angle-bracket examples in historical sections below are non-authoritative; no production operator step depends on them.
+
+Before Phase 0, set `$Project`, `$Uid`, `$Migration`, `$Source`, and `$Cutover` exactly as documented there. `$Uid` must be supplied through `TASKMEMO_CUTOVER_UID`; empty or ambiguous identity fails closed.
+
 Do not skip or reorder a phase. Record command output, UTC time, operator and artifact hashes in the private cutover log. Production is exactly `taskmemoapp-eabc3`. Strict Rules are `firestore.dev.rules` selected by `firebase.cutover.json`; Functions target is `functions:taskMemoMcp` in `asia-northeast1`. The authoritative input is the repaired 124-Node iPhone Export, SHA-256 `4da5ae29e427831025da485e40f84fc21180591421c40b26e62d3d7817bcae73`, migration ID `iphone-authoritative-20260920`.
 
 > ## POINT OF NO RETURN
@@ -111,17 +115,17 @@ Do not skip or reorder a phase. Record command output, UTC time, operator and ar
 
 ### Phase 1 — begin V1 write freeze
 
-- Sequence: create/verify global control and per-user V1 gate under current Rules; deploy strict Rules; prove V1 read/write; set `writesEnabled=false`; prove V1 write fails while V1 read remains available.
+- Commands: dry-run and then explicitly confirm `npm run admin:control-gate` action `v1-enabled`; run `npm run admin:protocol-probe` protocol 1 expectation `writable`; deploy strict Rules; run `admin:control-gate` action `freeze`; run the protocol 1 expectation `read-only` probe. Exact arguments/tokens are in the tooling document.
 - Known Rules command: `npx firebase-tools deploy --project taskmemoapp-eabc3 --config firebase.cutover.json --only firestore:rules`.
 - Production effect/access: **write + Rules deploy**.
 - Expected/PASS: V1 gate is `{schemaVersion:1, minimumSyncProtocol:1, v1WritesAllowed:true, v2Enabled:false}`; after freeze every write fails and selected-protocol reads work.
 - STOP: **one V1 write attempt after freeze**, a successful write, failed read, missing gate, project mismatch or ambiguous Rules version.
 - Rollback: before migration, restore `writesEnabled=true`, previous Rules and V1 gate only after proving no migration write. Proceed only with stable freeze evidence.
-- **BLOCKER:** no reviewed production control/gate writer or authenticated V1 probe command exists. Never improvise REST writes.
+- Formal commands: `admin:control-gate` and `admin:protocol-probe`; see the tooling document. Proceed only after their dry-run audit and exact confirmation tokens are independently reviewed.
 
 ### Phase 2 — two post-freeze snapshots
 
-- Commands: `npm run migration:production-read-only -- artifacts/private/cutover-freeze-a.json read-only:taskmemoapp-eabc3` and the same with `cutover-freeze-b.json`; token only via `GOOGLE_OAUTH_ACCESS_TOKEN`.
+- Commands: `npm run migration:production-read-only -- "$Cutover/freeze-a.json" read-only:taskmemoapp-eabc3` and the same with `"$Cutover/freeze-b.json"`; token only via `GOOGLE_OAUTH_ACCESS_TOKEN`.
 - Production effect/access: read-only `documents:runQuery` on collection group `nodes`.
 - Expected/PASS: both exclusive-create private snapshots complete after freeze.
 - STOP: credential ambiguity, writer code, project mismatch, API failure or any V1 write-attempt signal.
@@ -129,24 +133,24 @@ Do not skip or reorder a phase. Record command output, UTC time, operator and ar
 
 ### Phase 3 — count/canonical-hash stability
 
-- Operation: run the reviewed canonical comparison over both private snapshots.
+- Command: run `npm run admin:compare-snapshots` with the exact tooling-document arguments and approved expected count.
 - Production effect/access: none.
 - Expected/PASS: equal count, IDs and canonical SHA-256.
 - STOP: any mismatch or unexplained update. Rollback: remain frozen.
-- **BLOCKER:** the prior canonical comparison is an operator one-liner, not a dedicated reviewed repository command.
+- Formal command: `admin:compare-snapshots`; expected count, IDs and canonical hash must all match.
 
 ### Phase 4 — immutable backup
 
-- Operation: exclusive-create copy of selected post-freeze raw snapshot and authoritative source into a restricted versioned directory; record SHA-256, size, count, project, capture time, migration ID and approvers.
+- Command: run `npm run admin:seal-backup` exactly as documented, then apply the separately approved restricted/immutable filesystem retention control.
 - Production effect/access: none.
 - Expected/PASS: hashes match manifest; destination is immutable/restricted.
 - STOP: overwrite, mutable destination, hash/count mismatch or missing raw metadata. Rollback: create a new destination while frozen.
 - Approved fallback: raw REST JSON + manifest + exact isolated restore; managed export is optional unless separately authorized.
-- **BLOCKER:** no reviewed repository command seals the snapshot pair, hashes, counts, metadata and access-control evidence into one immutable manifest. Do not substitute an ad-hoc copy command during cutover.
+- Formal command: `admin:seal-backup`. The command is create-only; the operator must additionally prove destination retention/IAM immutability.
 
 ### Phase 5 — isolated backup restore
 
-- Command: run `firebase.rehearsal.json` on `demo-taskmemo-rehearsal`, then `npm run rehearsal:v2-cutover -- <authoritative-private-bundle> iphone-authoritative-20260920 <new-backup> <new-report> --validation-must-pass --profile-policy=user-approved-non-migration`.
+- Command: start `firebase.rehearsal.json` on `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- artifacts/private/iphone-authoritative-rehearsal-source-20260920.json iphone-authoritative-20260920 "$Cutover/isolated-restore-backup.json" "$Cutover/isolated-restore-report.json" --validation-must-pass --profile-policy=user-approved-non-migration`.
 - Production effect/access: none; Emulator only.
 - Expected/PASS: backup/restored/migrated 124/124, all fields equal, semantic/lost 0 and integration PASS.
 - STOP: wrong target or any count/hash/semantic/field/client failure. Rollback: stop Emulator; remain frozen.
@@ -160,19 +164,21 @@ Do not skip or reorder a phase. Record command output, UTC time, operator and ar
 
 ### Phase 7 — production V1→V2 migration
 
+- Command: run the documented `npm run admin:migrate-v2` dry-run; after its audit is independently approved, run the exact write form with its source-bound confirmation token.
 - Production effect/access: **Admin write** to `users/{uid}/nodesV2`; create-only/idempotent revision-0 records with deterministic identity; no profile migration.
 - Expected/PASS: exactly 124 manifest-bound records, no extras, writes remain frozen.
 - STOP: first write error, conflicting V2 record, count/project/UID/migration-ID mismatch.
 - Rollback: pre-Phase-12 only, remove exact manifest-owned outputs and validate V1 snapshot.
-- **BLOCKER:** no production migration writer command exists. Never point the Emulator rehearsal script at production.
+- Formal command: `admin:migrate-v2`. Dry-run is default; the write form uses one create-only atomic commit and exact source confirmation.
 
 ### Phase 8 — immediate migration validation
 
+- Command: run the documented `npm run admin:validate-v2` command.
 - Production access: read-only `nodesV2` plus manifest/profile/control/gate inventory.
 - Expected/PASS: all 124 records equal authoritative V2 values; 12 Category, 111 Task, 1 Idea, 12 Routine, 98 active, 13 completed, 22 deleted, 4 purged, 25 routineHistory; semantic/lost 0; approved default profile.
 - STOP: any missing/extra/change, tombstone revival, revision/identity mismatch.
 - Rollback: remain frozen; pre-PONR manifest rollback allowed.
-- **BLOCKER:** no production V2 read-only validator/manifest command exists.
+- Formal command: `admin:validate-v2`.
 
 ### Phase 9 — protocol components
 
@@ -183,37 +189,37 @@ Do not skip or reorder a phase. Record command output, UTC time, operator and ar
 - Expected/PASS: V1 read/write rejected; V2 read allowed/write rejected; External AI fails closed while frozen.
 - STOP: any V1 access, V2 write success, V1 Functions behavior, target/region mismatch.
 - Rollback: pre-PONR restore V1 gate and approved prior Functions artifact while frozen.
-- **BLOCKER:** exact gate writer/probes and approved prior Functions rollback artifact do not exist; deploy also requires separate authorization.
+- Gate/probes now use the formal admin commands. Phase remains BLOCKED until read-only Functions metadata is tied to an independently restorable source artifact and deployment receives separate authorization.
 
 ### Phase 10 — read-only V2 canary
 
-- Operation: open separately approved production V2 client with exact production config and V2 flag while global writes remain frozen.
+- Command: run documented `npm run admin:canary` read mode, then open the separately approved production V2 client with exact production config and V2 flag while global writes remain frozen.
 - Production access: read-only through strict Rules.
 - Expected/PASS: 124 Nodes and empty/false/zero profile render; outbox empty; no receipt created.
 - STOP: attempted write, wrong state/count, crash, permission mismatch or outbox item.
 - Rollback: close client and restore pre-PONR configuration while frozen.
-- **BLOCKER:** final production Android/PWA artifacts are not built or approved.
+- Artifact definitions are fixed: EAS profile `production-v2-cutover` and `npm run web:export:production-v2`. Phase remains BLOCKED until both are built, hashed and approved in a separately authorized turn.
 
 ### Phase 11 — pre-write diagnostics
 
-- Command: `npm run diagnostics:cutover -- <collected-private-input.json> <new-private-report.json>`.
+- Commands: run documented `npm run admin:collect-diagnostics`, then `npm run diagnostics:cutover -- "$Cutover/diagnostic-input.json" "$Cutover/diagnostic-decision.json"`.
 - Production access: read-only logs/receipts/state collection.
 - PASS: `CONTINUE`; all critical counts zero; outboxes empty; hashes converge.
 - STOP: any critical count or mismatch. Rollback: remain frozen. Proceed only with explicit first-write approval.
-- **BLOCKER:** the analyzer exists, but no reviewed production evidence collector produces its input bundle. Do not proceed from manually assembled or incomplete diagnostics.
+- Formal collector: `admin:collect-diagnostics`; its create-only evidence feeds `diagnostics:cutover`.
 
 ### Phase 12 — first V2 write (**POINT OF NO RETURN**)
 
-- Operation: using the reviewed control writer, set global writes true; verify V2-only gate; perform exactly one canary Memo edit/create from the approved client.
+- Commands: run `admin:control-gate` action `v2-enabled` with exact precondition/confirmation, then run the documented `admin:canary` write form using `approved-canary-operation.json` and its SHA-bound PONR token.
 - Production effect/access: V2 write.
 - PASS: one winner revision advance and matching immutable receipt; no V1 change; outbox drains.
 - STOP: ambiguity, duplicate/missing receipt, wrong revision/Node, V1 attempt or timeout.
 - Rollback: **never restore V1**; set writes false, preserve V2/receipts, forward-reconcile.
-- **BLOCKER:** reviewed control writer and exact canary artifact/procedure are unavailable.
+- Formal command: `admin:canary --canary-mode write`; the independently reviewed operation artifact hash is part of the `POINT-OF-NO-RETURN` confirmation.
 
 ### Phase 13 — post-write integrity
 
-- Command: collect diagnostics and run `npm run diagnostics:cutover`; inspect winner/revision/receipt/outbox, second-client convergence and Functions idempotent retry.
+- Command: repeat the exact Phase 11 collector/analyzer commands after the listed canary and Functions idempotent-retry operations.
 - Production access: read-only checks plus explicitly listed canary operations.
 - PASS: exact receipt/revision, convergence, empty outboxes, complete Functions transaction, no V1 attempt.
 - STOP: any critical signal. Rollback: freeze and forward-reconcile only.
@@ -226,7 +232,7 @@ Do not skip or reorder a phase. Record command output, UTC time, operator and ar
 
 ### Phase 15 — post-cutover monitoring
 
-- Command: repeat `npm run diagnostics:cutover` at approved intervals; retain receipts indefinitely.
+- Command: repeat the exact Phase 11 collector/analyzer commands at approved intervals; retain receipts indefinitely.
 - PASS: zero critical events, stable revisions/counts, drained outboxes and convergence.
 - STOP: any immediate-STOP event. Rollback: freeze and forward-reconcile.
 
@@ -312,7 +318,7 @@ Before cutover, implement alerts/queries for sync errors, rejected operations, r
 Collect a private diagnostic JSON from the client status/export, read-only receipt inventory and Firebase/Cloud Functions logs, then run:
 
 ```powershell
-npm run diagnostics:cutover -- <collected-private-input.json> <new-private-report.json>
+npm run diagnostics:cutover -- "$Cutover/diagnostic-input.json" "$Cutover/diagnostic-decision.json"
 ```
 
 Input shape:

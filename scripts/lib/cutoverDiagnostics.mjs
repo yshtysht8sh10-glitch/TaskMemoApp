@@ -2,7 +2,9 @@ const CRITICAL = new Set([
   "v1-write-attempt",
   "schema-owner-failure",
   "receipt-missing",
+  "duplicate-receipt",
   "revision-regression",
+  "permanent-sync-error",
   "functions-partial-transaction",
 ]);
 

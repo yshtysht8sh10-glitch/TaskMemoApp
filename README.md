@@ -9,6 +9,8 @@
 - [V1 / Legacy Inventory](docs/V1_LEGACY_INVENTORY.md) — V1資産、Firestore/AsyncStorage、migration・rollback、削除時期の棚卸し
 - [Sync V2 foundation](docs/SYNC_V2.md) — V2同期状態、outbox、revision、WALの設計
 - [2026-09-20 formal cutover rehearsal](docs/SYNC_V2_FORMAL_REHEARSAL_2026-09-20.md) — fresh production V1 read-only検証とBLOCKED判定
+- [Production admin tooling](docs/PRODUCTION_ADMIN_TOOLING.md) — cutover用fail-closed CLI、confirmation、audit artifact、client/Functions artifact要件
+- [Production cutover runbook](docs/SYNC_V2_CUTOVER_RUNBOOK.md) — Phase 0〜16、STOP条件、POINT OF NO RETURN、rollback手順
 - [Testing guide](docs/TESTING.md) — 変更時の検証・回帰テスト方針
 
 OneNoteで行っていたタスク・メモ管理を置き換えることを目的としたスマートフォンアプリ。
