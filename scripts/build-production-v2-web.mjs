@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -10,7 +10,8 @@ if (!/EXPO_PUBLIC_TASKMEMO_ENV\s*=\s*["']?production/.test(envFile) || !/EXPO_PU
 const parsed = Object.fromEntries(envFile.split(/\r?\n/).map(line => line.match(/^\s*([A-Z0-9_]+)\s*=\s*["']?(.*?)["']?\s*$/)).filter(Boolean).map(match => [match[1], match[2]]));
 const env = { ...process.env, ...parsed, TASKMEMO_ENV_FILE: environmentFile, EXPO_PUBLIC_TASKMEMO_ENV: "production", EXPO_PUBLIC_SYNC_V2_ENABLED: "true", EXPO_PUBLIC_RELEASE_CHANNEL: "production-v2-cutover" };
 execFileSync(process.execPath, ["scripts/verify-firebase-environment.js"], { stdio: "inherit", env });
-execFileSync(process.platform === "win32" ? "npx.cmd" : "npx", ["expo", "export", "--platform", "web", "--clear"], { stdio: "inherit", env });
+const exported = spawnSync("npx", ["expo", "export", "--platform", "web", "--clear"], { stdio: "inherit", env, shell: process.platform === "win32" });
+if (exported.status !== 0) process.exit(exported.status ?? 1);
 execFileSync(process.execPath, ["scripts/verify-firebase-web-export.js"], { stdio: "inherit", env });
 const files = directory => readdirSync(directory).flatMap(name => { const path = join(directory, name); return statSync(path).isDirectory() ? files(path) : [path]; }).filter(path => !path.endsWith("taskmemo-build-manifest.json")).sort();
 const artifactHash = createHash("sha256");
