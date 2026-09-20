@@ -141,12 +141,12 @@ Do not skip or reorder a phase. Record command output, UTC time, operator and ar
 
 ### Phase 4 — immutable backup
 
-- Command: run `npm run admin:seal-backup` exactly as documented, then apply the separately approved restricted/immutable filesystem retention control.
+- Command: run `npm run admin:seal-backup` exactly as documented, then copy every release-manifest artifact create-only to both the local private directory and the approved independent OneDrive destination. Re-read every copy and compare SHA-256.
 - Production effect/access: none.
-- Expected/PASS: hashes match manifest; destination is immutable/restricted.
-- STOP: overwrite, mutable destination, hash/count mismatch or missing raw metadata. Rollback: create a new destination while frozen.
+- Expected/PASS: both copies exist, authoritative source/snapshots and all release artifacts have recorded hashes, every retrieved hash matches, and the isolated restore evidence is PASS.
+- STOP: pre-existing destination, overwrite, hash/count mismatch, missing raw metadata, missing second copy or failed restore evidence. Rollback: create a new versioned destination while frozen; never overwrite either copy.
 - Approved fallback: raw REST JSON + manifest + exact isolated restore; managed export is optional unless separately authorized.
-- Formal command: `admin:seal-backup`. The command is create-only; the operator must additionally prove destination retention/IAM immutability.
+- Formal command: `admin:seal-backup`. **USER-APPROVED RISK ACCEPTANCE (2026-09-20):** for this personal-development, single-user cutover, Cloud Storage Retention Lock is not required. The accepted compensating control is create-only private artifacts in two independent locations (repository-local private storage and the existing OneDrive-synchronized backup location), recorded SHA-256 for the authoritative source and snapshots, retrieval/hash verification for every copied artifact, and a previously passed isolated restore. GCP billing and Cloud Storage bucket creation are explicitly out of scope.
 
 ### Phase 5 — isolated backup restore
 

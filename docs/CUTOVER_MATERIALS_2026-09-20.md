@@ -1,6 +1,6 @@
 # Sync V2 cutover materials — 2026-09-20
 
-Status: `BLOCKED_CUTOVER_MATERIALS`. This document does not authorize Phase 0 or any production change.
+Status: materials complete; the private Release Manifest may report `READY_FOR_PHASE_0` after final verification. This document does not authorize production cutover or any production change.
 
 ## Confirmed materials
 
@@ -20,25 +20,23 @@ Artifact evidence:
 
 ## Functions rollback decision
 
-`BLOCKED_FUNCTIONS_ROLLBACK`.
+`FUNCTIONS_ROLLBACK_NOT_APPLICABLE`.
 
-An authenticated read-only `firebase functions:list --project taskmemoapp-eabc3` call returned Cloud Functions API `SERVICE_DISABLED`. No deployed revision/source metadata can therefore be retrieved without enabling a production API, which is prohibited in this preparation turn. Repository documentation also says production Functions deployment has not occurred. It is not valid to claim a restorable currently-deployed `taskMemoMcp` artifact. Before Phase 0, either prove that no production Function exists and formally mark rollback as not applicable, or enable/read the API in a separately authorized change window and bind the deployed revision to a buildable source archive/commit.
+Authenticated read-only checks established that both `cloudfunctions.googleapis.com` and `run.googleapis.com` are disabled, the configured canonical endpoint `https://asia-northeast1-taskmemoapp-eabc3.cloudfunctions.net/taskMemoMcp` returns 404, and the repository records no production Functions deployment. No API was enabled and no production write/deploy occurred. The create-only private evidence artifact records these observations and its SHA-256; there is no deployed revision to restore.
 
 ## Immutable backup destination decision
 
-Local `artifacts/private/` is create-only by tool convention but is not immutable storage: it has no independently enforced retention lock, object versioning, deletion protection or IAM boundary. Therefore the immutable destination is not yet guaranteed.
+**USER-APPROVED RISK ACCEPTANCE (2026-09-20):** for this personal-development, single-user cutover, Cloud Storage Retention Lock is removed from the mandatory requirements. GCP billing remains disabled and no Cloud Storage bucket is created.
 
-Before Phase 0, approve a destination providing all of:
+The accepted compensating controls are:
 
-- object create without overwrite;
-- retention lock covering the rollback and audit window;
-- object versioning and deletion protection;
-- least-privilege writer separate from retention administrator;
-- read access limited to named cutover operators;
-- stored SHA-256/manifest and independently verified retrieval;
-- preservation of both freeze snapshots, authoritative source, migration/canary audits, release/build manifests, receipts and operator log.
+- create-only private artifacts in the repository-local private directory;
+- a second create-only copy in the existing OneDrive-synchronized `TaskMemo-Cutover-Backup/2026-09-20-phase0-materials-v1` destination;
+- recorded SHA-256 for the authoritative source, both production snapshots and every copied cutover artifact;
+- retrieval and SHA-256 re-verification of every second copy;
+- the previously passed exact isolated restore evidence.
 
-Creating/configuring such storage is a production/infrastructure change and was not performed here.
+The private independent-backup evidence artifact records the destination, inventory and verification result. The remaining risk is accepted explicitly by the user; this is not equivalent to provider-enforced immutability and does not weaken any runtime data-safety rule.
 
 ## Android artifact
 
@@ -46,4 +44,4 @@ The formal profile is `production-v2-cutover`, internal distribution. It contain
 
 ## Phase 0 gate
 
-Phase 0 remains prohibited until the private release manifest reports `READY_FOR_PHASE_0`. A blocked manifest must name every missing material; missing hashes are never represented as blank or placeholder values.
+Phase 0 remains prohibited until the private release manifest reports `READY_FOR_PHASE_0`. That status permits Phase 0 preflight only; it does not authorize Phase 1 or any production change.
