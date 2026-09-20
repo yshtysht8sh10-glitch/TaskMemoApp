@@ -93,6 +93,7 @@ import {
 } from "@/utils/dueDates";
 import { useAppTheme, type ThemeColors, type ThemeMode } from "@/theme/theme";
 import { saveBackupSettings } from "@/services/backupSettingsStorage";
+import { compactBuildLabel, currentBuildInfo } from "@/services/buildInfo";
 import {
   COMPLETION_HISTORY_CRITERIA,
   completionHistoryGroups,
@@ -165,6 +166,7 @@ const initialExternalAiAuthorization = () =>
   Platform.OS === "web" && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("externalAiAuthorization")
     : null;
+const appBuildInfo = currentBuildInfo();
 
 export default function HomeScreen() {
   useWebFocusedInputVisibility();
@@ -598,7 +600,10 @@ export default function HomeScreen() {
               <Text style={styles.developmentBadge}>DEV</Text>
             )}
           </View>
-          <Text style={styles.subtitle}>メモとタスク</Text>
+          <View style={styles.subtitleRow}>
+            <Text style={styles.subtitle}>メモとタスク</Text>
+            <Text style={styles.buildStamp}>{compactBuildLabel(appBuildInfo)}</Text>
+          </View>
         </View>
         <View style={styles.headerActions}>
           <HistoryButton
@@ -1294,6 +1299,14 @@ export default function HomeScreen() {
             ))}
           </SettingsSection>
         )}
+        <SettingsSection title="アプリ情報">
+          <View style={styles.buildInfo}>
+            <Text style={styles.buildInfoText}>Version: {appBuildInfo.version}</Text>
+            <Text style={styles.buildInfoText}>Build: {appBuildInfo.build}</Text>
+            <Text style={styles.buildInfoText}>Sync: {appBuildInfo.sync}</Text>
+            <Text style={styles.buildInfoText}>Environment: {appBuildInfo.environment}</Text>
+          </View>
+        </SettingsSection>
       </Sheet>
       <Sheet
         visible={syncOpen}
@@ -2502,7 +2515,9 @@ const createStyles = (colors: ThemeColors) =>
     titleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
     title: { color: colors.text, fontSize: 25, fontWeight: "700" },
     developmentBadge: { color: "#6d3b00", backgroundColor: "#ffd08a", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, fontSize: 10, fontWeight: "900" },
+    subtitleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
     subtitle: { color: colors.textSecondary, fontSize: 11 },
+    buildStamp: { color: colors.textSecondary, fontSize: 10 },
     historyButton: {
       width: 38,
       minHeight: 38,
@@ -2704,6 +2719,16 @@ const createStyles = (colors: ThemeColors) =>
       color: colors.textSecondary,
       fontSize: 12,
       lineHeight: 18,
+    },
+    buildInfo: {
+      paddingVertical: 8,
+      gap: 3,
+    },
+    buildInfoText: {
+      color: colors.textSecondary,
+      fontSize: 12,
+      lineHeight: 18,
+      fontVariant: ["tabular-nums"],
     },
     action: {
       minHeight: 50,
