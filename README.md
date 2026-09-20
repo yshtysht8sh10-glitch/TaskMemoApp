@@ -11,6 +11,7 @@
 - [2026-09-20 formal cutover rehearsal](docs/SYNC_V2_FORMAL_REHEARSAL_2026-09-20.md) — fresh production V1 read-only検証とBLOCKED判定
 - [Production admin tooling](docs/PRODUCTION_ADMIN_TOOLING.md) — cutover用fail-closed CLI、confirmation、audit artifact、client/Functions artifact要件
 - [Production cutover runbook](docs/SYNC_V2_CUTOVER_RUNBOOK.md) — Phase 0〜16、STOP条件、POINT OF NO RETURN、rollback手順
+- [2026-09-20 cutover materials](docs/CUTOVER_MATERIALS_2026-09-20.md) — production artifact確定状況と残るmaterial blocker
 - [Testing guide](docs/TESTING.md) — 変更時の検証・回帰テスト方針
 
 OneNoteで行っていたタスク・メモ管理を置き換えることを目的としたスマートフォンアプリ。

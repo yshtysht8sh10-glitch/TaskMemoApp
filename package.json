@@ -76,6 +76,7 @@
     "admin:capture-functions-rollback": "node scripts/capture-functions-rollback.mjs",
     "admin:prepare-canary": "tsx scripts/prepare-cutover-canary.ts",
     "admin:rehearse-canary": "tsx scripts/rehearse-cutover-canary.ts",
+    "admin:create-release-manifest": "node scripts/create-cutover-release-manifest.mjs",
     "verify:final-rc": "npm run verify && npx firebase-tools emulators:exec --config firebase.emulator.json --project demo-taskmemo-v2 --only firestore \"node scripts/run-final-rc-emulator-tests.mjs\"",
     "rc:provision-dev": "node scripts/provision-v2-rc-dev.mjs",
     "web:export": "npm run firebase:verify-env && expo export --platform web --clear && node ./scripts/verify-firebase-web-export.js",
