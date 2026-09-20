@@ -13,6 +13,8 @@ import { WebSortableScrollList } from '@/components/WebSortableScrollList';
 import { routineCategoryForMemo } from '@/domain/routine';
 import { completableSelectedMemoIds, normalizeSelectedNodeIds, selectedNodeState } from '@/domain/nodeSelection';
 import { useInlineTitleEdit } from '@/hooks/useInlineTitleEdit';
+import { NATIVE_DRAG_ACTIVATION_DISTANCE_PX } from '@/domain/dragActivation';
+import { DRAG_AUTOSCROLL_THRESHOLD_PX, NATIVE_DRAG_AUTOSCROLL_SPEED } from '@/domain/dragAutoScroll';
 
 export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
@@ -91,7 +93,7 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
       <DraggableFlatList data={rows} keyExtractor={(row) => row.node.id}
         onDragBegin={(index) => { movingId.current = rows[index]?.virtual ? null : rows[index]?.node.id ?? null; if (movingId.current) beginTreeDragTrace(movingId.current); treeDiagnosticLog('drag-begin', { mountId, index, movingId: movingId.current, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys }); updateCandidate(index); }}
         onPlaceholderIndexChange={updateCandidate} onRelease={(index) => { treeDiagnosticLog('drag-release', { index, movingId: movingId.current, candidate: candidateRef.current }); measureAllTreeRows('release'); }} onDragEnd={drop}
-        onScrollOffsetChange={(offset) => { scrollOffsetRef.current = offset; }} activationDistance={16} autoscrollThreshold={70} autoscrollSpeed={85}
+        onScrollOffsetChange={(offset) => { scrollOffsetRef.current = offset; }} activationDistance={NATIVE_DRAG_ACTIVATION_DISTANCE_PX} autoscrollThreshold={DRAG_AUTOSCROLL_THRESHOLD_PX} autoscrollSpeed={NATIVE_DRAG_AUTOSCROLL_SPEED}
         contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: selectionMode ? 170 : 110 }} renderItem={({ item, drag, isActive, getIndex }) => {
     const isTarget = candidate?.targetId === item.node.id;
     const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };

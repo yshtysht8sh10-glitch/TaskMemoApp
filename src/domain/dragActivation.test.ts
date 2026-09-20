@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { dragActivationDelay } from './dragActivation';
+import { dragActivationDelay, NATIVE_DRAG_ACTIVATION_DISTANCE_PX } from './dragActivation';
 
 describe('dragActivationDelay', () => {
-  it('Webだけ開始待ちを短縮し、タッチ端末の誤操作防止値を維持する', () => {
+  it('Webは短い待ち、Nativeは誤操作を抑えつつ従来より短い待ちにする', () => {
     expect(dragActivationDelay(true)).toBe(120);
-    expect(dragActivationDelay(false)).toBe(320);
+    expect(dragActivationDelay(false)).toBe(180);
+    expect(NATIVE_DRAG_ACTIVATION_DISTANCE_PX).toBe(8);
   });
 });

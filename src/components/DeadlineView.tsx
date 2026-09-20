@@ -35,7 +35,8 @@ import { MemoRowActions } from "@/components/MemoRowActions";
 import { CompletionMotion } from "@/components/CompletionMotion";
 import { WebSortableScrollList } from "@/components/WebSortableScrollList";
 import { clampPinnedNoteHeight } from "@/services/viewPreferences";
-import { dragActivationDelay } from "@/domain/dragActivation";
+import { dragActivationDelay, NATIVE_DRAG_ACTIVATION_DISTANCE_PX } from "@/domain/dragActivation";
+import { DRAG_AUTOSCROLL_THRESHOLD_PX, NATIVE_DRAG_AUTOSCROLL_SPEED } from "@/domain/dragAutoScroll";
 import {
   repeatRuleLabel,
   routineCategoryForMemo,
@@ -848,9 +849,9 @@ export function DeadlineView({
         }}
         onPlaceholderIndexChange={setCandidate}
         onDragEnd={finish}
-        activationDistance={selectionMode ? 9999 : 16}
-        autoscrollThreshold={70}
-        autoscrollSpeed={85}
+        activationDistance={selectionMode ? 9999 : NATIVE_DRAG_ACTIVATION_DISTANCE_PX}
+        autoscrollThreshold={DRAG_AUTOSCROLL_THRESHOLD_PX}
+        autoscrollSpeed={NATIVE_DRAG_AUTOSCROLL_SPEED}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[
           styles.list,
