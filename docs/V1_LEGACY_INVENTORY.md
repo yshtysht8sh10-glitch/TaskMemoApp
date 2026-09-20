@@ -163,11 +163,12 @@ There is no general rollback script that converts versioned V2 state, profiles a
 
 ### MUST BEFORE CUTOVER
 
-- Capture a fresh stable production V1 snapshot after freeze; the 2026-09-19 artifact proves the tooling, not the future cutover contents.
-- Extend/re-run formal rehearsal for current profile resources (`pinnedNote`, `features`) and the exact production client/Rules artifact. Decide whether client-side profile migration is sufficient and document multi-device ordering.
+- Repeat the fresh stable production V1 snapshot after the future write freeze. The 2026-09-20 read-only snapshot is stable and Node-clean, but it is not the future frozen boundary.
+- Capture V1 device-local `pinnedNote`, `ideasEnabled` and `legacyPinnedNoteCandidates` from every supported production client. The 2026-09-20 formal run correctly stopped because Firestore cannot prove this inventory or candidate count zero.
+- Re-run formal rehearsal for the combined Cloud+device profile inventory and exact production client/Rules artifact; decide differing multi-device pinned-note values explicitly.
 - Run external-AI V2 integration/cutover-order validation with the exact Functions artifact; prove freeze and V1 gate failure. Do not deploy V2 Functions into a V1 phase or leave V1 Functions after V2 cutover.
 - Prepare a managed production export/restore validation and immutable manifest for Nodes, V2 records/receipts/profile, gates and control state.
-- Define operation-receipt/audit retention and post-cutover monitoring/STOP criteria.
+- Implement the documented operation-receipt retention prerequisites and post-cutover monitoring/STOP alerts. The policy is defined, but operational telemetry is not yet installed.
 - Resolve documentation drift: README describes the broad production Rules as normal setup, while the cutover runbook requires a stricter freeze/gate transition.
 
 ### CAN AFTER CUTOVER

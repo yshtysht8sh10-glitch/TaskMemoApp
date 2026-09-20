@@ -8,6 +8,7 @@
 - [Data Management Matrix](docs/DATA_MANAGEMENT_MATRIX.md) — 永続化、Cloud Sync、Undo/Redo、Export/Importの横断基準
 - [V1 / Legacy Inventory](docs/V1_LEGACY_INVENTORY.md) — V1資産、Firestore/AsyncStorage、migration・rollback、削除時期の棚卸し
 - [Sync V2 foundation](docs/SYNC_V2.md) — V2同期状態、outbox、revision、WALの設計
+- [2026-09-20 formal cutover rehearsal](docs/SYNC_V2_FORMAL_REHEARSAL_2026-09-20.md) — fresh production V1 read-only検証とBLOCKED判定
 - [Testing guide](docs/TESTING.md) — 変更時の検証・回帰テスト方針
 
 OneNoteで行っていたタスク・メモ管理を置き換えることを目的としたスマートフォンアプリ。
@@ -337,7 +338,7 @@ npx firebase-tools deploy --only firestore:rules
 
 `use --add` では対象プロジェクトを選び、エイリアス名は `default` で構いません。生成される `.firebaserc` に正しいプロジェクトIDが入っていることを確認します。
 
-`firestore.rules` は `users/{uid}` 以下をログイン中の本人だけが読み書きできる構成です。Rulesを配布する前に実データを保存しないでください。
+`firestore.rules` は現行V1向けの広いowner-only Rulesです。V2 cutoverではこの手順を使わず、[production cutover runbook](docs/SYNC_V2_CUTOVER_RUNBOOK.md)に従ってgate準備・write freeze・検証後に、別途レビューしたstrict Rulesを段階適用してください。Rulesを配布する前に対象project IDとphaseを必ず確認してください。
 
 ### 6. Web/PWAとAndroidを作る
 

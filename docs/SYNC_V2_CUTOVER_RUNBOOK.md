@@ -25,6 +25,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Command: `npm run migration:production-read-only -- <private-output.json> read-only:taskmemoapp-eabc3`, with a short-lived OAuth token supplied only through the process environment.
 - Target: production `taskmemoapp-eabc3`, Firestore `documents:runQuery` against collection group `nodes`.
 - Expected: a private, gitignored snapshot; two consecutive reads produce the same canonical hash and count.
+- The Cloud reader must record `localProfileInventory.complete=false`. V1 pinnedNote, ideasEnabled and recovery candidates are device-local; absence from Firestore is not evidence of an empty value/candidate list.
 - Validation: project identity, REST method, decoded document count, canonical SHA-256.
 - STOP: any write-capable request in the script, project mismatch, unstable snapshot, authentication ambiguity.
 - Rollback: none; the step is read-only. Delete only the local private snapshot if necessary.
@@ -55,7 +56,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Validation: automated Rules assertions and adapter upload. Formal post-cleanup 2026-09-19 timings: migration 222.90 ms, validation 60.12 ms, gate 27.41 ms, freeze window 708.52 ms.
 - STOP: any source issue in a formal rehearsal, partial migration, equality failure, old-client access, or V2 smoke failure. The orphan-preservation switch is diagnostic only and cannot produce cutover approval.
 - Rollback: while frozen, remove only records proven to belong to that rehearsal migration. For production, preserve the post-freeze export and never infer ownership by timestamp alone.
-- Legacy pinned-note recovery: inspect every V2 client for unresolved candidates. The formal rehearsal reports `USER_ACTION_REQUIRED` and stops when supplied candidate inventory is non-empty. The user must compare and explicitly adopt or discard; adopting emits a normal pinned-note V2 operation. Never auto-merge or delete candidates at cutover.
+- Legacy pinned-note recovery: inspect/export every supported production client. Missing local inventory is `UNKNOWN` and stops a formal run; it must never be interpreted as zero candidates. A non-empty inventory is `USER_ACTION_REQUIRED` and also stops. The user must compare and explicitly adopt or discard; adopting emits a normal pinned-note V2 operation. Never auto-merge or delete candidates at cutover.
 
 ### External AI phase policy
 
@@ -118,3 +119,11 @@ Client access to `externalAiRequestsV2` is denied explicitly. External-AI Functi
 ## Emergency data recovery
 
 Freeze writes, export current V2 state, preserve operation receipts, repair/replay in a separate validation target, then apply an audited forward repair. The pre-cutover backup is a forensic baseline, not a safe rollback target after V2 edits.
+
+## Receipt retention
+
+At initial cutover, retain `syncOperationsV2` and `externalAiRequestsV2` indefinitely; do not configure TTL. Cleanup is permitted only after a maximum retry age is enforced, a diagnostic archive exists, the observation/rollback window is closed, and every supported producer is unable to replay the receipt ID. After those prerequisites, retain online receipts for at least 180 days and archive before deletion. Until then, deleting a receipt can cause a duplicate create/update.
+
+## Monitoring and immediate STOP
+
+Before cutover, implement alerts/queries for sync errors, rejected operations, revision conflicts/regressions, outbox age/count, missing or mismatched receipts, V1 write attempts, schema/owner validation failures, convergence failures and Functions transaction errors. During canary, immediately freeze on any V1 write attempt, schema/owner failure, missing receipt after acknowledgement, unexplained revision regression, convergence mismatch, permanent sync error, partial AI transaction, or an online canary outbox pending for five minutes. Transient retries are acceptable only when they drain and all clients converge.

@@ -26,6 +26,7 @@ Current matrixはcommit `ee8d89c9974f46c72d8660a71ae5ed7d8357b974`の実装を�
 | [architecture.md](architecture.md) | ソース配置と外部サービス分離の短い全体方針 |
 | [SYNC_V2.md](SYNC_V2.md) | state machine、outbox、revision、競合、WAL、Firebase adapter |
 | [SYNC_V2_CUTOVER_RUNBOOK.md](SYNC_V2_CUTOVER_RUNBOOK.md) | production移行・停止条件・回復手順 |
+| [SYNC_V2_FORMAL_REHEARSAL_2026-09-20.md](SYNC_V2_FORMAL_REHEARSAL_2026-09-20.md) | fresh production V1を使ったformal rehearsalとBLOCKED判定 |
 | [SYNC_V2_REHEARSAL_2026-09-19.md](SYNC_V2_REHEARSAL_2026-09-19.md) | migration rehearsalの実施証跡 |
 | [SYNC_V2_FINAL_VALIDATION.md](SYNC_V2_FINAL_VALIDATION.md) | production切替前のV2検証結果 |
 | [V2_RC_MANUAL_CHECKLIST.md](V2_RC_MANUAL_CHECKLIST.md) | RC実機確認項目 |

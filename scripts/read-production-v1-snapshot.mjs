@@ -20,7 +20,19 @@ const nodes = documents.map(document => {
   const segments = document.name.split("/");
   return { uid: segments.at(-3), node: { ...decodeFirestoreFields(document.fields ?? {}), id: segments.at(-1) }, sourceName: document.name, createTime: document.createTime, updateTime: document.updateTime };
 });
-const payload = { schemaVersion: 1, projectId: "taskmemoapp-eabc3", capturedAt: new Date().toISOString(), query: "collectionGroup(nodes)", documentCount: nodes.length, rawDocuments: documents, nodes };
+const payload = {
+  schemaVersion: 1,
+  projectId: "taskmemoapp-eabc3",
+  capturedAt: new Date().toISOString(),
+  query: "collectionGroup(nodes)",
+  documentCount: nodes.length,
+  rawDocuments: documents,
+  nodes,
+  localProfileInventory: {
+    complete: false,
+    reason: "V1 pinnedNote, ideasEnabled and legacyPinnedNoteCandidates are stored on each client device and are not present in Firestore.",
+  },
+};
 const json = JSON.stringify(payload, null, 2);
 const absolute = resolve(outputPath);
 mkdirSync(dirname(absolute), { recursive: true });
