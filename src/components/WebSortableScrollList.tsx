@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { createDragAutoScroller } from '@/domain/dragAutoScroll';
+import { exceedsWebTouchDragTolerance, WEB_DRAG_ACTIVATION_DELAY_MS } from '@/domain/dragActivation';
 
 type Props<T> = {
   data: T[];
@@ -32,6 +33,15 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
   const pointerRef = useRef({ x: 0, y: 0 });
   const refreshTargetRef = useRef(() => {});
   const autoScrollerRef = useRef<ReturnType<typeof createDragAutoScroller> | null>(null);
+  const touchGestureRef = useRef<{
+    identifier: number;
+    startX: number;
+    startY: number;
+    timer: ReturnType<typeof setTimeout>;
+    active: boolean;
+    removeListeners: () => void;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [targetKey, setTargetKey] = useState<string | null>(null);
   const [placement, setPlacement] = useState<'before' | 'on' | 'after'>('before');
@@ -45,14 +55,28 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
       afterScroll: () => refreshTargetRef.current(),
     });
     autoScrollerRef.current = scroller;
-    return () => { scroller.stop(); autoScrollerRef.current = null; };
+    return () => {
+      scroller.stop();
+      if (touchGestureRef.current) {
+        clearTimeout(touchGestureRef.current.timer);
+        touchGestureRef.current.removeListeners();
+      }
+      touchGestureRef.current = null;
+      autoScrollerRef.current = null;
+    };
   }, []);
 
-  const finish = () => {
+  const finish = (commit = true) => {
     const active = activeRef.current; const target = targetRef.current;
     autoScrollerRef.current?.stop();
     activeRef.current = null; targetRef.current = null; setActiveKey(null); setTargetKey(null);
-    if (active && target && keyFor(active) !== keyFor(target)) onDrop(active, target, placementRef.current);
+    if (commit && active && target && keyFor(active) !== keyFor(target)) onDrop(active, target, placementRef.current);
+  };
+  const begin = (item: T, key: string, clientX: number, clientY: number) => {
+    activeRef.current = item; targetRef.current = item; placementRef.current = 'before';
+    pointerRef.current = { x: clientX, y: clientY };
+    autoScrollerRef.current?.start(clientY);
+    setPlacement('before'); setActiveKey(key); setTargetKey(null);
   };
   const activeItem =
     activeKey === null
@@ -101,8 +125,78 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
       };
       const dragProps = canDrag(item) ? {
         draggable: true,
-        onDragStart: (event: { clientX: number; clientY: number; dataTransfer?: { effectAllowed: string; setData(type: string, value: string): void } }) => { activeRef.current = item; targetRef.current = item; placementRef.current = 'before'; pointerRef.current = { x: event.clientX, y: event.clientY }; autoScrollerRef.current?.start(event.clientY); setPlacement('before'); setActiveKey(key); setTargetKey(null); if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', key); } },
-        onDragEnd: finish,
+        onDragStart: (event: { clientX: number; clientY: number; dataTransfer?: { effectAllowed: string; setData(type: string, value: string): void } }) => { begin(item, key, event.clientX, event.clientY); if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', key); } },
+        onDragEnd: () => finish(),
+        onTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => {
+          if (touchGestureRef.current || event.touches.length !== 1) return;
+          const touch = event.touches[0];
+          const findTouch = (touches: TouchList, identifier: number) => Array.from(touches).find((candidate) => candidate.identifier === identifier);
+          const cleanup = () => {
+            document.removeEventListener('touchmove', move, true);
+            document.removeEventListener('touchend', end, true);
+            document.removeEventListener('touchcancel', cancel, true);
+          };
+          const clearGesture = () => {
+            const current = touchGestureRef.current;
+            if (current) clearTimeout(current.timer);
+            cleanup();
+            touchGestureRef.current = null;
+          };
+          const move = (nativeEvent: TouchEvent) => {
+            const gesture = touchGestureRef.current;
+            if (!gesture) return;
+            const currentTouch = findTouch(nativeEvent.touches, gesture.identifier);
+            if (!currentTouch) return;
+            pointerRef.current = { x: currentTouch.clientX, y: currentTouch.clientY };
+            if (!gesture.active) {
+              if (exceedsWebTouchDragTolerance(gesture.startX, gesture.startY, currentTouch.clientX, currentTouch.clientY)) clearGesture();
+              return;
+            }
+            nativeEvent.preventDefault();
+            autoScrollerRef.current?.update(currentTouch.clientY);
+            refreshTargetRef.current();
+          };
+          const end = (nativeEvent: TouchEvent) => {
+            const gesture = touchGestureRef.current;
+            if (!gesture || !findTouch(nativeEvent.changedTouches, gesture.identifier)) return;
+            const wasActive = gesture.active;
+            clearGesture();
+            if (!wasActive) return;
+            nativeEvent.preventDefault();
+            finish();
+            setTimeout(() => { suppressClickRef.current = false; }, 0);
+          };
+          const cancel = () => {
+            const wasActive = touchGestureRef.current?.active ?? false;
+            clearGesture();
+            if (wasActive) finish(false);
+          };
+          const gesture = {
+            identifier: touch.identifier,
+            startX: touch.clientX,
+            startY: touch.clientY,
+            timer: setTimeout(() => {
+              const current = touchGestureRef.current;
+              if (!current || current.identifier !== touch.identifier) return;
+              current.active = true;
+              suppressClickRef.current = true;
+              begin(item, key, pointerRef.current.x, pointerRef.current.y);
+            }, WEB_DRAG_ACTIVATION_DELAY_MS),
+            active: false,
+            removeListeners: cleanup,
+          };
+          pointerRef.current = { x: touch.clientX, y: touch.clientY };
+          touchGestureRef.current = gesture;
+          document.addEventListener('touchmove', move, { passive: false, capture: true });
+          document.addEventListener('touchend', end, { passive: false, capture: true });
+          document.addEventListener('touchcancel', cancel, { capture: true });
+        },
+        onClickCapture: (event: { preventDefault(): void; stopPropagation(): void }) => {
+          if (!suppressClickRef.current) return;
+          suppressClickRef.current = false;
+          event.preventDefault();
+          event.stopPropagation();
+        },
       } : { draggable: false };
       return <div key={key} data-taskmemo-dnd-key={key} style={webStyles.slot} {...targetProps}>
         {opensBelow && <div aria-hidden="true" style={webStyles.indicator} />}
