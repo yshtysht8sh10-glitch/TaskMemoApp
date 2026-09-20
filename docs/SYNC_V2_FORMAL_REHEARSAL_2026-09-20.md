@@ -1,6 +1,6 @@
 # TaskMemo V2 formal cutover rehearsal — 2026-09-20
 
-Status: **BLOCKED_SOURCE_VALIDATION**. The authoritative iPhone schema-1 V1 Export was received, but migration stopped before comparison. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
+Status: **BLOCKED_COMPARISON_USER_DECISION_REQUIRED**. The approved source repair validates cleanly, but its Node/field comparison with the production snapshot is not identical. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
 
 ## Authoritative iPhone Export intake
 
@@ -16,7 +16,9 @@ The immutable original was stored outside Git under `artifacts/private/`.
 
 Validation stopped on `ipa-morning.parentId="ipa"`: the parent Category does not exist in the Export. Neither `ipa` nor `ipa-morning` exists in the 120-document Firestore snapshot. No timestamp, parent, Node or tombstone was repaired or dropped.
 
-Because source validation must complete before comparison, the complete 125-vs-120 classification and migration were deliberately not run. The private failure report is `BLOCKED_SOURCE_VALIDATION`. The user must explicitly decide whether to remove the orphan, restore/create its intended parent, or provide a corrected authoritative Export; tooling must not infer that choice.
+The user then explicitly authorized complete removal of `ipa-morning`. A separate gitignored repair copy was created; the original remained byte-identical. Audit classification is `USER-APPROVED SOURCE REPAIR / DATA DROP`, source SHA-256 is the value above, repaired SHA-256 is `4da5ae29e427831025da485e40f84fc21180591421c40b26e62d3d7817bcae73`, and count changed exactly 125→124. No replacement, tombstone, History or migration metadata was generated for the dropped Node.
+
+The repaired source passed validation: 124→124 planned records, zero issues/orphans/cycles/invalid or unknown fields, semantic changes or lost fields. Comparison against the stable 120-document snapshot then stopped with `USER_DECISION_REQUIRED`: 10 `IDENTICAL`, 4 `EXPORT_ONLY`, 0 `FIRESTORE_ONLY`, and 110 `FIELD_DIFFERENCE`. Of the field-difference Nodes, 73 differ only in timestamp fields and 37 include non-timestamp differences. Field occurrences include dates, due values/presets/order, completion/deletion, title, rank, Routine rule/history and deletion batch. Exact Node IDs and both source values remain only in the private report; tooling did not merge or choose a winner.
 
 ## Approved production migration scope
 
@@ -78,12 +80,12 @@ After the explicit non-migration policy was recorded, the same fresh 120-Node sn
 
 V1 `pinnedNote`, `ideasEnabled`, and `legacyPinnedNoteCandidates` live in client AsyncStorage. The earlier run correctly refused to infer zero from missing Cloud data. The subsequent user decision explicitly accepts their loss, so they are now `EXPECTED_NON_MIGRATED / USER-APPROVED DATA LOSS`, not semantic loss or a blocker.
 
-The previous missing-Export blocker is resolved. The current STOP is the invalid parent reference in the received authoritative source. Classification:
+The missing-Export and orphan-validation blockers are resolved. The current STOP is the non-identical Export-versus-Firestore comparison. Classification:
 
 - source Node validation: `CLEAR`
 - local profile inventory: `EXPECTED_NON_MIGRATED`
 - legacy candidate status: `USER-APPROVED DATA LOSS`
-- required action: make an explicit data decision for `ipa-morning`/`ipa`, obtain a corrected schema-1 Export or separately approved source transformation, then rerun intake before any full comparison
+- required action: explicitly choose the authoritative source for the four Export-only Nodes and 110 field-difference Nodes (individually or approve the repaired iPhone Export as a whole); do not auto-merge
 - final result: **BLOCKED**
 
 No candidate is migrated, adopted, discarded, merged or timestamp-selected by tooling.
@@ -137,8 +139,8 @@ The formal-source regression test first failed because no inventory classifier e
 
 ## Remaining blockers / required evidence
 
-1. Resolve the authoritative source error for `ipa-morning.parentId="ipa"` without an automatic repair.
-2. Rerun intake and compare it with the fresh Firestore snapshot; obtain an explicit source decision for every non-identical Node and never auto-merge.
+1. Decide whether the validated repaired iPhone Export is authoritative as a whole or resolve the private per-Node differences explicitly; never auto-merge.
+2. Run formal rehearsal only after that source decision.
 3. Repeat snapshot/backup/restore after the future freeze and rehearse the selected complete Node source.
 4. Collect canary probe/log counters and run the executable STOP assessment.
-5. Only a validation-clean post-intake run can produce PASS/PASS WITH WARNINGS.
+5. Only a user-approved post-comparison run can produce PASS/PASS WITH WARNINGS.
