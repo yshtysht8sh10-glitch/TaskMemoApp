@@ -95,10 +95,19 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
       await setDoc(doc(context.firestore(), "syncControl/current"), { schemaVersion: 1, writesEnabled: false });
     });
     await assertFails(setDoc(doc(owner, "users/owner/nodes/legacy"), { id: "legacy" }));
-    await assertFails(getDoc(doc(owner, "users/owner/nodes/legacy")));
+    await assertSucceeds(getDoc(doc(owner, "users/owner/nodes/legacy")));
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/a"), valid));
     const missing = environment.authenticatedContext("missing-marker").firestore();
     await assertFails(setDoc(doc(missing, "users/missing-marker/nodes/legacy"), { id: "legacy" }));
+  });
+
+  it("allows the selected V2 canary to read while global writes are frozen", async () => {
+    const owner = environment.authenticatedContext("owner").firestore();
+    const valid = { ownerUid: "owner", schemaVersion: 2, record: { value: { id: "a" }, revision: 1, lastOpId: "device:1", lastDeviceId: "device", lastLocalSeq: 1, operationType: "create" } };
+    await setDoc(doc(owner, "users/owner/nodesV2/a"), valid);
+    await environment.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), "syncControl/current"), { schemaVersion: 1, writesEnabled: false }));
+    await assertSucceeds(getDoc(doc(owner, "users/owner/nodesV2/a")));
+    await assertFails(setDoc(doc(owner, "users/owner/nodesV2/b"), { ...valid, record: { ...valid.record, value: { id: "b" } } }));
   });
 
   it("runs two isolated devices through create, bidirectional edits, conflict, restart, replay, Undo/Redo, and backlog drain", async () => {

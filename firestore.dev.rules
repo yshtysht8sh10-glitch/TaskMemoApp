@@ -5,15 +5,18 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
-    function protocolAllowed(userId, protocol) {
-      let global = get(/databases/$(database)/documents/syncControl/current).data;
+    function protocolSelected(userId, protocol) {
       let gate = get(/databases/$(database)/documents/users/$(userId)/syncMetadataV2/compatibility).data;
-      return global.schemaVersion == 1 && global.writesEnabled == true
-        && gate.schemaVersion == 1
+      return gate.schemaVersion == 1
         && ((protocol == 1 && gate.minimumSyncProtocol == 1
           && gate.v1WritesAllowed == true && gate.v2Enabled == false)
         || (protocol == 2 && gate.minimumSyncProtocol == 2
           && gate.v1WritesAllowed == false && gate.v2Enabled == true));
+    }
+
+    function protocolWritable(userId, protocol) {
+      let global = get(/databases/$(database)/documents/syncControl/current).data;
+      return global.schemaVersion == 1 && global.writesEnabled == true && protocolSelected(userId, protocol);
     }
 
     match /syncControl/current {
@@ -103,8 +106,8 @@ service cloud.firestore {
 
     // Existing v1 client remains available only to the authenticated owner.
     match /users/{userId}/nodes/{nodeId} {
-      allow read: if ownsUser(userId) && protocolAllowed(userId, 1);
-      allow write: if ownsUser(userId) && protocolAllowed(userId, 1);
+      allow read: if ownsUser(userId) && protocolSelected(userId, 1);
+      allow write: if ownsUser(userId) && protocolWritable(userId, 1);
     }
     match /users/{userId}/externalAiAuditLogs/{logId} {
       allow read: if ownsUser(userId);
@@ -116,38 +119,38 @@ service cloud.firestore {
     }
 
     match /users/{userId}/nodesV2/{nodeId} {
-      allow read: if ownsUser(userId);
-      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validVersionedRecord(nodeId);
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validVersionedRecord(nodeId);
       allow update: if ownsUser(userId)
-        && protocolAllowed(userId, 2)
+        && protocolWritable(userId, 2)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && validVersionedRecord(nodeId)
         && request.resource.data.record.revision >= resource.data.record.revision;
       allow delete: if false;
     }
     match /users/{userId}/profileV2/pinnedNote {
-      allow read: if ownsUser(userId);
-      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validPinnedNoteRecord();
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validPinnedNoteRecord();
       allow update: if ownsUser(userId)
-        && protocolAllowed(userId, 2)
+        && protocolWritable(userId, 2)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && validPinnedNoteRecord()
         && request.resource.data.record.revision >= resource.data.record.revision;
       allow delete: if false;
     }
     match /users/{userId}/profileV2/features {
-      allow read: if ownsUser(userId);
-      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validFeaturesRecord();
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validFeaturesRecord();
       allow update: if ownsUser(userId)
-        && protocolAllowed(userId, 2)
+        && protocolWritable(userId, 2)
         && request.resource.data.ownerUid == resource.data.ownerUid
         && validFeaturesRecord()
         && request.resource.data.record.revision >= resource.data.record.revision;
       allow delete: if false;
     }
     match /users/{userId}/syncOperationsV2/{opId} {
-      allow read: if ownsUser(userId);
-      allow create: if ownsUser(userId) && protocolAllowed(userId, 2) && validOperation(opId);
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validOperation(opId);
       // Operation receipts are immutable; this preserves the opId idempotency boundary.
       allow update, delete: if false;
     }

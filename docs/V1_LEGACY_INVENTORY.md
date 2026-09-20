@@ -157,6 +157,8 @@ There is no general rollback script that converts versioned V2 state, profiles a
 
 ### BLOCKER — repository implementation resolved; deployment not authorized
 
+Formal rehearsal is complete, but production execution remains blocked until the final operator path has reviewed, exact tooling for control/gate mutation and probes, snapshot-pair verification and sealing, production migration, post-migration validation, diagnostic evidence collection, and the single canary write. The approved previous Functions rollback artifact and final production Android/PWA artifacts must also be identified. These are execution-readiness blockers; they must not be replaced with improvised console or REST operations.
+
 - Production V2 selection is now explicit-flag capable and fail-closed on server-gate failure; default production remains V1.
 - `firebase.cutover.json` now identifies the strict tested Rules artifact without changing/deploying current production Rules.
 - Recovery candidates now have compare/adopt/discard UI and schema 4 backup coverage.
