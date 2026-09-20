@@ -1,6 +1,15 @@
 # TaskMemo V2 formal cutover rehearsal — 2026-09-20
 
-Status: **BLOCKED**. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
+Status: **BLOCKED — awaiting the authoritative iPhone schema-1 V1 Export**. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
+
+## Approved production migration scope
+
+The user explicitly approved the following policy after the first rehearsal result.
+
+- **MUST PRESERVE:** every Node in the selected schema-1 V1 Export, including Category, Memo, Idea, Routine, completion, deletion, purge tombstones, parent/rank, due fields, Routine fields and every other preserved field.
+- **USER-APPROVED DATA LOSS / INTENTIONALLY NOT MIGRATED:** V1 device-local pinnedNote, V1 device-local ideasEnabled and legacyPinnedNoteCandidates.
+- The initial V2 profile is deterministic: empty pinnedNote at the epoch default, `ideasEnabled=false`, and no recovery candidates. The user can enter/re-enable these after cutover through normal V2 sync.
+- This exception applies only to the one production V1→V2 migration. It does not weaken schema-4 backup/import or normal V2 profile sync.
 
 ## Safety boundary
 
@@ -47,26 +56,27 @@ Before the fail-closed profile check was corrected, the Node-only diagnostic pat
 
 This is valid subsystem evidence, but it cannot turn the formal result into PASS because the actual V1 device-local profile inventory was not captured.
 
-## Formal STOP reason
+After the explicit non-migration policy was recorded, the same fresh 120-Node snapshot was rehearsed again with `--profile-policy=user-approved-non-migration`: backup 120, restore 120, migrate 120, semantic changes 0, lost fields 0, source issues 0, V1 rejection PASS and V2 smoke PASS. The report records `productionProfileMigrationPolicy=USER-APPROVED DATA LOSS`, profile `EXPECTED_NON_MIGRATED`, and candidate status `USER_APPROVED_DATA_LOSS`. This policy-adjusted Cloud rehearsal is PASS; the overall phase remains BLOCKED only until the authoritative iPhone Export is validated and compared.
 
-V1 `pinnedNote`, `ideasEnabled`, and `legacyPinnedNoteCandidates` live in client AsyncStorage, not production Firestore. A Cloud snapshot therefore cannot prove their value or prove candidate count zero. The previous rehearsal script treated a missing optional candidate field as `0`; a regression test now fixes this so missing local inventory is `UNKNOWN` and formal mode stops.
+## Superseded profile STOP and current STOP reason
 
-The corrected formal run stopped before migration with one `missing-local-profile-inventory` source issue. Classification:
+V1 `pinnedNote`, `ideasEnabled`, and `legacyPinnedNoteCandidates` live in client AsyncStorage. The earlier run correctly refused to infer zero from missing Cloud data. The subsequent user decision explicitly accepts their loss, so they are now `EXPECTED_NON_MIGRATED / USER-APPROVED DATA LOSS`, not semantic loss or a blocker.
+
+The current STOP is the absence of the authoritative iPhone schema-1 V1 Export. The Cloud snapshot cannot substitute for it because the user will decide which source is authoritative after reviewing an exact Node-by-Node comparison. Classification:
 
 - source Node validation: `CLEAR`
-- local profile inventory: `NOT_CAPTURED`
-- legacy candidate count: unknown, not zero
-- legacy candidate status: `UNKNOWN`
-- required action: export/inspect every supported production client profile, explicitly resolve every candidate, and provide one reviewed migration input for pinnedNote/features
+- local profile inventory: `EXPECTED_NON_MIGRATED`
+- legacy candidate status: `USER-APPROVED DATA LOSS`
+- required action: provide the iPhone schema-1 V1 Export, run intake/validation/comparison, and explicitly select the authoritative Node source if differences exist
 - final result: **BLOCKED**
 
-No candidate was adopted, discarded, merged or timestamp-selected.
+No candidate is migrated, adopted, discarded, merged or timestamp-selected by tooling.
 
 ## Managed export / restore
 
-Native Firestore managed export was not executed. The workstation has no Google Cloud CLI, and a managed export creates a Cloud Storage object/admin operation rather than being the approved minimal production read-only query. Its bucket, billing and IAM prerequisites are not configured or authorized in this phase.
+Native Firestore managed export was not executed. The workstation has no Google Cloud CLI, and its bucket, billing and IAM prerequisites are not configured or authorized. For this single-user cutover, the approved fallback is the create-only raw REST JSON snapshot plus manifest/canonical hash and exact isolated restore. The file is written with exclusive-create semantics, is kept under restricted `artifacts/private/`, and is never overwritten by the scripts.
 
-The verified fallback is the create-only JSON snapshot plus canonical SHA-256 and exact Emulator restore. It preserves raw Firestore documents, IDs, field/value structure, nested data, timestamps and tombstones. This fallback passed for all 120 Cloud V1 Nodes but cannot capture device-local profile data. Managed export or an equivalently reviewed immutable backup remains required at the actual frozen cutover boundary.
+The fallback preserves raw Firestore documents, names/IDs, create/update metadata, field/value structure, nested data, timestamps and tombstones. It passed for all 120 Cloud V1 Nodes. Repeat it twice after the future freeze, require a stable canonical hash, create a second immutable rollback copy, and prove restore in a clean isolated target before migration.
 
 ## Profile and features scenarios
 
@@ -76,7 +86,7 @@ Generic V2 tests pass for pinnedNote persistence/restart, normal operation ident
 - no Cloud value plus legacy local `true` promotes `true`;
 - no Cloud value plus legacy `false`/default emits no write.
 
-The fresh production user's actual local values were unavailable. Therefore actual profile migration, candidate clearance and restart preservation are not proven.
+The production V1 local values are intentionally excluded. V2 profile synchronization itself remains covered and starts from the deterministic defaults above.
 
 ## Compatibility, Rules and External AI phase evidence
 
@@ -103,7 +113,7 @@ The cutover cannot proceed until queries/alerts exist for these signals. During 
 - After migration but before V2 writes: remain frozen, validate manifest-owned V2 records, and remove only those proven migration outputs before returning the gate/Rules to V1.
 - After the first V2 client or AI write: simple V1 snapshot restore is prohibited. Freeze, export current V2 winners/profile/receipts/audit, preserve V2-only changes, then perform audited forward repair or reconciliation.
 
-The rollback backup restore passed for Cloud Nodes. Full rollback readiness is blocked by the same missing device-local profile inventory and by the absence of an authorized managed export.
+The rollback backup restore passed for Cloud Nodes. Profile loss is approved. The backup must be repeated at the frozen cutover boundary and compared with the selected iPhone Export before it becomes the final rollback baseline.
 
 ## Problems found and corrected
 
@@ -111,11 +121,8 @@ The formal-source regression test first failed because no inventory classifier e
 
 ## Remaining blockers / required evidence
 
-1. Collect reviewed V1 local profile exports from every supported production device/account scope.
-2. Resolve all `legacyPinnedNoteCandidates` explicitly; count must be proven zero.
-3. Decide the authoritative pinnedNote when device values differ without discarding any value.
-4. Record actual legacy `ideasEnabled` and run deterministic profile migration against that input.
-5. Configure and authorize managed export to a restricted versioned bucket, or formally approve the manifest+JSON fallback including profile capture.
-6. Implement production monitoring/alerts for the documented STOP signals.
-7. Repeat this formal rehearsal from the combined Cloud+device inventory. Only that run can produce PASS/PASS WITH WARNINGS.
-
+1. Receive and validate the authoritative iPhone schema-1 V1 Export.
+2. Compare it with the fresh Firestore snapshot and obtain an explicit source decision for every non-identical Node; never auto-merge.
+3. Repeat snapshot/backup/restore after the future freeze and rehearse the selected complete Node source.
+4. Collect canary probe/log counters and run the executable STOP assessment.
+5. Only the post-intake run can produce PASS/PASS WITH WARNINGS.

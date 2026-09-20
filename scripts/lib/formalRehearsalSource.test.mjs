@@ -26,4 +26,13 @@ describe("formal rehearsal source inventory", () => {
       legacyPinnedNoteCandidates: [],
     })).toMatchObject({ profileStatus: "CAPTURED", candidateCount: 0, candidateStatus: "CLEAR", canRunFormalRehearsal: true });
   });
+
+  it("allows missing local profile data only with the explicit production non-migration policy", () => {
+    expect(assessFormalSourceInventory({ nodes: [] }, { userApprovedNonMigration: true })).toMatchObject({
+      profileStatus: "EXPECTED_NON_MIGRATED",
+      candidateStatus: "USER_APPROVED_DATA_LOSS",
+      canRunFormalRehearsal: true,
+      issues: [],
+    });
+  });
 });

@@ -13,6 +13,8 @@
 
 OneNoteで行っていたタスク・メモ管理を置き換えることを目的としたスマートフォンアプリ。
 
+Production V1→V2移行では、iPhoneのschema-1 Export受領後に`npm run migration:intake-v1-export -- <export> <snapshot> <migration-id> <report>`で検証・Firestore差分確認を行います。差分は自動mergeされず、ユーザー判断まで停止します。
+
 ## Tech Stack
 
 - React Native

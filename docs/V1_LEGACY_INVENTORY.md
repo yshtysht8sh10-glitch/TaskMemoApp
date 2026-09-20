@@ -164,10 +164,10 @@ There is no general rollback script that converts versioned V2 state, profiles a
 ### MUST BEFORE CUTOVER
 
 - Repeat the fresh stable production V1 snapshot after the future write freeze. The 2026-09-20 read-only snapshot is stable and Node-clean, but it is not the future frozen boundary.
-- Capture V1 device-local `pinnedNote`, `ideasEnabled` and `legacyPinnedNoteCandidates` from every supported production client. The 2026-09-20 formal run correctly stopped because Firestore cannot prove this inventory or candidate count zero.
-- Re-run formal rehearsal for the combined Cloud+device profile inventory and exact production client/Rules artifact; decide differing multi-device pinned-note values explicitly.
+- Receive and validate the authoritative iPhone schema-1 V1 Export, compare every Node with the fresh Firestore snapshot, and obtain an explicit source decision for any difference.
+- V1 local `pinnedNote`, `ideasEnabled` and `legacyPinnedNoteCandidates` are intentionally not migrated under the user's approved production policy. Start V2 with empty/false/none; this exception does not alter normal schema-4 backup or V2 profile sync.
 - Run external-AI V2 integration/cutover-order validation with the exact Functions artifact; prove freeze and V1 gate failure. Do not deploy V2 Functions into a V1 phase or leave V1 Functions after V2 cutover.
-- Prepare a managed production export/restore validation and immutable manifest for Nodes, V2 records/receipts/profile, gates and control state.
+- Repeat the approved create-only raw JSON snapshot/manifest after freeze and validate exact isolated restore. Managed export is optional unless its bucket/billing/IAM are separately authorized.
 - Implement the documented operation-receipt retention prerequisites and post-cutover monitoring/STOP alerts. The policy is defined, but operational telemetry is not yet installed.
 - Resolve documentation drift: README describes the broad production Rules as normal setup, while the cutover runbook requires a stricter freeze/gate transition.
 

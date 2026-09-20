@@ -111,6 +111,7 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     let controllerA = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(dbA, uid, "test", { emulator: true }));
     const controllerB = new TaskMemoV2SyncController(b, createFirebaseSyncAdapter(dbB, uid, "test", { emulator: true }));
     await Promise.all([controllerA.start(), controllerB.start()]);
+    expect(a.pinnedNote.body).toBe(""); expect(a.ideasEnabled).toBe(false); expect(a.legacyPinnedNoteCandidates).toEqual([]);
 
     const historyBeforeFeatures = a.historyDepths;
     await controllerA.updateIdeasEnabled(true);

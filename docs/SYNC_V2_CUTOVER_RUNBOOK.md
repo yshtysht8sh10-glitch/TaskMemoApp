@@ -14,6 +14,12 @@ At every step print and independently compare the project ID. STOP on any mismat
 
 ## Rehearsed pre-cutover sequence
 
+### Production migration scope
+
+- MUST PRESERVE: all Nodes from the user-selected schema-1 V1 Export, including every Node subtype/state/tombstone/tree/rank/due/Routine field and any additional field proven preserved by the V2 codec.
+- USER-APPROVED DATA LOSS: V1 local pinnedNote, V1 local ideasEnabled and legacyPinnedNoteCandidates. They are intentionally not migrated in this production cutover and are not counted as semantic loss.
+- Initial V2 profile: pinnedNote empty, `ideasEnabled=false`, candidates empty. Schema-4 backup/import and normal V2 profile sync remain unchanged.
+
 ### Production client V2 selection contract
 
 - An ordinary production build without `EXPO_PUBLIC_SYNC_V2_ENABLED=true` remains V1.
@@ -39,6 +45,16 @@ At every step print and independently compare the project ID. STOP on any mismat
 - STOP: **any** issue. On 2026-09-19 this initially stopped on deleted orphan `ipa-morning` → missing parent `ipa`; after its explicit owner-approved deletion, the fresh 120-Node snapshot passed with zero issues.
 - Rollback: none; analysis is read-only. Escalate the exact source issue for an explicit data decision.
 
+### 2a. Authoritative iPhone V1 Export intake
+
+Run after receiving the file:
+
+```powershell
+npm run migration:intake-v1-export -- <iphone-schema1-export.json> <fresh-production-snapshot.json> <migration-id> <new-private-report.json>
+```
+
+The command requires schema 1, validates exportedAt, all Nodes, IDs, types, required fields, dates, parent/category references, cycles, ranks, deleted/purged state and lossless codec behavior. It canonicalizes dates and object keys, compares every Node/field against the read-only Firestore snapshot, and classifies `IDENTICAL`, `EXPORT_ONLY`, `FIRESTORE_ONLY`, or `FIELD_DIFFERENCE`. The report is create-only and contains both values for private review. Any non-identical result exits with code 2 and requires an explicit user source decision; it never merges.
+
 ### 3. Isolated backup and exact restore
 
 - Command: start `firebase.rehearsal.json` with project `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- <snapshot> <migrationId> <new-backup> <new-report> --continue-after-validation-stop=orphan-preservation-only` only when deliberately testing post-STOP mechanics.
@@ -47,6 +63,7 @@ At every step print and independently compare the project ID. STOP on any mismat
 - Validation: automated recursive comparison. Formal post-cleanup result on 2026-09-19: 120/120 exact, 511.81 ms restore plus 222.10 ms validation.
 - STOP: target is not `demo-taskmemo-rehearsal`, backup path already exists, or any equality/count mismatch.
 - Rollback: stop emulator and discard only the isolated emulator data/private rehearsal artifacts.
+- For this approved production policy, formal commands must include the explicit `--profile-policy=user-approved-non-migration` acknowledgement. Omitting it preserves the general fail-closed behavior for missing local profile inventory.
 
 ### 4. Freeze, migrate, validate and gate in rehearsal
 
@@ -127,3 +144,25 @@ At initial cutover, retain `syncOperationsV2` and `externalAiRequestsV2` indefin
 ## Monitoring and immediate STOP
 
 Before cutover, implement alerts/queries for sync errors, rejected operations, revision conflicts/regressions, outbox age/count, missing or mismatched receipts, V1 write attempts, schema/owner validation failures, convergence failures and Functions transaction errors. During canary, immediately freeze on any V1 write attempt, schema/owner failure, missing receipt after acknowledgement, unexplained revision regression, convergence mismatch, permanent sync error, partial AI transaction, or an online canary outbox pending for five minutes. Transient retries are acceptable only when they drain and all clients converge.
+
+Collect a private diagnostic JSON from the client status/export, read-only receipt inventory and Firebase/Cloud Functions logs, then run:
+
+```powershell
+npm run diagnostics:cutover -- <collected-private-input.json> <new-private-report.json>
+```
+
+Input shape:
+
+```json
+{
+  "capturedAt": "ISO timestamp",
+  "events": [{ "kind": "v1-write-attempt", "count": 0 }],
+  "clients": [{ "id": "canary-a", "syncPhase": "synced", "outboxOldestAgeMs": 0, "networkConfirmedOnline": true, "convergenceHash": "sha256" }]
+}
+```
+
+Use Firestore/Cloud Logging around the recorded cutover timestamp: client permission/rejection logs for V1 and schema failures; `syncOperationsV2` opId/ack pairs for missing receipts; node/profile revision snapshots for regression; `externalAiRequestsV2` plus `syncOperationsV2` plus winner/audit for AI transaction completeness; Functions error logs for request failures. Record each canary's sync phase, oldest pending outbox age, confirmed network state and canonical authoritative-state hash. One critical counter, differing hashes, a permanent client error, or an online outbox older than 300000 ms produces `STOP`.
+
+## Final RC automated verification
+
+With Java 21+ installed, run `npm run verify:final-rc`. It runs TypeScript/lint/unit/Functions checks, then strict-Rules Emulator application and Functions integration. Together these cover schema-1 migration units, V2 Node/profile sync, Undo/Redo, offline/reconnect, restart recovery, gate/Rules, External AI, V1 rejection/no fallback and two-client convergence. The formal snapshot rehearsal separately proves create-only backup/restore and pre-write rollback using the selected private source.

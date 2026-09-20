@@ -10,9 +10,10 @@ import type { SyncOperation } from "../src/sync/types";
 import { assessFormalSourceInventory } from "./lib/formalRehearsalSource.mjs";
 
 const PROJECT = "demo-taskmemo-rehearsal";
-const [input, migrationId, backup, reportPath, continuation] = process.argv.slice(2);
-const diagnosticContinuation = continuation === "--continue-after-validation-stop=orphan-preservation-only";
-const validationMustPass = continuation === "--validation-must-pass";
+const [input, migrationId, backup, reportPath, ...flags] = process.argv.slice(2);
+const diagnosticContinuation = flags.includes("--continue-after-validation-stop=orphan-preservation-only");
+const validationMustPass = flags.includes("--validation-must-pass");
+const userApprovedProfileNonMigration = flags.includes("--profile-policy=user-approved-non-migration");
 if (!input || !migrationId || !backup || !reportPath || (!diagnosticContinuation && !validationMustPass))
   throw new Error("Exact rehearsal arguments and either --validation-must-pass or the isolated diagnostic-continuation acknowledgement are required.");
 
@@ -84,7 +85,7 @@ const plans = users.map(uid => ({ uid, plan: planV1ToV2Migration(source.nodes.fi
     if (typeof node[key] === "string") node[key] = new Date(node[key] as string);
   return node as Node;
 }), migrationId) }));
-const profileInventory = assessFormalSourceInventory(source);
+const profileInventory = assessFormalSourceInventory(source, { userApprovedNonMigration: userApprovedProfileNonMigration });
 const sourceIssues = [
   ...plans.flatMap(item => item.plan.issues),
   ...profileInventory.issues,
@@ -132,6 +133,7 @@ if (acknowledgement.result !== "applied") throw new Error("V2 smoke operation wa
 const freezeMs = elapsed(freezeStarted);
 const report = {
   schemaVersion: 1, rehearsalProject: PROJECT, sourceProject: source.projectId, sourceAccess: "read-only",
+  productionProfileMigrationPolicy: userApprovedProfileNonMigration ? "USER-APPROVED DATA LOSS" : "PRESERVE_OR_STOP",
   status: sourceIssues.length ? "BLOCKED_SOURCE_VALIDATION" : "PASSED",
   diagnosticContinuationAfterStop: diagnosticContinuation,
   counts: { backup: source.documentCount, restored: restoredCount, migrated: plans.reduce((sum, item) => sum + item.plan.outputCount, 0) },

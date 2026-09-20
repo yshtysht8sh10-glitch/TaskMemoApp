@@ -1,6 +1,13 @@
-export function assessFormalSourceInventory(source) {
+export function assessFormalSourceInventory(source, options = {}) {
   const profileCaptured = source.localProfileInventory?.complete === true
     && Array.isArray(source.legacyPinnedNoteCandidates);
+  if (!profileCaptured && options.userApprovedNonMigration === true) return {
+    profileStatus: "EXPECTED_NON_MIGRATED",
+    candidateCount: null,
+    candidateStatus: "USER_APPROVED_DATA_LOSS",
+    canRunFormalRehearsal: true,
+    issues: [],
+  };
   if (!profileCaptured) return {
     profileStatus: "NOT_CAPTURED",
     candidateCount: null,

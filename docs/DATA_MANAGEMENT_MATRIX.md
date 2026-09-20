@@ -236,6 +236,8 @@ Initial migration is deterministic: an existing Cloud record is authoritative; w
 
 **Cleanup rule:** only explicit adoption or discard removes a candidate. Production cutover alone is not a cleanup condition.
 
+**One-time production V1→V2 exception:** by explicit user decision, the selected cutover does not migrate V1 local pinnedNote, local ideasEnabled, or legacy candidates. V2 begins with empty/false/none. This is recorded as `USER-APPROVED DATA LOSS`; it does not change the normal matrix, schema-4 Export/Import, recovery UI, or V2 Cloud behavior.
+
 ### 4. Purge Undo rules are inconsistent
 
 **Current fact:** single-item permanent deletion uses `recordHistory: false`, while a batch permanent-deletion path passes through normal batch History. The purge-wins convergence rule prevents a stale normal record from reviving a tombstone.
