@@ -8,6 +8,10 @@ import { createFirebaseSyncAdapter } from "../src/sync/firebaseSyncAdapter";
 import { planV1ToV2Migration } from "../src/sync/migrationDryRun";
 import type { SyncOperation } from "../src/sync/types";
 import { assessFormalSourceInventory } from "./lib/formalRehearsalSource.mjs";
+import type { ApplicationJournalPersistence } from "../src/sync/applicationStore";
+import { TaskMemoV2ApplicationStore } from "../src/sync/taskMemoApplicationStore";
+import { TaskMemoV2SyncController } from "../src/sync/taskMemoV2SyncController";
+import { updateNode } from "../src/domain/nodeOperations";
 
 const PROJECT = "demo-taskmemo-rehearsal";
 const [input, migrationId, backup, reportPath, ...flags] = process.argv.slice(2);
@@ -36,6 +40,17 @@ const hydrate = (source: Record<string, unknown>) => {
   return result;
 };
 const equal = (left: unknown, right: unknown) => JSON.stringify(stable(left)) === JSON.stringify(stable(right));
+const waitFor = async (predicate: () => boolean, timeout = 10_000) => {
+  const started = Date.now();
+  while (!predicate()) { if (Date.now() - started > timeout) throw new Error("Formal client convergence timeout."); await new Promise(resolveWait => setTimeout(resolveWait, 20)); }
+};
+class MemoryPersistence implements ApplicationJournalPersistence {
+  committed: string | null = null; journal: string | null = null;
+  loadCommitted = async () => this.committed; loadJournal = async () => this.journal;
+  writeJournal = async (value: string) => { this.journal = value; };
+  writeCommitted = async (value: string) => { this.committed = value; };
+  clearJournal = async () => { this.journal = null; };
+}
 
 async function main() {
 const started = performance.now();
@@ -127,6 +142,33 @@ if (purged) await assertFails(setDoc(doc(oldClient, `users/${uid}/nodes/${purged
 const v2db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
 const adapter = createFirebaseSyncAdapter(v2db, uid, "test", { emulator: true });
 await adapter.connect();
+const persistenceA = new MemoryPersistence(); const persistenceB = new MemoryPersistence();
+let storeA = await TaskMemoV2ApplicationStore.open(persistenceA, [], { deviceId: "formal-client-a", initialPinnedNote: { body: "", updatedAt: new Date(0) }, initialIdeasEnabled: false });
+const storeB = await TaskMemoV2ApplicationStore.open(persistenceB, [], { deviceId: "formal-client-b", initialPinnedNote: { body: "", updatedAt: new Date(0) }, initialIdeasEnabled: false });
+let controllerA = new TaskMemoV2SyncController(storeA, createFirebaseSyncAdapter(v2db, uid, "test", { emulator: true }));
+const controllerB = new TaskMemoV2SyncController(storeB, createFirebaseSyncAdapter(environment.authenticatedContext(uid).firestore() as unknown as Firestore, uid, "test", { emulator: true }));
+await Promise.all([controllerA.start(), controllerB.start()]);
+await waitFor(() => storeA.nodes.length === source.documentCount && storeB.nodes.length === source.documentCount);
+const sourceIds = [...source.nodes.map(item => String(item.node.id))].sort();
+if (JSON.stringify(storeA.nodes.map(node => node.id).sort()) !== JSON.stringify(sourceIds) || JSON.stringify(storeB.nodes.map(node => node.id).sort()) !== JSON.stringify(sourceIds)) throw new Error("V2 client Node IDs differ from the authoritative source.");
+if (storeA.pinnedNote.body !== "" || storeA.ideasEnabled !== false || storeA.legacyPinnedNoteCandidates.length) throw new Error("Approved initial profile policy mismatch.");
+const editable = storeA.nodes.find(node => node.type === "memo" && !node.purgedAt)!;
+const originalTitle = editable.title; const rehearsalTitle = `${originalTitle} [formal-rehearsal]`;
+await controllerA.command("formal edit", "update", nodes => updateNode(nodes, editable.id, { title: rehearsalTitle }, new Date("2026-09-20T08:00:00.000Z")));
+await waitFor(() => storeB.nodes.find(node => node.id === editable.id)?.title === rehearsalTitle);
+await controllerA.undo(); await waitFor(() => storeB.nodes.find(node => node.id === editable.id)?.title === originalTitle);
+await controllerA.redo(); await waitFor(() => storeB.nodes.find(node => node.id === editable.id)?.title === rehearsalTitle);
+controllerA.stop();
+await storeA.command("formal offline edit", "update", nodes => updateNode(nodes, editable.id, { title: `${rehearsalTitle} offline` }, new Date("2026-09-20T08:01:00.000Z")));
+storeA = await TaskMemoV2ApplicationStore.open(persistenceA, [], { deviceId: "ignored-after-restart" });
+controllerA = new TaskMemoV2SyncController(storeA, createFirebaseSyncAdapter(v2db, uid, "test", { emulator: true }));
+await controllerA.start();
+await waitFor(() => storeB.nodes.find(node => node.id === editable.id)?.title === `${rehearsalTitle} offline`);
+await controllerA.updatePinnedNote("formal pinned note", 0); await waitFor(() => storeB.pinnedNote.body === "formal pinned note");
+await controllerA.updateIdeasEnabled(true); await waitFor(() => storeB.ideasEnabled === true);
+if (storeA.nodes.filter(node => Boolean(node.purgedAt)).length !== plans[0].plan.purgedCount || storeB.nodes.filter(node => Boolean(node.purgedAt)).length !== plans[0].plan.purgedCount) throw new Error("Purged tombstone resurrection detected.");
+const applicationIntegration = { loadedNodeCount: source.documentCount, nodeIdsMatch: true, twoClientConverged: true, undoRedo: true, offlineRestartReconnect: true, walOutboxReceipts: storeA.outbox.length === 0, pinnedNoteSynced: storeB.pinnedNote.body === "formal pinned note", ideasEnabledSynced: storeB.ideasEnabled === true, initialProfile: { pinnedNote: "", ideasEnabled: false, legacyPinnedNoteCandidates: 0 }, tombstonesPreserved: true };
+controllerA.stop(); controllerB.stop();
 const operation: SyncOperation = { opId: "rehearsal-client:1", deviceId: "rehearsal-client", localSeq: 1, targetNodeId: "rehearsal-v2-smoke", type: "create", baseRevision: 0, payload: { node: { id: "rehearsal-v2-smoke", type: "memo", memoType: "task", parentId: null, sortKey: "zz", title: "Rehearsal smoke", body: "", dueAt: null, duePreset: "none", status: "active", completedAt: null, createdAt: "2026-09-19T00:00:00.000Z", updatedAt: "2026-09-19T00:00:00.000Z", deletedAt: null } }, createdAt: "2026-09-19T00:00:00.000Z", status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
 const acknowledgement = await adapter.upload(operation);
 if (acknowledgement.result !== "applied") throw new Error("V2 smoke operation was not applied.");
@@ -139,6 +181,7 @@ const report = {
   counts: { backup: source.documentCount, restored: restoredCount, migrated: plans.reduce((sum, item) => sum + item.plan.outputCount, 0) },
   equality: { documentIdsFieldsValuesNestedTombstonesUnknownFields: true, migrationSemanticChanges: plans.reduce((sum, item) => sum + item.plan.changedFields.length, 0), lostFields: plans.reduce((sum, item) => sum + item.plan.lostFieldCount, 0) },
   sourceIssues, oldClient: { readRejected: true, writeRejected: true, tombstoneResurrectionRejected: Boolean(purged) }, v2SmokeApplied: true,
+  applicationIntegration,
   profileInventory: { status: profileInventory.profileStatus },
   legacyPinnedNoteRecovery: { candidateCount: profileInventory.candidateCount, status: profileInventory.candidateStatus },
   timingMs: { backup: backupMs, restore: restoreMs, restoreValidation: restoreValidationMs, migration: migrationMs, migrationValidation: migrationValidationMs, gate: gateMs, writeFreezeDiagnosticWindow: freezeMs, total: elapsed(started) },

@@ -55,6 +55,8 @@ npm run migration:intake-v1-export -- <iphone-schema1-export.json> <fresh-produc
 
 The command requires schema 1, validates exportedAt, all Nodes, IDs, types, required fields, dates, parent/category references, cycles, ranks, deleted/purged state and lossless codec behavior. It canonicalizes dates and object keys, compares every Node/field against the read-only Firestore snapshot, and classifies `IDENTICAL`, `EXPORT_ONLY`, `FIRESTORE_ONLY`, or `FIELD_DIFFERENCE`. The report is create-only and contains both values for private review. Any non-identical result exits with code 2 and requires an explicit user source decision; it never merges.
 
+For the 2026-09-20 cutover source, the user approved the repaired iPhone Export as authoritative for all 4 Export-only and 110 field-difference Nodes. Prepare the private rehearsal bundle only with the exact reviewed hash/count/confirmation via `npm run migration:prepare-authoritative-rehearsal`. Firestore values must not be merged into that bundle.
+
 ### 3. Isolated backup and exact restore
 
 - Command: start `firebase.rehearsal.json` with project `demo-taskmemo-rehearsal`, then run `npm run rehearsal:v2-cutover -- <snapshot> <migrationId> <new-backup> <new-report> --continue-after-validation-stop=orphan-preservation-only` only when deliberately testing post-STOP mechanics.

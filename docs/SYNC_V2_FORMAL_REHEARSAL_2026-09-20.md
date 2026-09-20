@@ -1,6 +1,6 @@
 # TaskMemo V2 formal cutover rehearsal — 2026-09-20
 
-Status: **BLOCKED_COMPARISON_USER_DECISION_REQUIRED**. The approved source repair validates cleanly, but its Node/field comparison with the production snapshot is not identical. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
+Status: **PASS — READY FOR CUTOVER PREPARATION**. The user approved the repaired 124-Node iPhone Export as the authoritative source for every difference. Issue #45 remains open. This result does not authorize or start production cutover.
 
 ## Authoritative iPhone Export intake
 
@@ -19,6 +19,20 @@ Validation stopped on `ipa-morning.parentId="ipa"`: the parent Category does not
 The user then explicitly authorized complete removal of `ipa-morning`. A separate gitignored repair copy was created; the original remained byte-identical. Audit classification is `USER-APPROVED SOURCE REPAIR / DATA DROP`, source SHA-256 is the value above, repaired SHA-256 is `4da5ae29e427831025da485e40f84fc21180591421c40b26e62d3d7817bcae73`, and count changed exactly 125→124. No replacement, tombstone, History or migration metadata was generated for the dropped Node.
 
 The repaired source passed validation: 124→124 planned records, zero issues/orphans/cycles/invalid or unknown fields, semantic changes or lost fields. Comparison against the stable 120-document snapshot then stopped with `USER_DECISION_REQUIRED`: 10 `IDENTICAL`, 4 `EXPORT_ONLY`, 0 `FIRESTORE_ONLY`, and 110 `FIELD_DIFFERENCE`. Of the field-difference Nodes, 73 differ only in timestamp fields and 37 include non-timestamp differences. Field occurrences include dates, due values/presets/order, completion/deletion, title, rank, Routine rule/history and deletion batch. Exact Node IDs and both source values remain only in the private report; tooling did not merge or choose a winner.
+
+The user subsequently approved the repaired iPhone Export as the authoritative source as a whole. A private `USER-APPROVED AUTHORITATIVE SOURCE DECISION` audit fixes source SHA-256 `4da5ae29e427831025da485e40f84fc21180591421c40b26e62d3d7817bcae73`, Node count 124 and the comparison counts above. The rehearsal bundle contains only canonicalized iPhone values; it does not merge Firestore values. The Firestore snapshot remains rollback/comparison evidence.
+
+## Authoritative-source formal result
+
+- V1 backup/restore/migration: 124/124/124; exact IDs, fields, nested values and tombstones.
+- semantic changes: 0; lost fields: 0; source issues: 0.
+- inventory: 12 Category, 111 Task, 1 Idea, 12 Routine; 98 active, 13 completed, 22 soft-deleted, 4 purged; 25 routineHistory entries.
+- two V2 application stores loaded all 124 authoritative IDs under strict Rules.
+- two-client convergence, Undo/Redo, offline edit, WAL restart recovery, outbox drain and receipts passed.
+- all four purge tombstones remained purged; stale V1 read/write and tombstone resurrection were rejected.
+- approved initial profile was empty pinnedNote, `ideasEnabled=false`, candidates empty; new pinnedNote/features changes synchronized between clients.
+- V2 adapter smoke passed. External-AI V2 repository and strict Rules remain covered by the final-RC Emulator suite.
+- create-only backup restored exactly before migration. After V2 writes, V1 restore remains forbidden; freeze and forward reconciliation are required.
 
 ## Approved production migration scope
 
@@ -80,12 +94,12 @@ After the explicit non-migration policy was recorded, the same fresh 120-Node sn
 
 V1 `pinnedNote`, `ideasEnabled`, and `legacyPinnedNoteCandidates` live in client AsyncStorage. The earlier run correctly refused to infer zero from missing Cloud data. The subsequent user decision explicitly accepts their loss, so they are now `EXPECTED_NON_MIGRATED / USER-APPROVED DATA LOSS`, not semantic loss or a blocker.
 
-The missing-Export and orphan-validation blockers are resolved. The current STOP is the non-identical Export-versus-Firestore comparison. Classification:
+The missing-Export, orphan-validation and comparison-decision blockers are resolved. Classification:
 
 - source Node validation: `CLEAR`
 - local profile inventory: `EXPECTED_NON_MIGRATED`
 - legacy candidate status: `USER-APPROVED DATA LOSS`
-- required action: explicitly choose the authoritative source for the four Export-only Nodes and 110 field-difference Nodes (individually or approve the repaired iPhone Export as a whole); do not auto-merge
+- authoritative source: repaired iPhone schema-1 Export, 124 Nodes; every iPhone field wins; no Firestore merge
 - final result: **BLOCKED**
 
 No candidate is migrated, adopted, discarded, merged or timestamp-selected by tooling.
@@ -139,8 +153,11 @@ The formal-source regression test first failed because no inventory classifier e
 
 ## Remaining blockers / required evidence
 
-1. Decide whether the validated repaired iPhone Export is authoritative as a whole or resolve the private per-Node differences explicitly; never auto-merge.
-2. Run formal rehearsal only after that source decision.
-3. Repeat snapshot/backup/restore after the future freeze and rehearse the selected complete Node source.
-4. Collect canary probe/log counters and run the executable STOP assessment.
-5. Only a user-approved post-comparison run can produce PASS/PASS WITH WARNINGS.
+No repository/data-decision blocker remains before cutover preparation. Actual cutover still requires separate authorization and these operational MUSTs:
+
+1. enter the documented future write freeze without changing the approved source policy;
+2. take two fresh post-freeze read-only snapshots and verify count/canonical hash stability;
+3. create the immutable rollback backup and prove clean isolated restore;
+4. apply Rules, Functions, gates and clients in the reviewed order while frozen;
+5. run canary diagnostics/STOP assessment and preserve receipts;
+6. rollback only before the first V2 write; after V2 writes, freeze and forward-reconcile.

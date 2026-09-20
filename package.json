@@ -62,6 +62,7 @@
     "migration:analyze-production-snapshot": "tsx scripts/analyze-production-snapshot.ts",
     "migration:intake-v1-export": "tsx scripts/intake-v1-export.ts",
     "migration:repair-approved-v1-export": "tsx scripts/repair-approved-v1-export-source.ts",
+    "migration:prepare-authoritative-rehearsal": "tsx scripts/prepare-authoritative-v1-rehearsal.ts",
     "rehearsal:v2-cutover": "tsx scripts/rehearse-v2-cutover.ts",
     "diagnostics:cutover": "node scripts/analyze-cutover-diagnostics.mjs",
     "verify:final-rc": "npm run verify && npx firebase-tools emulators:exec --config firebase.emulator.json --project demo-taskmemo-v2 --only firestore \"node scripts/run-final-rc-emulator-tests.mjs\"",
