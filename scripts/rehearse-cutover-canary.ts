@@ -5,6 +5,7 @@ import { doc, getDoc, setDoc, type Firestore } from "firebase/firestore";
 import { createFirebaseSyncAdapter } from "../src/sync/firebaseSyncAdapter";
 import type { SyncOperation, VersionedNode } from "../src/sync/types";
 
+async function main() {
 const [sourcePath, canaryPath, reportPath] = process.argv.slice(2);
 if (!sourcePath || !canaryPath || !reportPath || process.env.FIRESTORE_EMULATOR_HOST !== "127.0.0.1:8180") throw new Error("Canary rehearsal requires exact files and isolated Firestore Emulator 127.0.0.1:8180.");
 const source = JSON.parse(readFileSync(sourcePath, "utf8")) as { nodes: { uid: string; node: Record<string, unknown> }[] };
@@ -49,3 +50,6 @@ try {
   writeFileSync(reportPath, JSON.stringify(report, null, 2), { flag: "wx" });
   console.log(JSON.stringify(report));
 } finally { await environment.cleanup(); }
+}
+
+main().catch(error => { console.error(error); process.exitCode = 1; });
