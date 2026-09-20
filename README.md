@@ -130,17 +130,7 @@ npx expo start --dev-client
 
 ### iPhone Safari/PWAの日常利用版を作る
 
-```powershell
-npm run web:export
-```
-
-公開用ファイルが `dist` に生成されます。Firebase HostingなどのHTTPS対応ホスティングへ公開し、iPhone Safariで公開URLを開きます。その後、Safariの共有ボタンから「ホーム画面に追加」を選びます。ローカル開発サーバーのURLは日常利用には適しません。
-
-Firebase Hostingを設定済みの場合の公開コマンドは次のとおりです。
-
-```powershell
-npx firebase-tools deploy --only hosting
-```
+Production V2 PWAの生成・公開には、後述の「[Production V2 PWAの正式な公開手順](#production-v2-pwaの正式な公開手順)」だけを使用してください。`npm run web:export` は通常確認／開発用であり、production公開には使用しません。
 
 ### iPhoneのインストール型日常利用版を作る
 
@@ -162,6 +152,8 @@ Apple Developer Programへの加入が必要です。ビルド完了後、EASの
 
 回帰テストの作り方、領域別のテスト配置、手動確認項目は [docs/TESTING.md](docs/TESTING.md) を参照してください。バグ修正は「再現テストを先に失敗させる → 修正 → 関連テスト → 全体テスト」の順で進めます。
 
+ここでの `npm run web:export` は通常／DEV bundleのローカル確認専用です。生成物をproduction Hostingへdeployしてはいけません。
+
 ```powershell
 npm test
 npx tsc --noEmit
@@ -177,12 +169,30 @@ npx expo-doctor
 | XperiaでExpo Goデバッグ | `npm start` | 必要 |
 | Xperiaの日常利用APK | `npx eas-cli@latest build --platform android --profile preview` | インストール後は不要 |
 | Android開発クライアント | `npx eas-cli@latest build --platform android --profile development` | 実行時に必要 |
-| iPhone Safari/PWA | `npm run web:export` → HTTPSで公開 | 公開後は不要 |
+| iPhone Safari/PWA | `npm run web:export:production-v2` → production Hostingへ公開 | 公開後は不要 |
 | iPhoneインストール版 | `npx eas-cli@latest build --platform ios --profile preview` | インストール後は不要 |
 
 ## Web / PWA
 
-開発サーバーは `npm run web`、配布用の静的ファイルは `npm run web:export` で生成します。成果物は `dist` に出力され、HTTPS対応の静的ホスティングへそのまま配置できます。データはブラウザ内に保存されるため、ブラウザのサイトデータを消す前や端末移行前には「設定 > データを書き出す」でバックアップしてください。
+開発サーバーは `npm run web`、通常確認／開発用の静的ファイルは `npm run web:export` で生成します。`npm run web:export` はローカルのDEV設定を使用し得るため、production Hostingへdeployしてはいけません。成果物は `dist` に出力されます。データはブラウザ内に保存されるため、ブラウザのサイトデータを消す前や端末移行前には「設定 > データを書き出す」でバックアップしてください。
+
+### Production V2 PWAの正式な公開手順
+
+Production Firebase projectは `taskmemoapp-eabc3` です。Production V2 PWAを公開するときは、必ず次の2コマンドをこの順序で実行します。
+
+```powershell
+npm run web:export:production-v2
+npx firebase-tools deploy --project taskmemoapp-eabc3 --only hosting
+```
+
+- Production公開では `npm run web:export` を使用しません。必ず `npm run web:export:production-v2` を使用します。
+- Firebase CLIの現在のdefault projectには依存しません。deploy時は必ず `--project taskmemoapp-eabc3` を明示します。
+- `taskmemoapp-dev` へ誤deployしないよう、コマンド内のproject IDを実行前に確認します。
+- Deploy後は [https://taskmemoapp-eabc3.web.app](https://taskmemoapp-eabc3.web.app) を開きます。
+- 通常画面の `v1.0.0 · <Git short SHA>` と、設定画面のVersion／Build／Sync／Environmentを確認します。
+- Productionで `DEV` と表示された場合は異常です。そのPWAを使用せず、公開手順とbundle設定を確認します。
+- 表示されたGit short SHAが、deploy対象として想定したcommitと一致することを確認します。
+- PWAキャッシュにより以前のbundleが動作している場合があります。必要に応じて再読み込みし、画面に表示された「現在実際にロードされているBuild」を再確認します。
 
 iPhoneでは公開先をSafariで開き、共有ボタンから「ホーム画面に追加」を選択します。追加後はホーム画面の `TaskMemo` アイコンからstandalone表示で起動できます。初回表示後はアプリ本体がキャッシュされ、オフラインでも再起動できます（更新反映には再読み込みが必要な場合があります）。Safariとホーム画面版は同じ公開URLを使い、プライベートブラウズは日常データの保存先として使用しないでください。
 
@@ -349,14 +359,7 @@ npx firebase-tools deploy --only firestore:rules
 
 ### 6. Web/PWAとAndroidを作る
 
-Web/PWAは `.env.local` の値をJavaScriptへ埋め込んでから公開します。
-
-```powershell
-npm run web:export
-npx firebase-tools deploy --only hosting
-```
-
-完了時に表示されたHosting URLをiPhone Safariで開き、「共有」→「ホーム画面に追加」を選びます。Firebase設定値を変更したときは、必ず再度exportして公開してください。
+Production Web/PWAは「[Production V2 PWAの正式な公開手順](#production-v2-pwaの正式な公開手順)」に従います。通常／DEV用の `npm run web:export` や、project IDを省略したdeployコマンドは使用しません。公開確認後、iPhone Safariで「共有」→「ホーム画面に追加」を選びます。
 
 Xperiaの日常利用用APKは、EASの `preview` 環境に登録した値を使ってビルドします。
 
@@ -378,15 +381,13 @@ npx eas-cli@latest build --platform android --profile preview
 
 ### 普段の更新コマンド
 
-初回設定後、コードを更新してXperiaとiPhoneへ反映するときは次の3コマンドです。
+Androidを更新するときは対象profileでEAS Buildを実行します。Production PWAの更新は、必ず「[Production V2 PWAの正式な公開手順](#production-v2-pwaの正式な公開手順)」に従います。
 
 ```powershell
 npx eas-cli@latest build --platform android --profile preview
-npm run web:export
-npx firebase-tools deploy --only hosting
 ```
 
-Androidは新しいAPKをXperiaへインストールします。iPhone PWAは公開後にSafariまたはホーム画面版を再読み込みします。
+Androidは新しいAPKをXperiaへインストールします。iPhone PWAは正式手順で公開後、Safariまたはホーム画面版を再読み込みし、画面のBuild表示を確認します。
 
 ### 利用量と運用
 
