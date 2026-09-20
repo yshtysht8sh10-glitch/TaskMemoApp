@@ -27,10 +27,11 @@ try {
   const adapterA = createFirebaseSyncAdapter(dbA, canary.uid, "test", { emulator: true });
   const adapterB = createFirebaseSyncAdapter(dbB, canary.uid, "test", { emulator: true });
   await adapterA.connect(); await adapterB.connect();
-  if (!adapterB.subscribe) throw new Error("Canary adapter subscription is unavailable.");
+  const subscribe = adapterB.subscribe;
+  if (!subscribe) throw new Error("Canary adapter subscription is unavailable.");
   let received: VersionedNode | undefined;
   const receivedPromise = new Promise<void>((resolve, reject) => {
-    const unsubscribe = adapterB.subscribe(record => { if (record.value.id === canary.targetNodeId && record.revision === 1) { received = record; unsubscribe(); resolve(); } }, reject);
+    const unsubscribe = subscribe(record => { if (record.value.id === canary.targetNodeId && record.revision === 1) { received = record; unsubscribe(); resolve(); } }, reject);
     setTimeout(() => { unsubscribe(); reject(new Error("Second client convergence timeout.")); }, 5000);
   });
   const acknowledgement = await adapterA.upload(canary.operation);
