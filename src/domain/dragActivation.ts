@@ -7,3 +7,8 @@ export const dragActivationDelay = (isWeb: boolean) => isWeb ? WEB_DRAG_ACTIVATI
 
 export const exceedsWebTouchDragTolerance = (startX: number, startY: number, x: number, y: number) =>
   Math.hypot(x - startX, y - startY) > WEB_TOUCH_DRAG_SCROLL_TOLERANCE_PX;
+
+export const webTouchDragOverlayPosition = (clientX: number, clientY: number, offsetX: number, offsetY: number) => ({
+  left: clientX - offsetX,
+  top: clientY - offsetY,
+});

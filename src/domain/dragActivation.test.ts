@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dragActivationDelay, exceedsWebTouchDragTolerance, NATIVE_DRAG_ACTIVATION_DISTANCE_PX, WEB_TOUCH_DRAG_SCROLL_TOLERANCE_PX } from './dragActivation';
+import { dragActivationDelay, exceedsWebTouchDragTolerance, NATIVE_DRAG_ACTIVATION_DISTANCE_PX, WEB_TOUCH_DRAG_SCROLL_TOLERANCE_PX, webTouchDragOverlayPosition } from './dragActivation';
 
 describe('dragActivationDelay', () => {
   it('Webは短い待ち、Nativeは誤操作を抑えつつ従来より短い待ちにする', () => {
@@ -12,5 +12,10 @@ describe('dragActivationDelay', () => {
     expect(WEB_TOUCH_DRAG_SCROLL_TOLERANCE_PX).toBe(8);
     expect(exceedsWebTouchDragTolerance(10, 20, 14, 24)).toBe(false);
     expect(exceedsWebTouchDragTolerance(10, 20, 10, 29)).toBe(true);
+  });
+
+  it('touch drag成立時からfloating overlayを指と同じoffsetで追従させる', () => {
+    expect(webTouchDragOverlayPosition(140, 260, 20, 18)).toEqual({ left: 120, top: 242 });
+    expect(webTouchDragOverlayPosition(170, 310, 20, 18)).toEqual({ left: 150, top: 292 });
   });
 });

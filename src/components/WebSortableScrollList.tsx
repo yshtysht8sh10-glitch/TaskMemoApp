@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { createDragAutoScroller } from '@/domain/dragAutoScroll';
-import { exceedsWebTouchDragTolerance, WEB_DRAG_ACTIVATION_DELAY_MS } from '@/domain/dragActivation';
+import { exceedsWebTouchDragTolerance, WEB_DRAG_ACTIVATION_DELAY_MS, webTouchDragOverlayPosition } from '@/domain/dragActivation';
 
 type Props<T> = {
   data: T[];
@@ -42,6 +42,8 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
     removeListeners: () => void;
   } | null>(null);
   const suppressClickRef = useRef(false);
+  const touchOverlayRef = useRef<HTMLDivElement | null>(null);
+  const touchOverlayOffsetRef = useRef({ x: 0, y: 0 });
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [targetKey, setTargetKey] = useState<string | null>(null);
   const [placement, setPlacement] = useState<'before' | 'on' | 'after'>('before');
@@ -62,6 +64,8 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
         touchGestureRef.current.removeListeners();
       }
       touchGestureRef.current = null;
+      touchOverlayRef.current?.remove();
+      touchOverlayRef.current = null;
       autoScrollerRef.current = null;
     };
   }, []);
@@ -69,6 +73,8 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
   const finish = (commit = true) => {
     const active = activeRef.current; const target = targetRef.current;
     autoScrollerRef.current?.stop();
+    touchOverlayRef.current?.remove();
+    touchOverlayRef.current = null;
     activeRef.current = null; targetRef.current = null; setActiveKey(null); setTargetKey(null);
     if (commit && active && target && keyFor(active) !== keyFor(target)) onDrop(active, target, placementRef.current);
   };
@@ -77,6 +83,40 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
     pointerRef.current = { x: clientX, y: clientY };
     autoScrollerRef.current?.start(clientY);
     setPlacement('before'); setActiveKey(key); setTargetKey(null);
+  };
+  const showTouchOverlay = (element: HTMLDivElement, clientX: number, clientY: number) => {
+    const bounds = element.getBoundingClientRect();
+    const overlay = element.cloneNode(true) as HTMLDivElement;
+    overlay.draggable = false;
+    overlay.removeAttribute('id');
+    overlay.querySelectorAll('[id]').forEach((child) => child.removeAttribute('id'));
+    overlay.setAttribute('aria-hidden', 'true');
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      zIndex: '9999',
+      width: `${bounds.width}px`,
+      height: `${bounds.height}px`,
+      margin: '0',
+      pointerEvents: 'none',
+      opacity: '0.94',
+      transform: 'scale(1.025)',
+      transformOrigin: 'center',
+      boxShadow: '0 10px 26px rgba(0, 0, 0, 0.24)',
+      willChange: 'left, top',
+    });
+    touchOverlayOffsetRef.current = { x: clientX - bounds.left, y: clientY - bounds.top };
+    const position = webTouchDragOverlayPosition(clientX, clientY, touchOverlayOffsetRef.current.x, touchOverlayOffsetRef.current.y);
+    overlay.style.left = `${position.left}px`;
+    overlay.style.top = `${position.top}px`;
+    document.body.appendChild(overlay);
+    touchOverlayRef.current = overlay;
+  };
+  const moveTouchOverlay = (clientX: number, clientY: number) => {
+    const overlay = touchOverlayRef.current;
+    if (!overlay) return;
+    const position = webTouchDragOverlayPosition(clientX, clientY, touchOverlayOffsetRef.current.x, touchOverlayOffsetRef.current.y);
+    overlay.style.left = `${position.left}px`;
+    overlay.style.top = `${position.top}px`;
   };
   const activeItem =
     activeKey === null
@@ -130,8 +170,10 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
         onTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => {
           if (touchGestureRef.current || event.touches.length !== 1) return;
           const touch = event.touches[0];
+          const element = event.currentTarget;
           const findTouch = (touches: TouchList, identifier: number) => Array.from(touches).find((candidate) => candidate.identifier === identifier);
           const cleanup = () => {
+            element.draggable = true;
             document.removeEventListener('touchmove', move, true);
             document.removeEventListener('touchend', end, true);
             document.removeEventListener('touchcancel', cancel, true);
@@ -153,6 +195,7 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
               return;
             }
             nativeEvent.preventDefault();
+            moveTouchOverlay(currentTouch.clientX, currentTouch.clientY);
             autoScrollerRef.current?.update(currentTouch.clientY);
             refreshTargetRef.current();
           };
@@ -180,7 +223,9 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
               if (!current || current.identifier !== touch.identifier) return;
               current.active = true;
               suppressClickRef.current = true;
+              element.draggable = false;
               begin(item, key, pointerRef.current.x, pointerRef.current.y);
+              showTouchOverlay(element, pointerRef.current.x, pointerRef.current.y);
             }, WEB_DRAG_ACTIVATION_DELAY_MS),
             active: false,
             removeListeners: cleanup,
