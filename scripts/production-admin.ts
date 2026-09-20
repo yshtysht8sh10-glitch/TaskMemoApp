@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { prepareSchema1V1Export } from "../src/sync/v1ExportMigration";
+import { applyRevisionOperation } from "../src/sync/revisionModel";
+import type { SyncOperation, VersionedNode } from "../src/sync/types";
 import { decodeFirestoreFields } from "./lib/readOnlyFirestoreSnapshot.mjs";
 import {
   AUTHORITATIVE_SHA256, EXPECTED_NODE_COUNT, PRODUCTION_PROJECT, canonicalJson,
@@ -162,6 +164,10 @@ async function main() {
     const control = await getAdminDoc(id.projectId, "syncControl/current");
     const gate = await getAdminDoc(id.projectId, `users/${id.uid}/syncMetadataV2/compatibility`);
     if (canonicalJson(control?.value) !== canonicalJson({ schemaVersion: 1, writesEnabled: true }) || canonicalJson(gate?.value) !== canonicalJson({ schemaVersion: 1, minimumSyncProtocol: 2, v1WritesAllowed: false, v2Enabled: true })) throw new Error("V2 writable gate precondition is not satisfied.");
+    const current = await getAdminDoc(id.projectId, `users/${id.uid}/nodesV2/${encodeURIComponent(spec.nodeId)}`);
+    if (!current || current.updateTime !== spec.expectedUpdateTime) throw new Error("Canary Node update-time precondition changed.");
+    const evaluated = applyRevisionOperation((current.value as { record?: VersionedNode }).record, spec.operation as SyncOperation);
+    if (evaluated.result !== "applied" || canonicalJson(evaluated.record) !== canonicalJson(spec.record)) throw new Error("Canary operation does not deterministically produce the reviewed winner record.");
     await commit(id.projectId, writes);
     return audit({ identity: id, canaryMode, mode: "write", operationSha256: specSha, opId: spec.opId, pointOfNoReturnCrossed: true });
   }

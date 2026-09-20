@@ -28,7 +28,7 @@ Every command requires both `--project` and `--expected-project`, an explicit UI
 | Read canary | `npm run admin:canary -- -- --project $Project --expected-project $Project --uid $Uid --migration-id $Migration --canary-mode read --audit "$Cutover/canary-read.json"` | read-only; expected 124 Nodes while globally frozen. |
 | First-write canary | `npm run admin:canary -- -- --project $Project --expected-project $Project --uid $Uid --migration-id $Migration --canary-mode write --operation "$Cutover/approved-canary-operation.json" --audit "$Cutover/canary-write-dry.json"` | dry-run. The write form adds `--mode write --confirm "POINT-OF-NO-RETURN:$Project:$Uid:$Migration:$CanaryOperationSha"` and a new audit path. It requires a V2-enabled gate, global writes enabled, exact Node update-time, and atomically writes the winner plus create-only receipt. |
 
-The approved canary operation JSON contains `uid`, `migrationId`, `opId`, `nodeId`, `expectedUpdateTime`, the complete next `record`, and complete `operation`. It must be independently reviewed and hashed. Executing its write form crosses the POINT OF NO RETURN.
+The approved canary operation JSON contains `uid`, `migrationId`, `opId`, `nodeId`, `expectedUpdateTime`, the complete next `record`, and complete `operation`. It must be independently reviewed and hashed. Before commit, the CLI reads the current winner and uses the normal V2 revision evaluator to prove that the operation deterministically produces exactly the reviewed next record. Executing its write form crosses the POINT OF NO RETURN.
 
 ## Production client artifacts
 
