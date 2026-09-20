@@ -15,6 +15,8 @@ OneNoteで行っていたタスク・メモ管理を置き換えることを目�
 
 Production V1→V2移行では、iPhoneのschema-1 Export受領後に`npm run migration:intake-v1-export -- <export> <snapshot> <migration-id> <report>`で検証・Firestore差分確認を行います。差分は自動mergeされず、ユーザー判断まで停止します。
 
+2026-09-20受領分は`ipa-morning`の親`ipa`欠落によりsource validationで停止中です。自動修復せず、明示的なデータ判断後に再実行します。
+
 ## Tech Stack
 
 - React Native

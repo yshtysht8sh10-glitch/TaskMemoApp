@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Node } from "../models/node";
 import { serializeNodeBackup } from "../services/nodeBackup";
 import { nodeFromV2Value } from "./nodeV2Codec";
-import { compareV1NodeSources, prepareSchema1V1Export, PRODUCTION_V1_PROFILE_POLICY } from "./v1ExportMigration";
+import { compareV1NodeSources, describeV1ExportValidationFailure, prepareSchema1V1Export, PRODUCTION_V1_PROFILE_POLICY } from "./v1ExportMigration";
 
 const at = new Date("2026-09-20T00:00:00.000Z");
 const nodes: Node[] = [
@@ -42,5 +42,12 @@ describe("production schema 1 V1 Export migration", () => {
       ["category", "IDENTICAL"], ["cloud-only", "FIRESTORE_ONLY"], ["idea", "EXPORT_ONLY"], ["task", "FIELD_DIFFERENCE"],
     ]);
     expect(result.find((item) => item.nodeId === "task")?.differingFields).toContain("title");
+  });
+
+  it("reports the exact unresolved parent without exposing or repairing Node content", () => {
+    const raw = serializeNodeBackup([{ ...nodes[2], id: "orphan", parentId: "missing" }], at);
+    expect(describeV1ExportValidationFailure(raw, new Error("orphanの親参照が不正です。"))).toEqual({
+      message: "orphanの親参照が不正です。", nodeId: "orphan", field: "parentId", value: "missing", parentExists: false, parentType: null, selfReference: false,
+    });
   });
 });

@@ -25,6 +25,27 @@ export type NodeComparison = {
   firestoreNode?: Record<string, unknown>;
 };
 
+export function describeV1ExportValidationFailure(raw: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  let source: unknown;
+  try { source = JSON.parse(raw); } catch { return { message, nodeId: null, field: null }; }
+  const nodeId = /^(.+?)の親参照が不正です。$/.exec(message)?.[1] ?? null;
+  if (!nodeId || !source || typeof source !== "object" || !Array.isArray((source as { nodes?: unknown }).nodes)) return { message, nodeId, field: null };
+  const nodes = (source as { nodes: Record<string, unknown>[] }).nodes;
+  const node = nodes.find((item) => item?.id === nodeId);
+  const parentId = typeof node?.parentId === "string" ? node.parentId : node?.parentId ?? null;
+  const parent = nodes.find((item) => item?.id === parentId);
+  return {
+    message,
+    nodeId,
+    field: "parentId",
+    value: parentId,
+    parentExists: Boolean(parent),
+    parentType: parent?.type ?? null,
+    selfReference: parentId === nodeId,
+  };
+}
+
 const stable = (value: unknown): unknown => {
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(stable);

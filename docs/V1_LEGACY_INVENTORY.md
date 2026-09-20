@@ -164,7 +164,7 @@ There is no general rollback script that converts versioned V2 state, profiles a
 ### MUST BEFORE CUTOVER
 
 - Repeat the fresh stable production V1 snapshot after the future write freeze. The 2026-09-20 read-only snapshot is stable and Node-clean, but it is not the future frozen boundary.
-- Receive and validate the authoritative iPhone schema-1 V1 Export, compare every Node with the fresh Firestore snapshot, and obtain an explicit source decision for any difference.
+- The authoritative iPhone schema-1 V1 Export was received, but source validation stopped on orphan `ipa-morning.parentId="ipa"`. Obtain an explicit correction/source decision, rerun validation, then compare every Node with the fresh Firestore snapshot.
 - V1 local `pinnedNote`, `ideasEnabled` and `legacyPinnedNoteCandidates` are intentionally not migrated under the user's approved production policy. Start V2 with empty/false/none; this exception does not alter normal schema-4 backup or V2 profile sync.
 - Run external-AI V2 integration/cutover-order validation with the exact Functions artifact; prove freeze and V1 gate failure. Do not deploy V2 Functions into a V1 phase or leave V1 Functions after V2 cutover.
 - Repeat the approved create-only raw JSON snapshot/manifest after freeze and validate exact isolated restore. Managed export is optional unless its bucket/billing/IAM are separately authorized.

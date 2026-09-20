@@ -1,6 +1,22 @@
 # TaskMemo V2 formal cutover rehearsal — 2026-09-20
 
-Status: **BLOCKED — awaiting the authoritative iPhone schema-1 V1 Export**. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
+Status: **BLOCKED_SOURCE_VALIDATION**. The authoritative iPhone schema-1 V1 Export was received, but migration stopped before comparison. Issue #45 remains open. This rehearsal did not authorize or start production cutover.
+
+## Authoritative iPhone Export intake
+
+The immutable original was stored outside Git under `artifacts/private/`.
+
+- SHA-256: `29667feba0cae76e2da9e0caf9c4d2c0e5fb3a082bdd72bf428bebe6b8ff4146`
+- size: 63,999 bytes
+- schemaVersion: 1
+- exportedAt: `2026-09-20T07:44:43.297Z`
+- Nodes: 125
+- timestamps: zero invalid Node timestamps and zero invalid routineHistory timestamps
+- unknown fields: zero
+
+Validation stopped on `ipa-morning.parentId="ipa"`: the parent Category does not exist in the Export. Neither `ipa` nor `ipa-morning` exists in the 120-document Firestore snapshot. No timestamp, parent, Node or tombstone was repaired or dropped.
+
+Because source validation must complete before comparison, the complete 125-vs-120 classification and migration were deliberately not run. The private failure report is `BLOCKED_SOURCE_VALIDATION`. The user must explicitly decide whether to remove the orphan, restore/create its intended parent, or provide a corrected authoritative Export; tooling must not infer that choice.
 
 ## Approved production migration scope
 
@@ -62,12 +78,12 @@ After the explicit non-migration policy was recorded, the same fresh 120-Node sn
 
 V1 `pinnedNote`, `ideasEnabled`, and `legacyPinnedNoteCandidates` live in client AsyncStorage. The earlier run correctly refused to infer zero from missing Cloud data. The subsequent user decision explicitly accepts their loss, so they are now `EXPECTED_NON_MIGRATED / USER-APPROVED DATA LOSS`, not semantic loss or a blocker.
 
-The current STOP is the absence of the authoritative iPhone schema-1 V1 Export. The Cloud snapshot cannot substitute for it because the user will decide which source is authoritative after reviewing an exact Node-by-Node comparison. Classification:
+The previous missing-Export blocker is resolved. The current STOP is the invalid parent reference in the received authoritative source. Classification:
 
 - source Node validation: `CLEAR`
 - local profile inventory: `EXPECTED_NON_MIGRATED`
 - legacy candidate status: `USER-APPROVED DATA LOSS`
-- required action: provide the iPhone schema-1 V1 Export, run intake/validation/comparison, and explicitly select the authoritative Node source if differences exist
+- required action: make an explicit data decision for `ipa-morning`/`ipa`, obtain a corrected schema-1 Export or separately approved source transformation, then rerun intake before any full comparison
 - final result: **BLOCKED**
 
 No candidate is migrated, adopted, discarded, merged or timestamp-selected by tooling.
@@ -121,8 +137,8 @@ The formal-source regression test first failed because no inventory classifier e
 
 ## Remaining blockers / required evidence
 
-1. Receive and validate the authoritative iPhone schema-1 V1 Export.
-2. Compare it with the fresh Firestore snapshot and obtain an explicit source decision for every non-identical Node; never auto-merge.
+1. Resolve the authoritative source error for `ipa-morning.parentId="ipa"` without an automatic repair.
+2. Rerun intake and compare it with the fresh Firestore snapshot; obtain an explicit source decision for every non-identical Node and never auto-merge.
 3. Repeat snapshot/backup/restore after the future freeze and rehearse the selected complete Node source.
 4. Collect canary probe/log counters and run the executable STOP assessment.
-5. Only the post-intake run can produce PASS/PASS WITH WARNINGS.
+5. Only a validation-clean post-intake run can produce PASS/PASS WITH WARNINGS.
