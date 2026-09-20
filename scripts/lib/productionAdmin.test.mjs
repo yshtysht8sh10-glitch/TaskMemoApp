@@ -36,8 +36,8 @@ describe("production admin fail-closed core", () => {
     expect(() => sealBackupManifest({ snapshotRaw, sourceRaw: "wrong", snapshotPath: "snapshot", sourcePath: "source", acquisitionTime: "x", commit: "abc", identity, expectedSnapshotCount: 1, comparisonRaw: JSON.stringify(comparison), expectedSourceSha256: sha256(sourceRaw) })).toThrow(/SHA/);
   });
   it("builds an atomic PONR winner plus create-only receipt", () => {
-    const writes = buildCanaryWrites(identity, { uid: identity.uid, migrationId: identity.migrationId, nodeId: "n", opId: "device:1", expectedUpdateTime: "2026-09-20T00:00:00Z", record: { value: { id: "n" }, revision: 1 }, operation: { opId: "device:1" } });
-    expect(writes).toHaveLength(2); expect(writes[0].currentDocument.updateTime).toBeTruthy(); expect(writes[1].currentDocument.exists).toBe(false);
+    const writes = buildCanaryWrites(identity, { uid: identity.uid, migrationId: identity.migrationId, nodeId: "n", opId: "device:1", expectedRevision: 0, record: { value: { id: "n" }, revision: 1 }, operation: { opId: "device:1" } });
+    expect(writes).toHaveLength(2); expect(writes[0].currentDocument).toBeUndefined(); expect(writes[1].currentDocument.exists).toBe(false);
   });
   it("collects duplicate/missing/regression/partial transaction STOP evidence", () => {
     const result = collectDiagnosticEvidence({ events: [{ kind: "v1-write-attempt", count: 0 }, { kind: "schema-owner-failure", count: 0 }, { kind: "permanent-sync-error", count: 0 }], clients: [{ id: "a", syncPhase: "synced", outboxOldestAgeMs: 0, networkConfirmedOnline: true, convergenceHash: "h" }], nodes: [{ revision: -1 }, { revision: 1, lastOpId: "missing" }], receipts: [{ opId: "dup" }, { opId: "dup" }], functionRequests: [{}] });

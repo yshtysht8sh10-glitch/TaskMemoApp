@@ -12,7 +12,7 @@ const requiredNames = [
 ];
 
 function readEnvLocal() {
-  const envPath = path.join(process.cwd(), '.env.local');
+  const envPath = path.join(process.cwd(), process.env.TASKMEMO_ENV_FILE || '.env.local');
   if (!fs.existsSync(envPath)) {
     throw new Error('.env.local がありません。Firebase の公開設定を追加してください。');
   }

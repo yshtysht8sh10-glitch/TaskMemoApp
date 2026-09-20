@@ -8,7 +8,7 @@ const expectedProjects = {
 
 function localValues() {
   const result = new Map(Object.entries(process.env));
-  const envPath = path.join(process.cwd(), '.env.local');
+  const envPath = path.join(process.cwd(), process.env.TASKMEMO_ENV_FILE || '.env.local');
   if (!fs.existsSync(envPath)) return result;
   for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);

@@ -160,14 +160,15 @@ async function main() {
     const specRaw = raw(required("operation")); const spec = JSON.parse(specRaw); const specSha = sha256(specRaw);
     if (mode() !== "write") return audit({ identity: id, canaryMode, mode: "dry-run", operationSha256: specSha, pointOfNoReturn: true });
     confirm("POINT-OF-NO-RETURN", specSha);
-    const writes = buildCanaryWrites(id, spec);
+    const writes: any[] = buildCanaryWrites(id, spec);
     const control = await getAdminDoc(id.projectId, "syncControl/current");
     const gate = await getAdminDoc(id.projectId, `users/${id.uid}/syncMetadataV2/compatibility`);
     if (canonicalJson(control?.value) !== canonicalJson({ schemaVersion: 1, writesEnabled: true }) || canonicalJson(gate?.value) !== canonicalJson({ schemaVersion: 1, minimumSyncProtocol: 2, v1WritesAllowed: false, v2Enabled: true })) throw new Error("V2 writable gate precondition is not satisfied.");
     const current = await getAdminDoc(id.projectId, `users/${id.uid}/nodesV2/${encodeURIComponent(spec.nodeId)}`);
-    if (!current || current.updateTime !== spec.expectedUpdateTime) throw new Error("Canary Node update-time precondition changed.");
+    if (!current || (current.value as { record?: VersionedNode }).record?.revision !== spec.expectedRevision) throw new Error("Canary Node revision precondition changed.");
     const evaluated = applyRevisionOperation((current.value as { record?: VersionedNode }).record, spec.operation as SyncOperation);
     if (evaluated.result !== "applied" || canonicalJson(evaluated.record) !== canonicalJson(spec.record)) throw new Error("Canary operation does not deterministically produce the reviewed winner record.");
+    writes[0].currentDocument = { updateTime: current.updateTime };
     await commit(id.projectId, writes);
     return audit({ identity: id, canaryMode, mode: "write", operationSha256: specSha, opId: spec.opId, pointOfNoReturnCrossed: true });
   }

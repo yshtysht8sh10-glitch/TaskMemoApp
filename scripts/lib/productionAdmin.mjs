@@ -137,9 +137,9 @@ export function buildControlGateWrites(identity, action) {
 
 export function buildCanaryWrites(identity, spec) {
   requireIdentity(identity);
-  if (spec.uid !== identity.uid || spec.migrationId !== identity.migrationId || !spec.opId || !spec.nodeId || !spec.record || !spec.operation || !spec.expectedUpdateTime) throw new Error("Invalid canary operation specification.");
+  if (spec.uid !== identity.uid || spec.migrationId !== identity.migrationId || !spec.opId || !spec.nodeId || !spec.record || !spec.operation || !Number.isInteger(spec.expectedRevision)) throw new Error("Invalid canary operation specification.");
   return [
-    { update: { name: `projects/${identity.projectId}/databases/(default)/documents/users/${identity.uid}/nodesV2/${encodeURIComponent(spec.nodeId)}`, fields: firestoreFields({ ownerUid: identity.uid, schemaVersion: 2, record: spec.record }) }, currentDocument: { updateTime: spec.expectedUpdateTime } },
+    { update: { name: `projects/${identity.projectId}/databases/(default)/documents/users/${identity.uid}/nodesV2/${encodeURIComponent(spec.nodeId)}`, fields: firestoreFields({ ownerUid: identity.uid, schemaVersion: 2, record: spec.record }) } },
     { update: { name: `projects/${identity.projectId}/databases/(default)/documents/users/${identity.uid}/syncOperationsV2/${encodeURIComponent(spec.opId)}`, fields: firestoreFields({ ownerUid: identity.uid, schemaVersion: 2, operation: spec.operation }) }, currentDocument: { exists: false } },
   ];
 }
