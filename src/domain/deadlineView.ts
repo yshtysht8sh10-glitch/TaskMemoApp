@@ -278,9 +278,18 @@ export const deadlineGroupForMemo = (
 export function visibleDeadlineGroup(
   source: DeadlineGroupKey,
   visible: ReadonlySet<DeadlineGroupKey>,
-  _granularity: TodayGranularity,
+  granularity: TodayGranularity,
 ): DeadlineGroupKey | null {
-  return visible.has(source) ? source : null;
+  const definitions = deadlineGroupDefinitions(granularity);
+  const byId = new Map(definitions.map((definition) => [definition.id, definition]));
+  const visited = new Set<DeadlineGroupKey>();
+  let current: DeadlineGroupKey | null = source;
+  while (current && !visited.has(current)) {
+    if (visible.has(current)) return current;
+    visited.add(current);
+    current = byId.get(current)?.fallbackGroupId ?? null;
+  }
+  return null;
 }
 export function deadlineCreateContext(
   definition: DeadlineGroupDefinition,
@@ -365,39 +374,127 @@ export function deadlineGroups(
 const shortCalendarDate = (date: Date, includeYear = false) =>
   `${includeYear ? `${date.getFullYear()}/` : ""}${date.getMonth() + 1}/${date.getDate()}`;
 
+const FUTURE_GROUP_KEYS: readonly DeadlineGroupKey[] = [
+  "tomorrow",
+  "twoThreeDays",
+  "thisWeek",
+  "nextWeek",
+  "thisMonth",
+  "thisYear",
+  "later",
+];
+
+const futureGroupEnds = (now: Date): Partial<Record<DeadlineGroupKey, Date>> => {
+  const b = boundaries(now);
+  return {
+    tomorrow: b.tomorrowEnd,
+    twoThreeDays: b.threeDaysEnd,
+    thisWeek: b.weekEnd,
+    nextWeek: b.nextWeekEnd,
+    thisMonth: b.monthEnd,
+    thisYear: b.yearEnd,
+  };
+};
+
+const dateRangeLabel = (start: Date, end: Date | null, now: Date) => {
+  if (!end) return `${shortCalendarDate(start, start.getFullYear() !== now.getFullYear())}〜`;
+  const includeYear = start.getFullYear() !== end.getFullYear() || start.getFullYear() !== now.getFullYear();
+  if (start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth() && start.getDate() === end.getDate())
+    return shortCalendarDate(start, includeYear);
+  return `${shortCalendarDate(start, includeYear)}〜${shortCalendarDate(end, includeYear)}`;
+};
+
 export function deadlineDisplayGroups(
   groups: readonly DeadlineGroup[],
   now = new Date(),
+  granularity: TodayGranularity = "amPm",
 ): DeadlineGroup[] {
-  const b = boundaries(now);
-  const tomorrow = dayEnd(now, 1);
-  const nextWeekStart = dayEnd(now, (7 - now.getDay()) % 7 + 1);
-  const crossesYear = nextWeekStart.getFullYear() !== b.nextWeekEnd.getFullYear();
-  const labels: Partial<Record<DeadlineGroupKey, string>> = {
-    tomorrow: `明日（${shortCalendarDate(tomorrow, tomorrow.getFullYear() !== now.getFullYear())}）`,
-    thisWeek: `今週（〜${shortCalendarDate(b.weekEnd, b.weekEnd.getFullYear() !== now.getFullYear())}）`,
-    nextWeek: `来週（${shortCalendarDate(nextWeekStart, crossesYear)}〜${shortCalendarDate(b.nextWeekEnd, crossesYear)}）`,
-  };
-  const labeled = groups.map((group) => ({
+  const visible = new Set(groups.map((group) => group.key));
+  const groupByKey = new Map(groups.map((group) => [group.key, { ...group, memos: [...group.memos] }]));
+  const ends = futureGroupEnds(now);
+  const assignedEnd = new Map<DeadlineGroupKey, Date>();
+  const assignedStart = new Map<DeadlineGroupKey, Date>();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  for (const definition of todayDefinitions[granularity]) {
+    const target = visibleDeadlineGroup(definition.id, visible, granularity);
+    if (target && FUTURE_GROUP_KEYS.includes(target)) assignedStart.set(target, todayStart);
+  }
+  for (const source of FUTURE_GROUP_KEYS) {
+    if (source === "later") continue;
+    const target = visibleDeadlineGroup(source, visible, granularity);
+    const end = ends[source];
+    if (!target || !end) continue;
+    const current = assignedEnd.get(target);
+    if (!current || end.getTime() > current.getTime()) assignedEnd.set(target, end);
+  }
+  const prefix = groups.filter((group) => !FUTURE_GROUP_KEYS.includes(group.key) && group.key !== "none");
+  const result: DeadlineGroup[] = [...prefix];
+  const ranged: { group: DeadlineGroup; start: Date; end: Date | null; names: string[] }[] = [];
+  let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  for (const key of FUTURE_GROUP_KEYS) {
+    const group = groupByKey.get(key);
+    if (!group) continue;
+    if (key === "later") {
+      ranged.push({ group, start: cursor, end: null, names: [group.label] });
+      continue;
+    }
+    const end = assignedEnd.get(key) ?? ends[key];
+    if (!end) continue;
+    const start = assignedStart.get(key);
+    if (start && start.getTime() < cursor.getTime()) cursor = new Date(start);
+    if (end.getTime() < cursor.getTime()) {
+      const containing = ranged.find((entry) => entry.end && end.getTime() >= entry.start.getTime() && end.getTime() <= entry.end.getTime());
+      if (containing) {
+        containing.names.push(group.label);
+        containing.group.memos.push(...group.memos);
+      } else if (end.getFullYear() === now.getFullYear() && end.getMonth() === now.getMonth() && end.getDate() === now.getDate()) {
+        const todayContainer = [...todayDefinitions[granularity]].reverse().map((definition) => result.find((entry) => entry.key === definition.id)).find(Boolean);
+        if (todayContainer) {
+          const marker = todayContainer.label.indexOf("（");
+          todayContainer.label = marker >= 0
+            ? `${todayContainer.label.slice(0, marker)}・${group.label}${todayContainer.label.slice(marker)}`
+            : `${todayContainer.label}・${group.label}`;
+          todayContainer.memos.push(...group.memos);
+        }
+      }
+      continue;
+    }
+    ranged.push({ group, start: new Date(cursor), end, names: [group.label] });
+    cursor = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1);
+  }
+  result.push(...ranged.map(({ group, start, end, names }) => ({
     ...group,
-    label: labels[group.key] ?? group.label,
-  }));
-  if (tomorrow.getTime() !== b.weekEnd.getTime()) return labeled;
-  const tomorrowGroup = labeled.find((group) => group.key === "tomorrow");
-  const thisWeekGroup = labeled.find((group) => group.key === "thisWeek");
-  if (!tomorrowGroup || !thisWeekGroup) return labeled;
-  return labeled
-    .filter((group) => group.key !== "thisWeek")
-    .map((group) =>
-      group.key === "tomorrow"
-        ? {
-            ...group,
-            label: `明日・今週（${shortCalendarDate(tomorrow, tomorrow.getFullYear() !== now.getFullYear())}）`,
-            dropLabel: "明日・今週までに変更",
-            memos: [...tomorrowGroup.memos, ...thisWeekGroup.memos],
-          }
-        : group,
-    );
+    label: `${names.join("・")}（${dateRangeLabel(start, end, now)}）`,
+    dropLabel: names.length > 1 ? `${names.join("・")}までに変更` : group.dropLabel,
+  })));
+  const none = groupByKey.get("none");
+  if (none) result.push(none);
+  return result;
+}
+
+export type HiddenDeadlineSummary = {
+  total: number;
+  groups: { key: DeadlineGroupKey; label: string; count: number }[];
+};
+
+export function hiddenDeadlineSummary(
+  nodes: Node[],
+  now = new Date(),
+  visibleGroupIds?: ReadonlySet<DeadlineGroupKey>,
+  granularity: TodayGranularity = "amPm",
+): HiddenDeadlineSummary {
+  const definitions = deadlineGroupDefinitions(granularity);
+  const visible = visibleGroupIds ?? new Set(definitions.map((group) => group.id));
+  const allVisible = new Set(definitions.map((group) => group.id));
+  const allGroups = deadlineGroups(nodes, now, allVisible, granularity);
+  const groups = allGroups
+    .map((group) => ({
+      key: group.key,
+      label: group.label,
+      count: visibleDeadlineGroup(group.key, visible, granularity) === null ? group.memos.length : 0,
+    }))
+    .filter((group) => group.count > 0);
+  return { total: groups.reduce((sum, group) => sum + group.count, 0), groups };
 }
 export function updateMemoDeadline(
   nodes: Node[],

@@ -21,6 +21,7 @@ import {
   deadlineDraftForCreateContext,
   deadlineDisplayGroups,
   deadlineGroups,
+  hiddenDeadlineSummary,
   type DeadlineCreateContext,
   type DeadlineGroupKey,
   type TodayGranularity,
@@ -43,6 +44,7 @@ import {
   routineCategoryForMemo,
   routineOccurrenceDueAt,
 } from "@/domain/routine";
+import { appAlert } from "@/utils/appAlert";
 
 type DeadlineRow =
   | {
@@ -86,6 +88,7 @@ type Props = {
   onBulkMove: (ids: string[], onSuccess: () => void) => void;
   onBulkComplete: (ids: string[]) => boolean;
   onBulkDelete: (ids: string[], onSuccess: () => void) => void;
+  onOpenDisplaySettings: () => void;
 };
 
 function DragScale({ children }: { children: React.ReactNode }) {
@@ -224,6 +227,7 @@ export function DeadlineView({
   onBulkMove,
   onBulkComplete,
   onBulkDelete,
+  onOpenDisplaySettings,
 }: Props) {
   const { colors } = useAppTheme();
   const styles = createStyles(colors);
@@ -306,8 +310,12 @@ export function DeadlineView({
     [currentDate, nodes, todayGranularity, visibleGroupIds],
   );
   const groups = useMemo(
-    () => deadlineDisplayGroups(sourceGroups, currentDate),
-    [currentDate, sourceGroups],
+    () => deadlineDisplayGroups(sourceGroups, currentDate, todayGranularity),
+    [currentDate, sourceGroups, todayGranularity],
+  );
+  const hidden = useMemo(
+    () => hiddenDeadlineSummary(nodes, currentDate, visibleGroupIds, todayGranularity),
+    [currentDate, nodes, todayGranularity, visibleGroupIds],
   );
   const sourceGroupByMemoId = useMemo(
     () => new Map(sourceGroups.flatMap((group) => group.memos.map((memo) => [memo.id, group.key] as const))),
@@ -665,7 +673,8 @@ export function DeadlineView({
       </CompletionMotion>
     );
   const toolbar = (
-    <View style={styles.toolbar}>
+    <View style={styles.toolbarArea}>
+      <View style={styles.toolbar}>
       {selectionMode ? (
         <>
           <Text style={styles.selectionCount}>{selectedIds.size}件選択</Text>
@@ -698,6 +707,23 @@ export function DeadlineView({
             <Text style={styles.toolText}>全非表示</Text>
           </Pressable>
         </>
+      )}
+      </View>
+      {!selectionMode && hidden.total > 0 && (
+        <Pressable
+          style={styles.hiddenStatus}
+          onPress={() => appAlert(
+            `非表示中 ${hidden.total}件`,
+            hidden.groups.map((group) => `${group.label}  ${group.count}件`).join("\n"),
+            [
+              { text: "閉じる", style: "cancel" },
+              { text: "表示設定を変更", onPress: onOpenDisplaySettings },
+            ],
+          )}
+        >
+          <Text style={styles.hiddenStatusText}>◉ {hidden.total}件を非表示中</Text>
+          <Text style={styles.hiddenStatusArrow}>›</Text>
+        </Pressable>
       )}
     </View>
   );
@@ -914,6 +940,7 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: 14,
       textAlignVertical: "top",
     },
+    toolbarArea: { backgroundColor: colors.background },
     toolbar: {
       minHeight: 38,
       flexDirection: "row",
@@ -930,6 +957,18 @@ const createStyles = (colors: ThemeColors) =>
       backgroundColor: colors.surfaceAlt,
     },
     toolText: { color: colors.textSecondary, fontSize: 11, fontWeight: "600" },
+    hiddenStatus: {
+      minHeight: 34,
+      marginHorizontal: 12,
+      marginBottom: 4,
+      paddingHorizontal: 12,
+      flexDirection: "row",
+      alignItems: "center",
+      borderRadius: 12,
+      backgroundColor: colors.surfaceAlt,
+    },
+    hiddenStatusText: { flex: 1, color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
+    hiddenStatusArrow: { color: colors.textSecondary, fontSize: 18 },
     selectionCount: {
       marginRight: "auto",
       color: colors.text,

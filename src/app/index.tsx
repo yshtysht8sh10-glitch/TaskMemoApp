@@ -779,6 +779,7 @@ export default function HomeScreen() {
                 ],
               )
             }
+            onOpenDisplaySettings={() => setSettingsOpen(true)}
           />
         ) : (
           <ListPanel
