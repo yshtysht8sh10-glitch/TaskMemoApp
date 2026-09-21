@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@/models/node';
-import { categoryPath, deadlineBeforeIdForDrop, deadlineCreateContext, deadlineDraftForCreateContext, deadlineGroupDefinitions, deadlineGroupForDueAt, deadlineGroups, moveMemoInDeadlineList, updateMemoDeadline } from './deadlineView';
+import { categoryPath, deadlineBeforeIdForDrop, deadlineCreateContext, deadlineDisplayGroups, deadlineDraftForCreateContext, deadlineGroupDefinitions, deadlineGroupForDueAt, deadlineGroups, moveMemoInDeadlineList, updateMemoDeadline } from './deadlineView';
 
 const now = new Date(2026, 8, 13, 8);
 const base = (id: string, dueAt: Date | null, parentId: string | null = null): Node => ({ id, type: 'memo', parentId, sortKey: id, title: id, body: '', dueAt, duePreset: dueAt ? 'custom' : 'none', status: 'active', completedAt: null, createdAt: now, updatedAt: now, deletedAt: null });
@@ -17,6 +17,34 @@ describe('deadline view', () => {
     ['threePart', 10.01, 'day'], ['threePart', 17, 'day'], ['threePart', 17.01, 'evening'],
   ] as const)('%s粒度で今日%時を%sに分類する', (granularity, decimalHour, expected) => { const hour = Math.floor(decimalHour); const minute = Math.round((decimalHour - hour) * 60); expect(deadlineGroupForDueAt(new Date(2026, 8, 13, hour, minute), now, granularity)).toBe(expected); });
   it('今日以外を2〜3日・今週・来週を含むフラットな時間軸へ分類する', () => { expect(deadlineGroupForDueAt(new Date(2026, 8, 14, 12), now)).toBe('tomorrow'); expect(deadlineGroupForDueAt(new Date(2026, 8, 15, 12), now)).toBe('twoThreeDays'); expect(deadlineGroupForDueAt(new Date(2026, 8, 20, 12), now)).toBe('nextWeek'); });
+  it('通常時は明日・今週・来週の実際の期間を見出しへ表示する', () => {
+    const monday = new Date(2026, 8, 14, 8);
+    const labels = new Map(deadlineDisplayGroups(deadlineGroups([], monday), monday).map((group) => [group.key, group.label]));
+    expect(labels.get('tomorrow')).toBe('明日（9/15）');
+    expect(labels.get('thisWeek')).toBe('今週（〜9/20）');
+    expect(labels.get('nextWeek')).toBe('来週（9/21〜9/27）');
+  });
+  it('明日が今週最終日の土曜は明日と今週を表示上だけ統合する', () => {
+    const saturday = new Date(2026, 8, 19, 8);
+    const tomorrowMemo = { ...base('tomorrow-memo', new Date(2026, 8, 20, 12)), duePreset: 'tomorrow' as const };
+    const thisWeekMemo = { ...base('week-memo', new Date(2026, 8, 20, 23, 59)), duePreset: 'thisWeek' as const };
+    const raw = deadlineGroups([tomorrowMemo, thisWeekMemo], saturday);
+    const displayed = deadlineDisplayGroups(raw, saturday);
+    expect(displayed.find((group) => group.key === 'tomorrow')).toMatchObject({
+      label: '明日・今週（9/20）',
+      memos: [{ id: 'tomorrow-memo' }, { id: 'week-memo' }],
+    });
+    expect(displayed.some((group) => group.key === 'thisWeek')).toBe(false);
+    expect(raw.find((group) => group.key === 'tomorrow')?.memos.map((memo) => memo.id)).toEqual(['tomorrow-memo']);
+    expect(raw.find((group) => group.key === 'thisWeek')?.memos.map((memo) => memo.id)).toEqual(['week-memo']);
+  });
+  it('月跨ぎと年跨ぎの来週範囲を省略せず表示する', () => {
+    const monthBoundary = new Date(2026, 8, 24, 8);
+    const yearBoundary = new Date(2026, 11, 27, 8);
+    const labelFor = (current: Date) => deadlineDisplayGroups(deadlineGroups([], current), current).find((group) => group.key === 'nextWeek')?.label;
+    expect(labelFor(monthBoundary)).toBe('来週（9/28〜10/4）');
+    expect(labelFor(yearBoundary)).toBe('来週（2026/12/28〜2027/1/3）');
+  });
   it('duePresetではなくdueAtだけで分類する', () => { const memo = { ...base('memo', new Date(2026, 8, 13, 20)), duePreset: 'morning' as const }; expect(deadlineGroups([memo], now, undefined, 'threePart').find((group) => group.memos.length)?.key).toBe('evening'); });
   it('粒度変更でNodeの期限情報を変更しない', () => { const memo = base('memo', new Date(2026, 8, 13, 18)); const original = { ...memo }; deadlineGroups([memo], now, undefined, 'today'); deadlineGroups([memo], now, undefined, 'threePart'); expect(memo).toEqual(original); });
   it('完了・削除Memoを除外し期限昇順にする', () => { const active = base('later', new Date(2026, 8, 13, 18)); const earlier = base('earlier', new Date(2026, 8, 13, 12)); const completed = { ...base('done', now), status: 'completed' as const, completedAt: now }; const deleted = { ...base('deleted', now), deletedAt: now }; expect(deadlineGroups([active, earlier, completed, deleted], now).flatMap((group) => group.memos).map((memo) => memo.id)).toEqual(['earlier', 'later']); });

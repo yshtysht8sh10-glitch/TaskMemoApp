@@ -19,6 +19,7 @@ import {
   deadlineBeforeIdForDrop,
   deadlineCreateContext,
   deadlineDraftForCreateContext,
+  deadlineDisplayGroups,
   deadlineGroups,
   type DeadlineCreateContext,
   type DeadlineGroupKey,
@@ -300,9 +301,17 @@ export function DeadlineView({
       },
     }),
   );
-  const groups = useMemo(
+  const sourceGroups = useMemo(
     () => deadlineGroups(nodes, currentDate, visibleGroupIds, todayGranularity),
     [currentDate, nodes, todayGranularity, visibleGroupIds],
+  );
+  const groups = useMemo(
+    () => deadlineDisplayGroups(sourceGroups, currentDate),
+    [currentDate, sourceGroups],
+  );
+  const sourceGroupByMemoId = useMemo(
+    () => new Map(sourceGroups.flatMap((group) => group.memos.map((memo) => [memo.id, group.key] as const))),
+    [sourceGroups],
   );
   const [quickAdd, setQuickAdd] = useState<DeadlineCreateContext | null>(null);
   const [quickTitle, setQuickTitle] = useState("");
@@ -352,7 +361,7 @@ export function DeadlineView({
           ? [
               ...group.memos.map((memo): DeadlineRow => ({
                 id: memo.id,
-                groupKey: group.key,
+                groupKey: sourceGroupByMemoId.get(memo.id) ?? group.key,
                 kind: "memo",
                 memo,
               })),
@@ -381,7 +390,7 @@ export function DeadlineView({
           ...children,
         ];
       }),
-    [currentDate, expandedGroups, groups, quickAdd, todayGranularity],
+    [currentDate, expandedGroups, groups, quickAdd, sourceGroupByMemoId, todayGranularity],
   );
   const setExpanded = (groupKey: DeadlineGroupKey, value: boolean) => {
     const next = new Set(expandedGroups);
@@ -452,7 +461,7 @@ export function DeadlineView({
   };
   const setCandidate = (index: number) => {
     const groupKey = rows[index]?.groupKey;
-    const group = groups.find((item) => item.key === groupKey);
+    const group = sourceGroups.find((item) => item.key === groupKey);
     const next = group?.create && !group.create.editable ? group.key : null;
     targetRef.current = next;
     setTargetGroup(next);
@@ -796,7 +805,7 @@ export function DeadlineView({
               id: active.memo.id,
               sourceGroup: active.groupKey,
             };
-            const group = groups.find((item) => item.key === target.groupKey);
+            const group = sourceGroups.find((item) => item.key === target.groupKey);
             const next =
               target.kind === "heading" &&
               group?.create &&
@@ -813,7 +822,7 @@ export function DeadlineView({
               const beforeId =
                 target.kind === "memo" && placement !== "on"
                   ? deadlineBeforeIdForDrop(
-                      groups,
+                      sourceGroups,
                       target.groupKey,
                       active.memo.id,
                       target.memo.id,
@@ -945,6 +954,7 @@ const createStyles = (colors: ThemeColors) =>
     },
     disclosure: { width: 22, color: colors.textSecondary, fontSize: 11 },
     headingText: {
+      flexShrink: 1,
       color: colors.textSecondary,
       fontSize: 13,
       fontWeight: "700",

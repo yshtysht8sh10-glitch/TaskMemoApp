@@ -361,6 +361,44 @@ export function deadlineGroups(
       memos: grouped.get(definition.id) ?? [],
     }));
 }
+
+const shortCalendarDate = (date: Date, includeYear = false) =>
+  `${includeYear ? `${date.getFullYear()}/` : ""}${date.getMonth() + 1}/${date.getDate()}`;
+
+export function deadlineDisplayGroups(
+  groups: readonly DeadlineGroup[],
+  now = new Date(),
+): DeadlineGroup[] {
+  const b = boundaries(now);
+  const tomorrow = dayEnd(now, 1);
+  const nextWeekStart = dayEnd(now, (7 - now.getDay()) % 7 + 1);
+  const crossesYear = nextWeekStart.getFullYear() !== b.nextWeekEnd.getFullYear();
+  const labels: Partial<Record<DeadlineGroupKey, string>> = {
+    tomorrow: `明日（${shortCalendarDate(tomorrow, tomorrow.getFullYear() !== now.getFullYear())}）`,
+    thisWeek: `今週（〜${shortCalendarDate(b.weekEnd, b.weekEnd.getFullYear() !== now.getFullYear())}）`,
+    nextWeek: `来週（${shortCalendarDate(nextWeekStart, crossesYear)}〜${shortCalendarDate(b.nextWeekEnd, crossesYear)}）`,
+  };
+  const labeled = groups.map((group) => ({
+    ...group,
+    label: labels[group.key] ?? group.label,
+  }));
+  if (tomorrow.getTime() !== b.weekEnd.getTime()) return labeled;
+  const tomorrowGroup = labeled.find((group) => group.key === "tomorrow");
+  const thisWeekGroup = labeled.find((group) => group.key === "thisWeek");
+  if (!tomorrowGroup || !thisWeekGroup) return labeled;
+  return labeled
+    .filter((group) => group.key !== "thisWeek")
+    .map((group) =>
+      group.key === "tomorrow"
+        ? {
+            ...group,
+            label: `明日・今週（${shortCalendarDate(tomorrow, tomorrow.getFullYear() !== now.getFullYear())}）`,
+            dropLabel: "明日・今週までに変更",
+            memos: [...tomorrowGroup.memos, ...thisWeekGroup.memos],
+          }
+        : group,
+    );
+}
 export function updateMemoDeadline(
   nodes: Node[],
   memoId: string,
