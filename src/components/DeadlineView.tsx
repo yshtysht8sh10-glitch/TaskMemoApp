@@ -47,7 +47,9 @@ import {
 } from "@/domain/routine";
 import { appAlert } from "@/utils/appAlert";
 import { MemoTitleTap } from "@/components/MemoTitleTap";
+import { QuickTitleEditor } from "@/components/QuickTitleEditor";
 import { isMobileTitleEditor } from "@/utils/memoTap";
+import { quickAddTitleNextStep } from "@/utils/quickAddTitle";
 
 type DeadlineRow =
   | {
@@ -331,6 +333,7 @@ export function DeadlineView({
     [sourceGroups],
   );
   const [quickAdd, setQuickAdd] = useState<DeadlineCreateContext | null>(null);
+  const [quickTitleOpen, setQuickTitleOpen] = useState(false);
   const [quickTitle, setQuickTitle] = useState("");
   const [quickDueAt, setQuickDueAt] = useState("");
   const [quickError, setQuickError] = useState<string | null>(null);
@@ -382,7 +385,7 @@ export function DeadlineView({
                 kind: "memo",
                 memo,
               })),
-              ...(quickAdd?.targetGroup === group.key && context
+              ...(quickAdd?.targetGroup === group.key && context && !quickTitleOpen
                 ? [
                     {
                       id: `quick-${group.key}`,
@@ -407,18 +410,19 @@ export function DeadlineView({
           ...children,
         ];
       }),
-    [currentDate, expandedGroups, groups, quickAdd, sourceGroupByMemoId, todayGranularity],
+    [currentDate, expandedGroups, groups, quickAdd, quickTitleOpen, sourceGroupByMemoId, todayGranularity],
   );
   const setExpanded = (groupKey: DeadlineGroupKey, value: boolean) => {
     const next = new Set(expandedGroups);
     if (value) next.add(groupKey);
     else next.delete(groupKey);
     onExpandedGroupsChange(next);
-    if (!value && quickAdd?.targetGroup === groupKey) setQuickAdd(null);
+    if (!value && quickAdd?.targetGroup === groupKey) { setQuickAdd(null); setQuickTitleOpen(false); }
   };
   const beginQuickAdd = (context: DeadlineCreateContext) => {
     setExpanded(context.targetGroup, true);
     setQuickAdd(context);
+    setQuickTitleOpen(mobileTitleEditor);
     setQuickTitle("");
     setQuickDueAt(
       context.initialDueAt ? formatDateTimeInput(context.initialDueAt) : "",
@@ -437,8 +441,24 @@ export function DeadlineView({
   const cancelQuickAdd = () => {
     keepQuickAddOpen();
     setQuickAdd(null);
+    setQuickTitleOpen(false);
     setQuickTitle("");
     setQuickError(null);
+  };
+  const confirmQuickTitle = (value: string) => {
+    if (!quickAdd) return;
+    try {
+      const next = quickAddTitleNextStep(quickAdd, value);
+      if (next.kind === "create") {
+        onQuickAdd(next.title, next.deadline);
+        setQuickAdd(null);
+        setQuickTitle("");
+      } else {
+        setQuickTitle(next.title);
+      }
+    } catch (error) {
+      setQuickError(error instanceof Error ? error.message : "入力内容を確認してください。");
+    }
   };
   const submitQuickAdd = () => {
     if (!quickAdd || !quickTitle.trim()) return;
@@ -454,6 +474,7 @@ export function DeadlineView({
         deadlineDraftForCreateContext(quickAdd, editableDueAt),
       );
       setQuickAdd(null);
+      setQuickTitleOpen(false);
       setQuickTitle("");
       setQuickError(null);
     } catch (error) {
@@ -543,7 +564,7 @@ export function DeadlineView({
       </View>
     ) : item.kind === "quickAdd" ? (
       <View nativeID="deadline-quick-add" style={styles.quickAdd}>
-        <TextInput
+        {mobileTitleEditor ? <Text style={styles.quickTitle}>{quickTitle}</Text> : <TextInput
           autoFocus
           value={quickTitle}
           onChangeText={setQuickTitle}
@@ -554,9 +575,10 @@ export function DeadlineView({
           placeholder="タイトルを入力…"
           placeholderTextColor={colors.textSecondary}
           style={styles.quickTitle}
-        />
+        />}
         {item.context.dueEditable && (
           <TextInput
+            autoFocus={mobileTitleEditor}
             value={quickDueAt}
             onChangeText={setQuickDueAt}
             onFocus={focusQuickAdd}
@@ -877,6 +899,12 @@ export function DeadlineView({
           renderItem={(item, active) => renderRow(item, active, () => {})}
         />
         {actionBar}
+        <QuickTitleEditor
+          target={quickTitleOpen && quickAdd ? { id: `create-${quickAdd.targetGroup}`, title: "" } : null}
+          contextLabel={quickAdd?.label}
+          onSave={(_id, title) => confirmQuickTitle(title)}
+          onClose={(confirmed) => { if (confirmed) setQuickTitleOpen(false); else cancelQuickAdd(); }}
+        />
       </View>
     );
   return (
@@ -909,6 +937,12 @@ export function DeadlineView({
         }
       />
       {actionBar}
+      <QuickTitleEditor
+        target={quickTitleOpen && quickAdd ? { id: `create-${quickAdd.targetGroup}`, title: "" } : null}
+        contextLabel={quickAdd?.label}
+        onSave={(_id, title) => confirmQuickTitle(title)}
+        onClose={(confirmed) => { if (confirmed) setQuickTitleOpen(false); else cancelQuickAdd(); }}
+      />
     </View>
   );
 }

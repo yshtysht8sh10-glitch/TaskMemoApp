@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useAppTheme } from "@/theme/theme";
 import { quickTitleExit } from "@/utils/memoTap";
+import { quickTitleSourceLabel } from "@/utils/quickAddTitle";
 
 type Target = { id: string; title: string } | null;
 
-export function QuickTitleEditor({ target, onClose, onSave }: {
+export function QuickTitleEditor({ target, contextLabel, onClose, onSave }: {
   target: Target;
-  onClose: () => void;
+  contextLabel?: string;
+  onClose: (confirmed: boolean) => void;
   onSave: (id: string, title: string) => void;
 }) {
   const { colors } = useAppTheme();
@@ -46,7 +48,7 @@ export function QuickTitleEditor({ target, onClose, onSave }: {
     closing.current = true;
     if (blurTimer.current) clearTimeout(blurTimer.current);
     if (result.kind === "save" && result.title !== target.title) onSave(target.id, result.title);
-    onClose();
+    onClose(result.kind === "save");
   };
   useEffect(() => {
     if (!target || Platform.OS === "web") return;
@@ -62,6 +64,11 @@ export function QuickTitleEditor({ target, onClose, onSave }: {
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <Pressable style={styles.backdrop} onPress={() => close(true)} />
       <View style={[styles.bar, { backgroundColor: colors.surface, borderColor: colors.border, bottom: Platform.OS === "web" ? webKeyboardBottom : 0 }]}>
+        <View style={styles.context}>
+          <Text style={[styles.heading, { color: colors.textSecondary }]}>{target?.title ? "タイトルを編集" : "新しいメモのタイトル"}</Text>
+          <Text style={[styles.original, { color: colors.text }]} numberOfLines={2}>{target ? quickTitleSourceLabel(target, contextLabel) : ""}</Text>
+        </View>
+        <View style={styles.inputRow}>
         <TextInput
           autoFocus
           value={draft}
@@ -82,6 +89,7 @@ export function QuickTitleEditor({ target, onClose, onSave }: {
         <Pressable accessibilityLabel="タイトル編集をキャンセル" onPressIn={() => { cancelIntent.current = true; }} onPress={() => close(false)} style={styles.button}>
           <Text style={[styles.buttonText, { color: colors.textSecondary }]}>×</Text>
         </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   </Modal>;
@@ -90,7 +98,11 @@ export function QuickTitleEditor({ target, onClose, onSave }: {
 const styles = StyleSheet.create({
   fill: { flex: 1, justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFill },
-  bar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1 },
+  bar: { gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: 1 },
+  context: { paddingHorizontal: 2, paddingBottom: 4 },
+  heading: { fontSize: 12, fontWeight: "700" },
+  original: { fontSize: 14, fontWeight: "600", marginTop: 2 },
+  inputRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   input: { flex: 1, minHeight: 42, paddingHorizontal: 10, borderWidth: 1, borderRadius: 8, fontSize: 16 },
   button: { minWidth: 40, minHeight: 42, justifyContent: "center", alignItems: "center" },
   buttonText: { fontSize: 24, fontWeight: "700" },
