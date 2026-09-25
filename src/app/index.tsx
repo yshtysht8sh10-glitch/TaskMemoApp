@@ -25,6 +25,7 @@ import {
   treeDiagnosticLog,
 } from "@/components/treeDiagnostics";
 import { DeadlineView } from "@/components/DeadlineView";
+import { QuickTitleEditor } from "@/components/QuickTitleEditor";
 import { DateTimeField } from "@/components/DateTimeField";
 import { DateField } from "@/components/DateField";
 import {
@@ -212,6 +213,7 @@ export default function HomeScreen() {
     () => !!initialExternalAiAuthorization(),
   );
   const [editor, setEditor] = useState<Editor>(null);
+  const [quickTitleTarget, setQuickTitleTarget] = useState<{ id: string; title: string } | null>(null);
   const [menuNode, setMenuNode] = useState<Node | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
@@ -360,6 +362,7 @@ export default function HomeScreen() {
       );
     }
   };
+  const openMemoEditor = (memo: MemoNode) => setEditor({ type: "memo", node: memo, memoType: isIdea(memo) ? "idea" : "task", parentId: memo.parentId });
   const replaceNodes = (operation: (current: Node[]) => Node[]) => {
     try {
       if (sync.command("Nodeを完全削除", operation, false)) return;
@@ -663,6 +666,8 @@ export default function HomeScreen() {
                 updateNode(current, id, { title }),
               )
             }
+            onOpenMemo={openMemoEditor}
+            onQuickTitle={(memo) => setQuickTitleTarget({ id: memo.id, title: memo.title })}
             onComplete={completeWithUndo}
             onMenu={setMenuNode}
             onDrop={onDrop}
@@ -736,6 +741,8 @@ export default function HomeScreen() {
                 updateNode(current, id, { title }),
               )
             }
+            onOpenMemo={openMemoEditor}
+            onQuickTitle={(memo) => setQuickTitleTarget({ id: memo.id, title: memo.title })}
             onComplete={completeWithUndo}
             onMenu={setMenuNode}
             onDueDrop={(id, group, beforeId) =>
@@ -1073,14 +1080,19 @@ export default function HomeScreen() {
           )
         }
         onClose={() => setEditor(null)}
-        onSave={(draft) => {
+        onSave={(draft, close = true) => {
           apply(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
             editor?.node
               ? updateNode(current, editor.node.id, draft)
               : createNode(current, editor!.type, draft),
           );
-          setEditor(null);
+          if (close) setEditor(null);
         }}
+      />
+      <QuickTitleEditor
+        target={quickTitleTarget}
+        onClose={() => setQuickTitleTarget(null)}
+        onSave={(id, title) => apply("Memoタイトルを変更", (current) => updateNode(current, id, { title }))}
       />
       <MovePanel
         node={movingNode}
@@ -1639,7 +1651,7 @@ function EditorModal({
     status?: "active" | "completed";
     repeatRule?: RepeatRule | null;
     memoType?: MemoType;
-  }) => void;
+  }, close?: boolean) => void;
 }) {
   const styles = useStyles();
   const { colors } = useAppTheme();
@@ -1683,11 +1695,46 @@ function EditorModal({
   const [repeatStartsOn, setRepeatStartsOn] = useState(
     initialMemo?.repeatRule?.startsOn ?? localDateKey(),
   );
-  const save = () => {
-    if (!editor || !title.trim())
-      return appAlert("入力エラー", "タイトルは必須です。");
+  const signature = JSON.stringify([title, body, preset, custom, status, repeatFrequency, repeatInterval, repeatStartsOn]);
+  const initialSignature = useRef(signature);
+  const committedSignature = useRef(signature);
+  useEffect(() => {
+    if (!memo || signature !== committedSignature.current) return;
+    const nextTitle = memo.title;
+    const nextBody = memo.body ?? "";
+    const nextPreset = memo.duePreset;
+    const nextCustom = formatDateTimeInput(memo.dueAt ?? new Date());
+    const nextStatus = memo.status;
+    const nextFrequency = memo.repeatRule?.frequency ?? "none";
+    const nextInterval = String(memo.repeatRule?.interval ?? 1);
+    const nextStartsOn = memo.repeatRule?.startsOn ?? repeatStartsOn;
+    const nextSignature = JSON.stringify([nextTitle, nextBody, nextPreset, nextCustom, nextStatus, nextFrequency, nextInterval, nextStartsOn]);
+    if (nextSignature === signature) return;
+    const timer = setTimeout(() => {
+      committedSignature.current = nextSignature;
+      setTitle(nextTitle); setBody(nextBody); setPreset(nextPreset); setCustom(nextCustom);
+      setStatus(nextStatus); setRepeatFrequency(nextFrequency); setRepeatInterval(nextInterval); setRepeatStartsOn(nextStartsOn);
+    }, 0);
+    return () => clearTimeout(timer);
+  // Update the open sheet when Undo/Redo or a remote revision changes this memo.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memo?.title, memo?.body, memo?.duePreset, memo?.dueAt, memo?.status, memo?.repeatRule, signature]);
+  const save = (close = true) => {
+    if (!editor) return;
+    if (editor.node && signature === committedSignature.current) {
+      if (close) onClose();
+      return;
+    }
+    if (!title.trim()) {
+      if (close) appAlert("入力エラー", "タイトルは必須です。");
+      return;
+    }
+    const commit = (draft: Parameters<typeof onSave>[0]) => {
+      committedSignature.current = signature;
+      onSave(draft, close);
+    };
     if (idea)
-      return onSave({
+      return commit({
         title,
         parentId: editor.parentId,
         body,
@@ -1704,11 +1751,11 @@ function EditorModal({
           ? null
           : { frequency: repeatFrequency, interval, startsOn: repeatStartsOn };
       if (repeatRule && !isValidRepeatRule(repeatRule))
-        return appAlert(
+        return close ? appAlert(
           "入力エラー",
           "間隔は1以上の整数、開始日は YYYY-MM-DD 形式で入力してください。",
-        );
-      return onSave({
+        ) : undefined;
+      return commit({
         title,
         parentId: editor.parentId,
         body,
@@ -1726,21 +1773,21 @@ function EditorModal({
     if (preset === "custom" && !dueContext) {
       dueAt = parseLocalDateTime(custom);
       if (!dueAt)
-        return appAlert(
+        return close ? appAlert(
           "入力エラー",
           "日時を YYYY/MM/DD HH:mm 形式で入力してください。",
-        );
+        ) : undefined;
     }
     if (
       dueContext?.dueEditable &&
       deadlineGroupForDueAt(dueAt, new Date(), dueContext.granularity) !==
         dueContext.targetGroup
     )
-      return appAlert(
+      return close ? appAlert(
         "入力エラー",
         `「${dueContext.label}」に入る期限を指定してください。`,
-      );
-    onSave({
+      ) : undefined;
+    commit({
       title,
       parentId: editor.parentId,
       body,
@@ -1750,14 +1797,24 @@ function EditorModal({
       memoType: "task",
     });
   };
+  useEffect(() => {
+    if (!editor?.node || signature === initialSignature.current || signature === committedSignature.current) return;
+    const timer = setTimeout(() => save(false), 600);
+    return () => clearTimeout(timer);
+  // save reads the current render's validated draft; unrelated renders must not restart the debounce.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, editor?.node?.id]);
+  const dismiss = () => editor?.node ? save() : onClose();
+  // PanResponder captures event callbacks; refs are read only when a gesture ends.
+  // eslint-disable-next-line react-hooks/refs
   const dismissPanResponder = PanResponder.create({
     onMoveShouldSetPanResponderCapture: (_event, gesture) =>
       canStartSheetDismiss({ scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy }),
     onPanResponderMove: (_event, gesture) => sheetTranslateY.setValue(Math.max(0, gesture.dy)),
     onPanResponderRelease: (_event, gesture) => {
       if (sheetDismissRelease({ distance: Math.max(0, gesture.dy), velocity: gesture.vy, viewportHeight }) === 'commit-close') {
-        Animated.timing(sheetTranslateY, { toValue: viewportHeight, duration: 180, useNativeDriver: true })
-          .start(({ finished }) => { if (finished) save(); });
+        dismiss();
+        sheetTranslateY.setValue(0);
       } else {
         Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true }).start();
       }
@@ -1768,12 +1825,13 @@ function EditorModal({
     <Modal
       visible={!!editor}
       animationType="slide"
-      presentationStyle="pageSheet"
+      transparent
       allowSwipeDismissal
-      onRequestClose={save}
+      onRequestClose={dismiss}
     >
+      <Pressable style={styles.backdrop} onPress={dismiss} />
       <Animated.View
-        style={[styles.modalPage, { transform: [{ translateY: sheetTranslateY }] }]}
+        style={[styles.editorSheet, { transform: [{ translateY: sheetTranslateY }] }]}
         {...(Platform.OS === "web" ? dismissPanResponder.panHandlers : {})}
       >
       <SafeAreaView style={styles.modalPage}>
@@ -1790,7 +1848,9 @@ function EditorModal({
             automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.form}
           >
-            <View style={styles.grabber} />
+            <View style={styles.grabberTouchArea} {...(Platform.OS === "web" ? {} : dismissPanResponder.panHandlers)}>
+              <View style={styles.grabber} />
+            </View>
             <Text style={styles.modalTitle}>
               {editor?.node ? "編集" : "新規作成"}
             </Text>
@@ -1967,12 +2027,12 @@ function EditorModal({
               </>
             )}
             <View style={styles.formButtons}>
-              <Pressable onPress={onClose} style={styles.secondary}>
-                <Text style={styles.buttonText}>キャンセル</Text>
+              <Pressable onPress={dismiss} style={styles.secondary}>
+                <Text style={styles.buttonText}>{editor?.node ? "閉じる" : "キャンセル"}</Text>
               </Pressable>
-              <Pressable onPress={save} style={styles.primary}>
+              {!editor?.node && <Pressable onPress={() => save()} style={styles.primary}>
                 <Text style={styles.primaryText}>保存</Text>
-              </Pressable>
+              </Pressable>}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -2741,15 +2801,16 @@ const createStyles = (colors: ThemeColors) =>
     danger: { color: colors.danger },
     buttonText: { color: colors.text },
     modalPage: { flex: 1, backgroundColor: colors.background },
+    editorSheet: { position: "absolute", left: 0, right: 0, bottom: 0, height: "88%", backgroundColor: colors.background, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: "hidden" },
     form: { padding: 22, paddingBottom: 50 },
     grabber: {
       width: 42,
       height: 5,
       alignSelf: "center",
-      marginBottom: 12,
       borderRadius: 3,
       backgroundColor: colors.border,
     },
+    grabberTouchArea: { minHeight: 28, justifyContent: "flex-start", paddingTop: 4, marginBottom: 4 },
     modalTitle: { color: colors.text, fontSize: 25, fontWeight: "700" },
     destination: { marginTop: 7, color: colors.textSecondary, fontSize: 12 },
     label: {

@@ -10,6 +10,7 @@ import { repeatRuleLabel } from "@/domain/routine";
 import { isIdea } from "@/domain/memoType";
 import type { InlineTitleEditController } from "@/hooks/useInlineTitleEdit";
 import { isTitleEditorFor } from "@/utils/inlineTitleEdit";
+import { MemoTitleTap } from "@/components/MemoTitleTap";
 
 type Props = {
   memo: MemoNode;
@@ -29,6 +30,9 @@ type Props = {
   onComplete: () => void;
   onMenu: () => void;
   onLongPress: () => void;
+  onOpen: () => void;
+  onQuickTitle: () => void;
+  mobileTitleEditor: boolean;
 };
 export function MemoRow({
   memo,
@@ -48,6 +52,9 @@ export function MemoRow({
   onComplete,
   onMenu,
   onLongPress,
+  onOpen,
+  onQuickTitle,
+  mobileTitleEditor,
 }: Props) {
   const styles = createStyles(useAppTheme().colors);
   const idea = isIdea(memo);
@@ -76,7 +83,7 @@ export function MemoRow({
                 ? selectionState === "contained"
                   ? undefined
                   : onToggleSelected
-                : () => titleEdit.begin(memo.id, memo.title)
+                : onOpen
             }
             onLongPress={selectionMode ? undefined : onLongPress}
             delayLongPress={dragActivationDelay(Platform.OS === "web")}
@@ -152,17 +159,13 @@ export function MemoRow({
                   </View>
                 </View>
               ) : (
-                <Text
-                  style={[
-                    styles.title,
-                    idea && styles.ideaTitle,
-                    completed && styles.completedTitle,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {routine ? "🔁 " : ""}
-                  {completed ? `✓ ${memo.title}` : memo.title}
-                </Text>
+                selectionMode ? <Text style={[styles.title, idea && styles.ideaTitle, completed && styles.completedTitle]} numberOfLines={1}>{routine ? "🔁 " : ""}{completed ? `✓ ${memo.title}` : memo.title}</Text> :
+                <View style={styles.titleLine}>
+                  {(routine || completed) && <Text style={styles.title}>{routine ? "🔁 " : ""}{completed ? "✓ " : ""}</Text>}
+                  <MemoTitleTap onSingle={onOpen} onDouble={() => mobileTitleEditor ? onQuickTitle() : titleEdit.begin(memo.id, memo.title)} onLongPress={onLongPress}>
+                    <Text style={[styles.title, idea && styles.ideaTitle, completed && styles.completedTitle]} numberOfLines={1}>{memo.title}</Text>
+                  </MemoTitleTap>
+                </View>
               )}
               {detailLabel ? (
                 <Text
@@ -272,6 +275,7 @@ const createStyles = (colors: ThemeColors) =>
     },
     content: { flex: 1, paddingVertical: 5 },
     title: { color: colors.memoText, fontSize: 15, lineHeight: 19 },
+    titleLine: { flexDirection: "row", alignItems: "center" },
     titleInput: {
       flex: 1,
       minHeight: 30,

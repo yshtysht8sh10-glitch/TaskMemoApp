@@ -8,6 +8,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import DraggableFlatList, {
   ScaleDecorator,
@@ -45,6 +46,8 @@ import {
   routineOccurrenceDueAt,
 } from "@/domain/routine";
 import { appAlert } from "@/utils/appAlert";
+import { MemoTitleTap } from "@/components/MemoTitleTap";
+import { isMobileTitleEditor } from "@/utils/memoTap";
 
 type DeadlineRow =
   | {
@@ -82,6 +85,8 @@ type Props = {
     deadline: Pick<NodeDraft, "duePreset" | "dueAt">,
   ) => void;
   onRenameMemo: (id: string, title: string) => void;
+  onOpenMemo: (memo: MemoNode) => void;
+  onQuickTitle: (memo: MemoNode) => void;
   onComplete: (memo: MemoNode) => void;
   onMenu: (memo: MemoNode) => void;
   onDueDrop: (id: string, group: DeadlineGroupKey, beforeId?: string) => void;
@@ -221,6 +226,8 @@ export function DeadlineView({
   onExpandedGroupsChange,
   onQuickAdd,
   onRenameMemo,
+  onOpenMemo,
+  onQuickTitle,
   onComplete,
   onMenu,
   onDueDrop,
@@ -230,6 +237,8 @@ export function DeadlineView({
   onOpenDisplaySettings,
 }: Props) {
   const { colors } = useAppTheme();
+  const { width } = useWindowDimensions();
+  const mobileTitleEditor = isMobileTitleEditor(Platform.OS, width, Platform.OS === "web" && typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches);
   const styles = createStyles(colors);
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectionMode, setSelectionMode] = useState(false);
@@ -596,7 +605,7 @@ export function DeadlineView({
               onPress={() =>
                 selectionMode
                   ? toggleSelected(item.memo.id)
-                  : titleEdit.begin(item.memo.id, item.memo.title)
+                  : onOpenMemo(item.memo)
               }
               onLongPress={selectionMode ? undefined : drag}
               delayLongPress={dragActivationDelay(Platform.OS === "web")}
@@ -650,10 +659,13 @@ export function DeadlineView({
                     </Pressable>
                   </View>
                 ) : (
-                  <Text style={styles.title} numberOfLines={1}>
-                    {routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}
-                    {item.memo.title}
-                  </Text>
+                  selectionMode ? <Text style={styles.title} numberOfLines={1}>{routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}{item.memo.title}</Text> :
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <Text style={styles.title}>{routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}</Text>
+                    <MemoTitleTap onSingle={() => onOpenMemo(item.memo)} onDouble={() => mobileTitleEditor ? onQuickTitle(item.memo) : titleEdit.begin(item.memo.id, item.memo.title)} onLongPress={drag}>
+                      <Text style={styles.title} numberOfLines={1}>{item.memo.title}</Text>
+                    </MemoTitleTap>
+                  </View>
                 )}
                 <Text style={styles.meta} numberOfLines={1}>
                   {memoMeta(item.memo)}
