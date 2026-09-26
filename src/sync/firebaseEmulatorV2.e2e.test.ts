@@ -110,6 +110,21 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await assertFails(setDoc(doc(owner, "users/owner/nodesV2/b"), { ...valid, record: { ...valid.record, value: { id: "b" } } }));
   });
 
+  it("classifies received and missing outbox receipts without writing, and stops on contradictory receipt", async () => {
+    const uid = "owner";
+    const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, uid, "test", { emulator: true });
+    const operation = { opId: "device-a:1", deviceId: "device-a", localSeq: 1, targetNodeId: "node-a", type: "create" as const,
+      baseRevision: 0, payload: { node: { id: "node-a", title: "A" } }, createdAt: now(1).toISOString(),
+      status: "pending" as const, attemptCount: 0, nextRetryAt: null, lastError: null };
+    const missing = { ...operation, opId: "device-a:2", localSeq: 2, targetNodeId: "node-b", payload: { node: { id: "node-b", title: "B" } } };
+    expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 0, missing: 2 });
+    await adapter.upload(operation);
+    expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+    await expect(adapter.auditOutbox?.([operation, operation])).rejects.toMatchObject({ kind: "permanent" });
+    await expect(adapter.auditOutbox?.([{ ...operation, payload: { node: { id: "node-a", title: "wrong" } } }])).rejects.toMatchObject({ kind: "permanent" });
+  });
+
   it("runs two isolated devices through create, bidirectional edits, conflict, restart, replay, Undo/Redo, and backlog drain", async () => {
     const uid = "same-user";
     const dbA = environment.authenticatedContext(uid).firestore() as unknown as Firestore;

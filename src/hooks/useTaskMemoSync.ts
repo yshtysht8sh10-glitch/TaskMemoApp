@@ -7,8 +7,10 @@ import { createNodeHistory, reconcileSyncedNodeHistory, type NodeHistory } from 
 import { getFirebaseClient } from "../services/firebaseClient";
 import { firebaseConfiguration } from "../services/firebaseConfig";
 import { TaskMemoV2ApplicationJournal } from "../sync/applicationStorage";
+import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicationStorage";
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
+import { recoverV2ApplicationAfterAudit } from "../sync/recovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -17,6 +19,7 @@ import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
 import { subscribeToWebOnline } from "./webOnlineListener";
 import { normalizeLegacyRanks } from "../services/nodeStorage";
 import type { PinnedNote } from "../services/pinnedNoteStorage";
+import { appAlert } from "../utils/appAlert";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase;
 
@@ -44,6 +47,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const publishedCandidatesRef = useRef("[]");
   const storeRef = useRef<TaskMemoV2ApplicationStore | null>(null);
   const controllerRef = useRef<TaskMemoV2SyncController | null>(null);
+  const localSaveErrorShownRef = useRef(false);
   const initialPinnedBody = initialPinnedNote.body;
   const initialPinnedUpdatedAt = initialPinnedNote.updatedAt.getTime();
   useEffect(() => {
@@ -78,7 +82,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         setLegacyPinnedNoteCandidates(candidates);
       }
     }
-    if (controller) setStatus(controller.state.phase);
+    if (controller) { setStatus(controller.state.phase); setError(controller.state.lastError); }
   };
 
   useEffect(() => {
@@ -95,13 +99,24 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setStatus("connecting");
       try {
         // Never implicitly import V1 or the previous account's UI state.
-        const store = await TaskMemoV2ApplicationStore.open(new TaskMemoV2ApplicationJournal(`${db.app.options.projectId}/${nextUser.uid}`), [], { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current });
-        if (currentGeneration !== generation) return;
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const adapterEnvironment = emulator ? "test" : firebase.environment === "production" ? "production" : "development";
-        const controller = new TaskMemoV2SyncController(store, createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator }), publish);
+        const adapter = createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator });
+        const scope = `${db.app.options.projectId}/${nextUser.uid}`;
+        const persistence = Platform.OS === "web"
+          ? await IndexedDbTaskMemoApplicationJournal.open(scope)
+          : new TaskMemoV2ApplicationJournal(scope);
+        if (currentGeneration !== generation) return;
+        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current });
+        if (currentGeneration !== generation) return;
+        const controller = new TaskMemoV2SyncController(store, adapter, publish);
         storeRef.current = store; controllerRef.current = controller; publish(); await controller.start(); publish();
-      } catch (reason) { if (currentGeneration === generation) { setStatus("error"); setError(message(reason)); } }
+      } catch (reason) {
+        if (currentGeneration === generation) {
+          setStatus("error"); setError(message(reason));
+          appAlert("V2データの復旧を停止しました", `データを削除せず、バックアップを保持してください。\n${message(reason)}`);
+        }
+      }
     });
     const reconnect = () => { void controllerRef.current?.start(); };
     const removeOnlineListener = subscribeToWebOnline(
@@ -122,7 +137,13 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       if (enabled) setError("V2同期へのログイン・初期化が完了するまで編集できません。");
       return enabled; // V2 must not fall back to mutating V1 state.
     }
-    void action(controller).then(publish).catch((reason) => { setStatus("error"); setError(message(reason)); });
+    void action(controller).then(publish).catch((reason) => {
+      setStatus("error"); setError(message(reason));
+      if (!localSaveErrorShownRef.current) {
+        localSaveErrorShownRef.current = true;
+        appAlert("保存エラー", `変更を端末に保存できませんでした。画面を閉じず、サイトデータを削除しないでください。\n${message(reason)}`);
+      }
+    });
     return true;
   };
   const signIn = async (email: string, password: string) => { setStatus("connecting"); setError(null); try { await signInWithEmailAndPassword(getFirebaseClient().auth, email.trim(), password); } catch (reason) { setStatus("signed-out"); setError(message(reason)); throw reason; } };

@@ -86,6 +86,8 @@ export type SyncAcknowledgement = {
 
 export interface SyncAdapter {
   connect(): Promise<void>;
+  /** Read-only receipt check. A failure must prevent recovery and uploading. */
+  auditOutbox?(operations: SyncOperation[]): Promise<{ received: number; missing: number }>;
   upload(operation: SyncOperation): Promise<SyncAcknowledgement>;
   subscribe?(
     onRecord: (record: VersionedNode) => void | Promise<void>,

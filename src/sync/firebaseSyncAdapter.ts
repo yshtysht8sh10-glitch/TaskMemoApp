@@ -41,6 +41,37 @@ export function createFirebaseSyncAdapter(
   }
 
   return {
+    async auditOutbox(operations) {
+      const seen = new Set<string>();
+      for (const operation of operations) {
+        if (seen.has(operation.opId)) throw { kind: "permanent", message: "ローカルoutboxに重複operation IDがあります。復旧を停止しました。" };
+        seen.add(operation.opId);
+      }
+      let received = 0;
+      let missing = 0;
+      // Keep server reads bounded; never upload until every receipt is classified.
+      for (let offset = 0; offset < operations.length; offset += 8) {
+        const batch = operations.slice(offset, offset + 8);
+        const results = await Promise.all(batch.map(async (operation) => {
+          try {
+            const snapshot = await getDocFromServer(doc(db, "users", uid, "syncOperationsV2", operation.opId));
+            if (!snapshot.exists()) return false;
+            const data = snapshot.data();
+            const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
+            if (!sameOperation(data.operation, operation) || acknowledgement?.opId !== operation.opId ||
+                (acknowledgement.result !== "applied" && acknowledgement.result !== "superseded"))
+              throw { kind: "permanent", message: "Firebaseのoperation受領記録がローカルoutboxと矛盾します。復旧を停止しました。" };
+            return true;
+          } catch (reason) {
+            if (reason && typeof reason === "object" && "kind" in reason) throw reason;
+            throw adapterError(reason);
+          }
+        }));
+        received += results.filter(Boolean).length;
+        missing += results.filter((value) => !value).length;
+      }
+      return { received, missing };
+    },
     async connect() {
       try {
         const global = await getDocFromServer(doc(db, "syncControl", "current"));

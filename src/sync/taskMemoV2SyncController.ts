@@ -18,6 +18,7 @@ export class TaskMemoV2SyncController {
   private running = false;
   private generation = 0;
   private paused = false;
+  private receiptsAudited = false;
   private pinnedNoteTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly store: TaskMemoV2ApplicationStore, private readonly adapter: SyncAdapter, private readonly onChange: () => void = () => undefined) {
@@ -26,11 +27,15 @@ export class TaskMemoV2SyncController {
 
   async start() {
     this.stop();
+    this.receiptsAudited = false;
     const generation = this.generation;
     this.state = transitionSyncState(this.state, { type: "connect", pendingCount: this.store.pendingCount });
     try {
       await this.adapter.connect();
       if (generation !== this.generation) return;
+      await this.adapter.auditOutbox?.(this.store.outbox);
+      if (generation !== this.generation) return;
+      this.receiptsAudited = true;
       await this.store.initializePinnedNote(await this.adapter.readPinnedNote?.());
       await this.store.initializeFeatures(await this.adapter.readFeatures?.());
       await this.store.queuePinnedNoteOperation();
@@ -85,7 +90,7 @@ export class TaskMemoV2SyncController {
     await this.start();
   }
 
-  stop() { this.generation++; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; }
+  stop() { this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; }
 
   async updatePinnedNote(body: string, debounceMs = 500) {
     await this.store.setPinnedNoteDraft(body);
@@ -155,6 +160,7 @@ export class TaskMemoV2SyncController {
   }
 
   async flush() {
+    if (this.adapter.auditOutbox && !this.receiptsAudited) return;
     if (this.paused) {
       this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, kind: "offline", message: "Development offline simulation" });
       return;

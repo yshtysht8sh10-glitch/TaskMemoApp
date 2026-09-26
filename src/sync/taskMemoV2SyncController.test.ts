@@ -10,6 +10,7 @@ import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, Vers
 
 class MemoryPersistence implements ApplicationJournalPersistence { value: string | null = null; journal: string | null = null; loadCommitted = async () => this.value; loadJournal = async () => this.journal; writeJournal = async (v: string) => { this.journal = v; }; writeCommitted = async (v: string) => { this.value = v; }; clearJournal = async () => { this.journal = null; }; }
 class ListenerAdapter implements SyncAdapter {
+  auditOutbox?: SyncAdapter["auditOutbox"];
   server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); pinnedListeners = new Set<(record: VersionedPinnedNote) => void | Promise<void>>(); featureListeners = new Set<(record: VersionedFeatures) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
   async connect() { if (!this.online) throw { kind: "offline" }; }
   subscribe(onRecord: (record: VersionedNode) => void | Promise<void>) { this.listeners.add(onRecord); for (const id of this.initialIds) { const record = this.server.get(id); if (record) void onRecord(record); } return () => { this.listeners.delete(onRecord); }; }
@@ -24,6 +25,22 @@ const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sort
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it("does not upload, subscribe, or mutate profiles when receipt audit is contradictory", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [memo()], { deviceId: "device-a" });
+    await store.command("edit", "update", (nodes) => nodes.map((node) => node.id === "memo-a" ? { ...node, title: "edited" } : node));
+    const adapter = new ListenerAdapter();
+    const audit = vi.fn(async () => { throw { kind: "permanent", message: "receipt mismatch" }; });
+    adapter.auditOutbox = audit;
+    const subscribe = vi.spyOn(adapter, "subscribe");
+    const controller = new TaskMemoV2SyncController(store, adapter);
+    await controller.start();
+    expect(audit).toHaveBeenCalledWith(store.outbox);
+    expect(adapter.uploads).toHaveLength(0);
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(controller.state.phase).toBe("error");
+    await controller.flush();
+    expect(adapter.uploads).toHaveLength(0);
+  });
   it("syncs ideasEnabled both ways without adding History and restores an offline change after restart", async () => {
     const adapter = new ListenerAdapter();
     const persistenceA = new MemoryPersistence();

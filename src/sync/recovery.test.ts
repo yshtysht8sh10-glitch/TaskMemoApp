@@ -1,0 +1,64 @@
+import { describe, expect, it, vi } from "vitest";
+import { generateNKeysBetween } from "fractional-indexing";
+
+import type { ApplicationJournalPersistence } from "./applicationStore";
+import { recoverV2ApplicationAfterAudit } from "./recovery";
+import type { SyncAdapter } from "./types";
+
+class Persistence implements ApplicationJournalPersistence {
+  committed: string | null = null;
+  journal: string | null = null;
+  loadCommitted = async () => this.committed;
+  loadJournal = async () => this.journal;
+  writeJournal = async (value: string) => { this.journal = value; };
+  writeCommitted = async (value: string) => { this.committed = value; };
+  clearJournal = async () => { this.journal = null; };
+}
+
+const envelope = (nodes: number, outbox = 0) => {
+  const keys = generateNKeysBetween(null, null, nodes);
+  return JSON.stringify({
+  version: 2, deviceId: "device-a", nextLocalSeq: 2,
+  domain: Object.fromEntries(Array.from({ length: nodes }, (_, index) => [`node-${index}`, { value: {
+    id: `node-${index}`, type: "memo", parentId: null, sortKey: keys[index], title: `memo-${index}`, body: "", dueAt: null,
+    duePreset: "none", status: "active", completedAt: null, createdAt: "2026-09-26T00:00:00.000Z",
+    updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null,
+  }, revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
+  history: { past: [], future: [] }, sync: { outbox: Array.from({ length: outbox }, (_, index) => ({
+    opId: `device-a:${index + 1}`, deviceId: "device-a", localSeq: index + 1, targetNodeId: `node-${index % nodes}`,
+    type: "update", baseRevision: 0, payload: {}, createdAt: "2026-09-26T00:00:00.000Z",
+    status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
+  })), seenOpIds: [] },
+  profile: { pinnedNote: { localBody: "", synced: null, dirtySince: null, migrationPending: false, legacyUpdatedAt: null },
+    legacyPinnedNoteCandidates: [], features: { localIdeasEnabled: false, synced: null, migrationPending: false } },
+});
+};
+
+describe("journal recovery receipt barrier", () => {
+  it("preserves both snapshots exactly if Firebase audit is unknown", async () => {
+    const persistence = new Persistence();
+    persistence.committed = envelope(150, 969);
+    persistence.journal = envelope(151, 1024);
+    const auditOutbox = vi.fn(async (_operations: unknown[]) => { throw { kind: "offline", message: "unknown" }; });
+    const adapter = { connect: vi.fn(async () => undefined), auditOutbox } as unknown as SyncAdapter;
+    await expect(recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: "ignored" })).rejects.toMatchObject({ kind: "offline" });
+    expect(JSON.parse(persistence.committed!).domain).toHaveProperty("node-149");
+    expect(JSON.parse(persistence.journal!).domain).toHaveProperty("node-150");
+    expect(auditOutbox).toHaveBeenCalledTimes(1);
+    expect(auditOutbox.mock.calls[0][0]).toHaveLength(1024);
+  });
+
+  it("promotes the 151-Node journal only after a complete audit", async () => {
+    const persistence = new Persistence();
+    persistence.committed = envelope(150, 969);
+    persistence.journal = envelope(151, 1024);
+    const auditOutbox = vi.fn(async (_operations: unknown[]) => ({ received: 0, missing: 1024 }));
+    const adapter = { connect: vi.fn(async () => undefined), auditOutbox } as unknown as SyncAdapter;
+    const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: "ignored" });
+    expect(store.nodes).toHaveLength(151);
+    expect(persistence.journal).toBeNull();
+    expect(auditOutbox).toHaveBeenCalledTimes(1);
+    expect(auditOutbox.mock.calls[0][0]).toHaveLength(1024);
+    expect(store.outbox).toHaveLength(1024);
+  });
+});
