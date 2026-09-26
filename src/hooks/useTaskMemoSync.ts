@@ -29,6 +29,7 @@ const message = (reason: unknown) => reason instanceof Error ? reason.message : 
 function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void, initialIdeasEnabled: boolean, onIdeasEnabled: (value: boolean) => void) {
   const firebase = firebaseConfiguration();
   const observationOnly = Platform.OS === "web" && firebase.environment === "production" && process.env.EXPO_PUBLIC_RECOVERY_OBSERVATION_ONLY === "true";
+  const receiptReadMode = observationOnly && typeof window !== "undefined" && new URL(window.location.href).searchParams.get("receiptMode") === "serial" ? "serial" : "parallel";
   const configured = enabled && firebase.config !== null;
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<TaskMemoSyncStatus>(configured ? "connecting" : "disabled");
@@ -99,13 +100,17 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setUser(nextUser); setAuthReady(true); setError(null);
       if (!nextUser) { setStatus("signed-out"); return; }
       setStatus("connecting");
-      if (observationOnly) beginRecoveryObservation();
+      if (observationOnly) {
+        beginRecoveryObservation();
+        recordRecoveryObservation({ receiptReadMode, receiptLookupTimeoutMs: 10000 });
+      }
       try {
         // Never implicitly import V1 or the previous account's UI state.
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const adapterEnvironment = emulator ? "test" : firebase.environment === "production" ? "production" : "development";
         const adapter = createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator,
-          receiptLookupTimeoutMs: observationOnly ? 20000 : undefined,
+          receiptLookupTimeoutMs: observationOnly ? 10000 : undefined,
+          receiptReadMode: observationOnly ? receiptReadMode : undefined,
           onReceiptLookup: observationOnly ? recordReceiptLookup : undefined,
           onReceiptBatch: observationOnly ? (event) => recordRecoveryObservation({
             recoveryPhase: event.phase === "start" ? "receipt-batch-start" : "receipt-batch-complete",
@@ -154,7 +159,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       removeOnlineListener();
     };
-  }, [configured, ready, firebase.environment, observationOnly]);
+  }, [configured, ready, firebase.environment, observationOnly, receiptReadMode]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {

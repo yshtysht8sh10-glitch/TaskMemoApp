@@ -10,6 +10,7 @@ type AdapterOptions = {
   onReceiptBatch?: (event: { phase: "start" | "complete"; batch: number; completed: number; total: number; lastCompletedOperationIndex: number }) => void;
   onReceiptLookup?: (event: { batch: number; slot: number; operationIndex: number; phase: "start" | "found" | "not-found" | "error" | "timeout"; durationMs: number }) => void;
   receiptLookupTimeoutMs?: number;
+  receiptReadMode?: "parallel" | "serial";
 };
 
 const stableValue = (value: unknown): unknown => {
@@ -59,20 +60,20 @@ export function createFirebaseSyncAdapter(
         const batch = operations.slice(offset, offset + 8);
         const batchNumber = Math.floor(offset / 8) + 1;
         options.onReceiptBatch?.({ phase: "start", batch: batchNumber, completed: offset, total: operations.length, lastCompletedOperationIndex: offset - 1 });
-        const results = await Promise.all(batch.map(async (operation, slot) => {
+        const lookup = async (operation: SyncOperation, slot: number) => {
           const started = Date.now();
           const event = (phase: "start" | "found" | "not-found" | "error" | "timeout") =>
             options.onReceiptLookup?.({ batch: batchNumber, slot, operationIndex: offset + slot, phase, durationMs: Math.max(0, Date.now() - started) });
           event("start");
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
-            const lookup = getDocFromServer(doc(db, "users", uid, "syncOperationsV2", operation.opId));
+            const serverRead = getDocFromServer(doc(db, "users", uid, "syncOperationsV2", operation.opId));
             const timeoutMs = options.receiptLookupTimeoutMs;
             const snapshot = timeoutMs && timeoutMs > 0
-              ? await Promise.race([lookup, new Promise<never>((_, reject) => {
+              ? await Promise.race([serverRead, new Promise<never>((_, reject) => {
                 timer = setTimeout(() => reject({ kind: "temporary", code: "receipt-timeout", message: "Firebase receipt lookup timed out; recovery stopped." }), timeoutMs);
               })])
-              : await lookup;
+              : await serverRead;
             if (!snapshot.exists()) { event("not-found"); return false; }
             const data = snapshot.data();
             const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
@@ -88,7 +89,13 @@ export function createFirebaseSyncAdapter(
           } finally {
             if (timer) clearTimeout(timer);
           }
-        }));
+        };
+        const results: boolean[] = [];
+        if (options.receiptReadMode === "serial") {
+          for (let slot = 0; slot < batch.length; slot++) results.push(await lookup(batch[slot], slot));
+        } else {
+          results.push(...await Promise.all(batch.map(lookup)));
+        }
         received += results.filter(Boolean).length;
         missing += results.filter((value) => !value).length;
         options.onReceiptBatch?.({ phase: "complete", batch: batchNumber, completed: offset + batch.length, total: operations.length, lastCompletedOperationIndex: offset + batch.length - 1 });

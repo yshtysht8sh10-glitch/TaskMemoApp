@@ -10,6 +10,8 @@ export type RecoveryObservation = {
   lastProgressAt: string;
   firebaseConnectionState: "not-started" | "connecting" | "connected" | "error";
   lastRecoveryError: string | null;
+  receiptReadMode: "parallel" | "serial";
+  receiptLookupTimeoutMs: number;
   batchEvents: { batch: number; phase: "start" | "complete"; completed: number; at: string }[];
   lookupEvents: { batch: number; slot: number; operationIndex: number; phase: "start" | "found" | "not-found" | "error" | "timeout"; durationMs: number; at: string }[];
 };
@@ -23,6 +25,8 @@ const initial = (): RecoveryObservation => ({
   lastProgressAt: new Date().toISOString(),
   firebaseConnectionState: "not-started",
   lastRecoveryError: null,
+  receiptReadMode: "parallel",
+  receiptLookupTimeoutMs: 0,
   batchEvents: [],
   lookupEvents: [],
 });

@@ -121,6 +121,16 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 0, missing: 2 });
     await adapter.upload(operation);
     expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+    for (const receiptReadMode of ["parallel", "serial"] as const) {
+      const events: { slot: number; phase: string }[] = [];
+      const diagnostic = createFirebaseSyncAdapter(db, uid, "test", { emulator: true, receiptReadMode,
+        receiptLookupTimeoutMs: 10_000, onReceiptLookup: (event) => events.push(event) });
+      expect(await diagnostic.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ slot: 0, phase: "found" }),
+        expect.objectContaining({ slot: 1, phase: "not-found" }),
+      ]));
+    }
     await expect(adapter.auditOutbox?.([operation, operation])).rejects.toMatchObject({ kind: "permanent" });
     await expect(adapter.auditOutbox?.([{ ...operation, payload: { node: { id: "node-a", title: "wrong" } } }])).rejects.toMatchObject({ kind: "permanent" });
   });

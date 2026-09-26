@@ -38,6 +38,8 @@
         lastProgressAt: typeof saved.lastProgressAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(saved.lastProgressAt) ? saved.lastProgressAt : null,
         firebaseConnectionState: ['not-started', 'connecting', 'connected', 'error'].includes(saved.firebaseConnectionState) ? saved.firebaseConnectionState : 'invalid',
         lastRecoveryError: typeof saved.lastRecoveryError === 'string' && /^[a-z0-9/_-]{1,80}$/i.test(saved.lastRecoveryError) ? saved.lastRecoveryError : null,
+          receiptReadMode: saved.receiptReadMode === 'serial' || saved.receiptReadMode === 'parallel' ? saved.receiptReadMode : 'invalid',
+          receiptLookupTimeoutMs: count(saved.receiptLookupTimeoutMs),
         batchEvents: array(saved.batchEvents).slice(0, 512).map((item) => {
           const event = object(item);
           return {

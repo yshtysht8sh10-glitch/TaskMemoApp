@@ -23,6 +23,7 @@
     <h1>TaskMemo localStorage診断</h1>
     <p>このページはTaskMemo本体を起動しません。保存領域の読み取り結果をこの画面だけに表示します。診断結果にメモ内容、メールアドレス、認証情報、アカウント識別子は含めません。</p>
     <p><a href="/v2-recovery-backup?build=__TASKMEMO_DIAGNOSTIC_COMMIT__">V2復旧用の完全バックアップを作成する</a>（個人データを含むファイルとして保存）</p>
+    <p>照合の比較: <a href="/?receiptMode=parallel">8件並列で再観測</a> / <a href="/?receiptMode=serial">1件ずつ直列で再観測</a>。TaskMemo本体を開いたまま15秒以上前面で待ち、その後に設定からこの診断ページへ戻ってください。いずれも読み取り専用の安全停止モードです。</p>
     <div class="buttons">
       <button id="measure" type="button">診断を実行</button>
       <button id="copy" type="button">診断結果をコピー</button>

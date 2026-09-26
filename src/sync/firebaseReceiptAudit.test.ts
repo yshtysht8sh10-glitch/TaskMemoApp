@@ -70,9 +70,37 @@ describe("read-only Firebase receipt audit", () => {
       expect(batches).not.toContain("2:complete");
       expect(batches).not.toContain("3:start");
       expect(lookups).toContainEqual(expect.objectContaining({ batch: 2, slot: 0, operationIndex: 8, phase: "timeout" }));
+      expect(lookups.filter((event) => event.batch === 2 && event.phase === "start")).toHaveLength(8);
       expect(lookups).not.toContainEqual(expect.objectContaining({ operationIndex: 8, phase: "not-found" }));
       expect(lookups.every((event) => event.durationMs >= 0)).toBe(true);
       expect(state.writes).toBe(0);
     } finally { state.release?.(); state.blockedPath = null; state.release = null; }
+  });
+
+  it("serial observation stops at the first timed-out slot without starting later reads", async () => {
+    state.documents.clear(); state.writes = 0;
+    state.blockedPath = path(1);
+    const lookups: { slot: number; phase: string }[] = [];
+    try {
+      const audit = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
+        receiptReadMode: "serial", receiptLookupTimeoutMs: 10,
+        onReceiptLookup: (event) => lookups.push(event),
+      }).auditOutbox!(Array.from({ length: 8 }, (_, index) => operation(index + 1)));
+      await expect(audit).rejects.toMatchObject({ kind: "temporary", code: "receipt-timeout" });
+      expect(lookups).toMatchObject([{ slot: 0, phase: "start" }, { slot: 0, phase: "timeout" }]);
+      expect(state.writes).toBe(0);
+    } finally { state.release?.(); state.blockedPath = null; state.release = null; }
+  });
+
+  it("serial and parallel reads classify the same server receipts", async () => {
+    state.documents.clear(); state.writes = 0;
+    state.documents.set(path(1), receipt(operation(1)));
+    const operations = [operation(1), operation(2)];
+    const create = (receiptReadMode: "serial" | "parallel") => createFirebaseSyncAdapter(
+      { app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", { receiptReadMode },
+    ).auditOutbox!(operations);
+    expect(await create("serial")).toEqual({ received: 1, missing: 1 });
+    expect(await create("parallel")).toEqual({ received: 1, missing: 1 });
+    expect(state.writes).toBe(0);
   });
 });
