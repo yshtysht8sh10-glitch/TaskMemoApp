@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { beginRecoveryObservation, recordReceiptLookup, recordRecoveryObservation, recoveryErrorCode, RECOVERY_OBSERVATION_KEY } from "./recoveryObservation";
+import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation, recoveryErrorCode, RECOVERY_OBSERVATION_KEY } from "./recoveryObservation";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -22,6 +22,12 @@ describe("session-only recovery metadata", () => {
       timeoutScheduledAt: "2026-09-26T07:00:10.000Z", timeoutFiredAt: "2026-09-26T07:00:20.000Z", timeoutDelayMs: 10000 });
     expect(JSON.parse(session.get(RECOVERY_OBSERVATION_KEY)!).lookupEvents).toMatchObject([{ batch: 2, slot: 0, operationIndex: 8, phase: "timeout", durationMs: 20000 }]);
     expect(JSON.parse(session.get(RECOVERY_OBSERVATION_KEY)!)).toMatchObject({ receiptReadMode: "serial", receiptLookupIntervalMs: 100, receiptLookupTimeoutMs: 10000 });
+    const read = (phase: "start" | "retry" | "success" | "retry-success", attempt: number, returnedDocumentCount: number | null = null) =>
+      recordReceiptRead({ batch: 1, firstOperationIndex: 0, operationCount: 20, attempt, phase, durationMs: 10,
+        returnedDocumentCount, retryDelayMs: phase === "retry" ? 500 : null, timeoutDelayMs: null, at: "2026-09-26T07:00:00.000Z" });
+    read("start", 1); read("retry", 1); read("start", 2); read("success", 2, 4); read("retry-success", 2, 4);
+    expect(JSON.parse(session.get(RECOVERY_OBSERVATION_KEY)!)).toMatchObject({ receiptServerReadCalls: 2,
+      receiptServerDocumentsReturned: 4, receiptRetryCount: 1 });
     expect(localWrite).not.toHaveBeenCalled();
     expect(session.size).toBe(1);
   });

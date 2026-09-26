@@ -11,7 +11,7 @@ import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicatio
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "../sync/recovery";
-import { beginRecoveryObservation, recordReceiptLookup, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
+import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -30,7 +30,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const firebase = firebaseConfiguration();
   const observationOnly = Platform.OS === "web" && firebase.environment === "production" && process.env.EXPO_PUBLIC_RECOVERY_OBSERVATION_ONLY === "true";
   const receiptModeParameter = observationOnly && typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("receiptMode") : null;
-  const receiptReadMode = receiptModeParameter === "serial" || receiptModeParameter === "serial-interval-100" ? "serial" : "parallel";
+  const receiptReadMode = receiptModeParameter === "serial" || receiptModeParameter === "serial-interval-100" ? "serial"
+    : receiptModeParameter === "parallel" ? "parallel" : "chunked";
   const receiptLookupIntervalMs = receiptModeParameter === "serial-interval-100" ? 100 : 0;
   const configured = enabled && firebase.config !== null;
   const [user, setUser] = useState<User | null>(null);
@@ -104,7 +105,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setStatus("connecting");
       if (observationOnly) {
         beginRecoveryObservation();
-        recordRecoveryObservation({ receiptReadMode, receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs });
+        recordRecoveryObservation({ receiptReadMode, receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs,
+          receiptChunkSize: receiptReadMode === "chunked" ? 20 : 0, receiptMaxAttempts: receiptReadMode === "chunked" ? 3 : 1 });
       }
       try {
         // Never implicitly import V1 or the previous account's UI state.
@@ -115,6 +117,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           receiptReadMode: observationOnly ? receiptReadMode : undefined,
           receiptLookupIntervalMs: observationOnly ? receiptLookupIntervalMs : undefined,
           onReceiptLookup: observationOnly ? recordReceiptLookup : undefined,
+          onReceiptRead: observationOnly ? recordReceiptRead : undefined,
           onReceiptBatch: observationOnly ? (event) => recordRecoveryObservation({
             recoveryPhase: event.phase === "start" ? "receipt-batch-start" : "receipt-batch-complete",
             receiptComparisonTotal: event.total,

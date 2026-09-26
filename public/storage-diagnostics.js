@@ -40,9 +40,14 @@
         lastProgressAt: timestamp(saved.lastProgressAt),
         firebaseConnectionState: ['not-started', 'connecting', 'connected', 'error'].includes(saved.firebaseConnectionState) ? saved.firebaseConnectionState : 'invalid',
         lastRecoveryError: typeof saved.lastRecoveryError === 'string' && /^[a-z0-9/_-]{1,80}$/i.test(saved.lastRecoveryError) ? saved.lastRecoveryError : null,
-        receiptReadMode: saved.receiptReadMode === 'serial' || saved.receiptReadMode === 'parallel' ? saved.receiptReadMode : 'invalid',
+        receiptReadMode: ['chunked', 'serial', 'parallel'].includes(saved.receiptReadMode) ? saved.receiptReadMode : 'invalid',
         receiptLookupTimeoutMs: count(saved.receiptLookupTimeoutMs),
         receiptLookupIntervalMs: count(saved.receiptLookupIntervalMs),
+        receiptChunkSize: count(saved.receiptChunkSize),
+        receiptMaxAttempts: count(saved.receiptMaxAttempts),
+        receiptServerReadCalls: count(saved.receiptServerReadCalls),
+        receiptServerDocumentsReturned: count(saved.receiptServerDocumentsReturned),
+        receiptRetryCount: count(saved.receiptRetryCount),
         batchEvents: array(saved.batchEvents).slice(0, 512).map((item) => {
           const event = object(item);
           return {
@@ -65,6 +70,21 @@
             timeoutTimerSetAt: timestamp(event.timeoutTimerSetAt),
             timeoutScheduledAt: timestamp(event.timeoutScheduledAt),
             timeoutFiredAt: timestamp(event.timeoutFiredAt),
+            timeoutDelayMs: count(event.timeoutDelayMs),
+            at: timestamp(event.at),
+          };
+        }),
+        receiptReadEvents: array(saved.receiptReadEvents).slice(-64).map((item) => {
+          const event = object(item);
+          return {
+            batch: count(event.batch),
+            firstOperationIndex: count(event.firstOperationIndex),
+            operationCount: count(event.operationCount),
+            attempt: count(event.attempt),
+            phase: ['start', 'success', 'retry-success', 'timeout', 'error', 'retry', 'final-failure', 'late-resolve', 'late-reject'].includes(event.phase) ? event.phase : 'invalid',
+            durationMs: count(event.durationMs),
+            returnedDocumentCount: count(event.returnedDocumentCount),
+            retryDelayMs: count(event.retryDelayMs),
             timeoutDelayMs: count(event.timeoutDelayMs),
             at: timestamp(event.at),
           };

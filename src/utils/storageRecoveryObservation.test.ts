@@ -11,6 +11,8 @@ it("exports only validated recovery metadata, never injected IDs or private stri
   const stored = JSON.stringify({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7,
     receiptReadMode: "serial", receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs: 100,
+    receiptChunkSize: 20, receiptMaxAttempts: 3, receiptServerReadCalls: 2,
+    receiptServerDocumentsReturned: 4, receiptRetryCount: 1,
     lastProgressAt: "2026-09-26T07:00:00.000Z", firebaseConnectionState: "connected",
     lastRecoveryError: "private@example.com", opId: "SECRET_OP", title: "SECRET_TITLE",
     batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }],
@@ -18,6 +20,9 @@ it("exports only validated recovery metadata, never injected IDs or private stri
       startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001,
       timeoutTimerSetAt: "2026-09-26T07:00:00.000Z", timeoutScheduledAt: "2026-09-26T07:00:10.000Z",
       timeoutFiredAt: "2026-09-26T07:00:20.000Z", timeoutDelayMs: 10000,
+      at: "2026-09-26T07:00:20.000Z", opId: "SECRET_OP", title: "SECRET_TITLE" }],
+    receiptReadEvents: [{ batch: 1, firstOperationIndex: 0, operationCount: 20, attempt: 2, phase: "retry-success",
+      durationMs: 77, returnedDocumentCount: 4, retryDelayMs: null, timeoutDelayMs: null,
       at: "2026-09-26T07:00:20.000Z", opId: "SECRET_OP", title: "SECRET_TITLE" }] });
   runInNewContext(script, {
     document: {
@@ -33,6 +38,9 @@ it("exports only validated recovery metadata, never injected IDs or private stri
   expect(output.recoveryObservation).toMatchObject({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7, lastRecoveryError: null,
     receiptReadMode: "serial", receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs: 100 });
+  expect(output.recoveryObservation).toMatchObject({ receiptChunkSize: 20, receiptMaxAttempts: 3,
+    receiptServerReadCalls: 2, receiptServerDocumentsReturned: 4, receiptRetryCount: 1 });
+  expect(output.recoveryObservation.receiptReadEvents).toMatchObject([{ attempt: 2, phase: "retry-success", returnedDocumentCount: 4 }]);
   expect(output.recoveryObservation.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
   expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
     startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001, timeoutDelayMs: 10000 }]);

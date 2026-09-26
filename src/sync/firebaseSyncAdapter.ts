@@ -1,4 +1,4 @@
-import { collection, doc, getDocFromServer, onSnapshot, runTransaction, serverTimestamp, type Firestore } from "firebase/firestore";
+import { collection, doc, documentId, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, serverTimestamp, where, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
@@ -9,8 +9,9 @@ type AdapterOptions = {
   emulator?: boolean;
   onReceiptBatch?: (event: { phase: "start" | "complete"; batch: number; completed: number; total: number; lastCompletedOperationIndex: number }) => void;
   onReceiptLookup?: (event: ReceiptLookupEvent) => void;
+  onReceiptRead?: (event: ReceiptReadEvent) => void;
   receiptLookupTimeoutMs?: number;
-  receiptReadMode?: "parallel" | "serial";
+  receiptReadMode?: "chunked" | "parallel" | "serial";
   /** Diagnostic experiment only: pause after each completed serial receipt lookup. */
   receiptLookupIntervalMs?: number;
 };
@@ -28,6 +29,23 @@ export type ReceiptLookupEvent = {
   timeoutFiredAt: string | null;
   timeoutDelayMs: number | null;
 };
+
+export type ReceiptReadEvent = {
+  batch: number;
+  firstOperationIndex: number;
+  operationCount: number;
+  attempt: number;
+  phase: "start" | "success" | "retry-success" | "timeout" | "error" | "retry" | "final-failure" | "late-resolve" | "late-reject";
+  durationMs: number;
+  returnedDocumentCount: number | null;
+  retryDelayMs: number | null;
+  timeoutDelayMs: number | null;
+  at: string;
+};
+
+const RECEIPT_CHUNK_SIZE = 20; // Below Firestore's 30-disjunction `in` limit.
+const RECEIPT_MAX_ATTEMPTS = 3;
+const RECEIPT_RETRY_BASE_MS = 500;
 
 const monotonicNow = () => typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
 const diagnosticPause = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -75,10 +93,80 @@ export function createFirebaseSyncAdapter(
       let received = 0;
       let missing = 0;
       // Keep server reads bounded; never upload until every receipt is classified.
-      for (let offset = 0; offset < operations.length; offset += 8) {
-        const batch = operations.slice(offset, offset + 8);
-        const batchNumber = Math.floor(offset / 8) + 1;
+      const chunked = options.receiptReadMode !== "parallel" && options.receiptReadMode !== "serial";
+      const batchSize = chunked ? RECEIPT_CHUNK_SIZE : 8;
+      for (let offset = 0; offset < operations.length; offset += batchSize) {
+        const batch = operations.slice(offset, offset + batchSize);
+        const batchNumber = Math.floor(offset / batchSize) + 1;
         options.onReceiptBatch?.({ phase: "start", batch: batchNumber, completed: offset, total: operations.length, lastCompletedOperationIndex: offset - 1 });
+        if (chunked) {
+          // Query only the existing immutable receipt documents; a successful server snapshot also proves absence.
+          const receipts = query(collection(db, "users", uid, "syncOperationsV2"), where(documentId(), "in", batch.map((operation) => operation.opId)));
+          let documents: Map<string, Record<string, unknown>> | null = null;
+          for (let attempt = 1; attempt <= RECEIPT_MAX_ATTEMPTS; attempt++) {
+            const started = Date.now();
+            let timedOut = false;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            let timeoutDelayMs: number | null = null;
+            const event = (phase: ReceiptReadEvent["phase"], returnedDocumentCount: number | null = null, retryDelayMs: number | null = null) => {
+              try { options.onReceiptRead?.({ batch: batchNumber, firstOperationIndex: offset, operationCount: batch.length,
+                attempt, phase, durationMs: Math.max(0, Date.now() - started), returnedDocumentCount, retryDelayMs,
+                timeoutDelayMs, at: new Date().toISOString() }); }
+              catch { /* Diagnostic callbacks must not affect recovery. */ }
+            };
+            try {
+              const timeoutMs = options.receiptLookupTimeoutMs ?? 10_000;
+              const timeoutPromise = timeoutMs && timeoutMs > 0 ? new Promise<never>((_, reject) => {
+                const deadline = Date.now() + timeoutMs;
+                timer = setTimeout(() => {
+                  timedOut = true;
+                  timeoutDelayMs = Math.max(0, Date.now() - deadline);
+                  reject({ kind: "temporary", code: "receipt-timeout", message: "Firebase receipt read timed out; recovery stopped." });
+                }, timeoutMs);
+              }) : null;
+              event("start"); // Counts an actual getDocsFromServer invocation, not billable document reads.
+              const serverRead = getDocsFromServer(receipts);
+              void serverRead.then(() => { if (timedOut) event("late-resolve"); }, () => { if (timedOut) event("late-reject"); });
+              const snapshot = timeoutPromise ? await Promise.race([serverRead, timeoutPromise]) : await serverRead;
+              if (snapshot.metadata?.fromCache) throw { kind: "temporary", message: "Firebase receipt query returned cache data; recovery stopped." };
+              const requested = new Set(batch.map((operation) => operation.opId));
+              documents = new Map();
+              for (const document of snapshot.docs) {
+                if (!requested.has(document.id) || documents.has(document.id))
+                  throw { kind: "permanent", message: "Firebaseのreceipt queryに予期しないdocumentがあります。復旧を停止しました。" };
+                documents.set(document.id, document.data());
+              }
+              event("success", documents.size);
+              if (attempt > 1) event("retry-success", documents.size);
+              break;
+            } catch (reason) {
+              if (timer) { clearTimeout(timer); timer = undefined; }
+              const normalized = reason && typeof reason === "object" && "kind" in reason ? reason : adapterError(reason);
+              event(timedOut ? "timeout" : "error");
+              if (normalized.kind === "permanent" || attempt === RECEIPT_MAX_ATTEMPTS) {
+                event("final-failure");
+                throw normalized;
+              }
+              const retryDelayMs = RECEIPT_RETRY_BASE_MS * 2 ** (attempt - 1);
+              event("retry", null, retryDelayMs);
+              await diagnosticPause(retryDelayMs);
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }
+          if (!documents) throw { kind: "temporary", message: "Firebase receipt read did not complete." };
+          for (const operation of batch) {
+            const data = documents.get(operation.opId);
+            if (!data) { missing++; continue; }
+            const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
+            if (!sameOperation(data.operation, operation) || acknowledgement?.opId !== operation.opId ||
+                (acknowledgement.result !== "applied" && acknowledgement.result !== "superseded"))
+              throw { kind: "permanent", message: "Firebaseのoperation受領記録がローカルoutboxと矛盾します。復旧を停止しました。" };
+            received++;
+          }
+          options.onReceiptBatch?.({ phase: "complete", batch: batchNumber, completed: offset + batch.length, total: operations.length, lastCompletedOperationIndex: offset + batch.length - 1 });
+          continue;
+        }
         const lookup = async (operation: SyncOperation, slot: number) => {
           const started = Date.now();
           const startedAt = new Date(started).toISOString();

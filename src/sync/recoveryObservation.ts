@@ -1,5 +1,5 @@
 /** Diagnostic metadata only. Never store operation IDs, payloads, account IDs, or error messages. */
-import type { ReceiptLookupEvent } from "./firebaseSyncAdapter";
+import type { ReceiptLookupEvent, ReceiptReadEvent } from "./firebaseSyncAdapter";
 
 export const RECOVERY_OBSERVATION_KEY = "@taskmemo/recovery-observation/v1";
 
@@ -12,11 +12,17 @@ export type RecoveryObservation = {
   lastProgressAt: string;
   firebaseConnectionState: "not-started" | "connecting" | "connected" | "error";
   lastRecoveryError: string | null;
-  receiptReadMode: "parallel" | "serial";
+  receiptReadMode: "chunked" | "parallel" | "serial";
   receiptLookupTimeoutMs: number;
   receiptLookupIntervalMs: number;
+  receiptChunkSize: number;
+  receiptMaxAttempts: number;
+  receiptServerReadCalls: number;
+  receiptServerDocumentsReturned: number;
+  receiptRetryCount: number;
   batchEvents: { batch: number; phase: "start" | "complete"; completed: number; at: string }[];
   lookupEvents: (ReceiptLookupEvent & { at: string })[];
+  receiptReadEvents: ReceiptReadEvent[];
 };
 
 const initial = (): RecoveryObservation => ({
@@ -28,11 +34,17 @@ const initial = (): RecoveryObservation => ({
   lastProgressAt: new Date().toISOString(),
   firebaseConnectionState: "not-started",
   lastRecoveryError: null,
-  receiptReadMode: "parallel",
+  receiptReadMode: "chunked",
   receiptLookupTimeoutMs: 0,
   receiptLookupIntervalMs: 0,
+  receiptChunkSize: 20,
+  receiptMaxAttempts: 3,
+  receiptServerReadCalls: 0,
+  receiptServerDocumentsReturned: 0,
+  receiptRetryCount: 0,
   batchEvents: [],
   lookupEvents: [],
+  receiptReadEvents: [],
 });
 
 let current = initial();
@@ -56,7 +68,19 @@ export function recordRecoveryObservation(update: Partial<Omit<RecoveryObservati
 
 export function recordReceiptLookup(event: ReceiptLookupEvent) {
   const at = new Date().toISOString();
-  current = { ...current, lookupEvents: [...current.lookupEvents, { ...event, at }].slice(-32), lastProgressAt: at };
+  current = { ...current,
+    receiptServerReadCalls: current.receiptServerReadCalls + (event.phase === "start" ? 1 : 0),
+    receiptServerDocumentsReturned: current.receiptServerDocumentsReturned + (event.phase === "found" ? 1 : 0),
+    lookupEvents: [...current.lookupEvents, { ...event, at }].slice(-32), lastProgressAt: at };
+  persist();
+}
+
+export function recordReceiptRead(event: ReceiptReadEvent) {
+  current = { ...current,
+    receiptServerReadCalls: current.receiptServerReadCalls + (event.phase === "start" ? 1 : 0),
+    receiptServerDocumentsReturned: current.receiptServerDocumentsReturned + (event.phase === "success" ? event.returnedDocumentCount ?? 0 : 0),
+    receiptRetryCount: current.receiptRetryCount + (event.phase === "retry" ? 1 : 0),
+    receiptReadEvents: [...current.receiptReadEvents, event].slice(-64), lastProgressAt: event.at };
   persist();
 }
 

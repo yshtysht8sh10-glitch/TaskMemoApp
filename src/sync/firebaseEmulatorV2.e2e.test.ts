@@ -142,6 +142,24 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await expect(adapter.auditOutbox?.([{ ...operation, payload: { node: { id: "node-a", title: "wrong" } } }])).rejects.toMatchObject({ kind: "permanent" });
   });
 
+  it("reads 21 immutable receipt IDs as two server queries under the existing owner rules", async () => {
+    const uid = "owner";
+    const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
+    const events: { phase: string; operationCount: number }[] = [];
+    const adapter = createFirebaseSyncAdapter(db, uid, "test", { emulator: true,
+      onReceiptRead: (event) => events.push(event) });
+    const operations = Array.from({ length: 21 }, (_, index) => ({
+      opId: `chunk-device:${index + 1}`, deviceId: "chunk-device", localSeq: index + 1,
+      targetNodeId: `chunk-node-${index + 1}`, type: "create" as const, baseRevision: 0,
+      payload: { node: { id: `chunk-node-${index + 1}`, title: `item-${index + 1}` } },
+      createdAt: now(1).toISOString(), status: "pending" as const, attemptCount: 0, nextRetryAt: null, lastError: null,
+    }));
+    await adapter.upload(operations[0]);
+    await adapter.upload(operations[20]);
+    expect(await adapter.auditOutbox?.(operations)).toEqual({ received: 2, missing: 19 });
+    expect(events.filter((event) => event.phase === "start").map((event) => event.operationCount)).toEqual([20, 1]);
+  });
+
   it("runs two isolated devices through create, bidirectional edits, conflict, restart, replay, Undo/Redo, and backlog drain", async () => {
     const uid = "same-user";
     const dbA = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
