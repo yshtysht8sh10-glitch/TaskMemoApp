@@ -13,7 +13,10 @@
     "headers": [
       { "source": "/storage-diagnostics", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
       { "source": "/storage-diagnostics.html", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
-      { "source": "/storage-diagnostics.js", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] }
+      { "source": "/storage-diagnostics.js", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
+      { "source": "/v2-recovery-backup", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
+      { "source": "/v2-recovery-backup.html", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
+      { "source": "/v2-recovery-backup.js", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] }
     ],
     "cleanUrls": true,
     "rewrites": [{ "source": "**", "destination": "/index.html" }]
