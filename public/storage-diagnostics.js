@@ -21,6 +21,33 @@
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const array = (value) => Array.isArray(value) ? value : [];
   const operationTypes = new Set(['create', 'update', 'complete', 'uncomplete', 'softDelete', 'restore', 'purge', 'undo', 'redo', 'import']);
+  function operationTimestamp(operation) {
+    const rawDate = operation.createdAt;
+    return typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(rawDate)
+      ? Date.parse(rawDate) : NaN;
+  }
+  function timeClusters(timestamps) {
+    const sorted = timestamps.sort((a, b) => a - b);
+    const exact = new Map();
+    for (const timestamp of sorted) exact.set(timestamp, (exact.get(timestamp) || 0) + 1);
+    let maxOneSecondCount = 0;
+    let maxOneSecondStart = null;
+    let left = 0;
+    for (let right = 0; right < sorted.length; right++) {
+      while (sorted[right] - sorted[left] > 1000) left++;
+      if (right - left + 1 > maxOneSecondCount) {
+        maxOneSecondCount = right - left + 1;
+        maxOneSecondStart = sorted[left];
+      }
+    }
+    return {
+      maxExactTimestampCount: [...exact.values()].reduce((max, count) => Math.max(max, count), 0),
+      maxOneSecondWindowCount: maxOneSecondCount,
+      maxOneSecondWindowStart: maxOneSecondStart === null ? null : new Date(maxOneSecondStart).toISOString(),
+      topExactTimestampGroups: [...exact.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 10)
+        .map(([timestamp, count]) => ({ at: new Date(timestamp).toISOString(), count })),
+    };
+  }
   function outboxMetrics(operations) {
     const outboxTypeCounts = {};
     const seenIds = new Set();
@@ -29,6 +56,11 @@
     let invalidOperationDateCount = 0;
     let oldest = null;
     let newest = null;
+    const updateTargetTypeCounts = { node: 0, pinnedNote: 0, features: 0, other: 0 };
+    const updateNodeCounts = new Map();
+    const createNodeIds = new Set();
+    const updateTimestamps = [];
+    const createTimestamps = [];
     for (const item of operations) {
       const operation = object(item);
       const type = operationTypes.has(operation.type) ? operation.type : 'unknown';
@@ -36,13 +68,23 @@
       if (typeof operation.opId !== 'string' || !operation.opId) missingOperationIdCount++;
       else if (seenIds.has(operation.opId)) duplicateOperationIdCount++;
       else seenIds.add(operation.opId);
+      if (type === 'update') {
+        const target = operation.targetType === undefined || operation.targetType === 'node'
+          ? 'node' : Object.prototype.hasOwnProperty.call(updateTargetTypeCounts, operation.targetType) && operation.targetType !== 'other'
+            ? operation.targetType : 'other';
+        updateTargetTypeCounts[target]++;
+        if (target === 'node' && typeof operation.targetNodeId === 'string' && operation.targetNodeId)
+          updateNodeCounts.set(operation.targetNodeId, (updateNodeCounts.get(operation.targetNodeId) || 0) + 1);
+      }
+      if (type === 'create' && (operation.targetType === undefined || operation.targetType === 'node')
+        && typeof operation.targetNodeId === 'string' && operation.targetNodeId) createNodeIds.add(operation.targetNodeId);
       // Never output a raw stored string: only a validated, normalized timestamp.
-      const rawDate = operation.createdAt;
-      const timestamp = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(rawDate)
-        ? Date.parse(rawDate) : NaN;
+      const timestamp = operationTimestamp(operation);
       if (!Number.isFinite(timestamp)) { invalidOperationDateCount++; continue; }
       if (oldest === null || timestamp < oldest) oldest = timestamp;
       if (newest === null || timestamp > newest) newest = timestamp;
+      if (type === 'update') updateTimestamps.push(timestamp);
+      if (type === 'create') createTimestamps.push(timestamp);
     }
     return {
       outboxTypeCounts,
@@ -52,6 +94,13 @@
       oldestOperationAt: oldest === null ? null : new Date(oldest).toISOString(),
       newestOperationAt: newest === null ? null : new Date(newest).toISOString(),
       invalidOperationDateCount,
+      updateTargetTypeCounts,
+      updateUniqueNodeCount: updateNodeCounts.size,
+      updateMaxPerNodeCount: [...updateNodeCounts.values()].reduce((max, count) => Math.max(max, count), 0),
+      updateTimeClusters: timeClusters(updateTimestamps),
+      createUniqueNodeCount: createNodeIds.size,
+      createTimeClusters: timeClusters(createTimestamps),
+      sortKeyOnlyOperationCount: 'not-determinable-from-outbox-payload',
     };
   }
   function envelopeMetrics(raw) {
@@ -81,6 +130,7 @@
   }
   function collect(storage, metadata) {
     const entries = [];
+    const scopedOutboxes = new Map();
     let taskMemoTotalUtf16Bytes = 0;
     let otherTotalUtf16Bytes = 0;
     let otherKeyCount = 0;
@@ -110,11 +160,28 @@
         keyUtf16Bytes: bytes(key), valueUtf16Bytes: bytes(value), totalUtf16Bytes: size,
       };
       if (match) Object.assign(entry, envelopeMetrics(value));
+      if (match && entry.parse === 'ok') {
+        const root = JSON.parse(value);
+        const scope = key.slice(match[0].length);
+        const pair = scopedOutboxes.get(scope) || {};
+        pair[kind] = new Set(array(object(root.sync).outbox).map((item) => object(item).opId).filter((id) => typeof id === 'string' && id));
+        scopedOutboxes.set(scope, pair);
+      }
       entries.push(entry);
     }
     entries.sort((a, b) => a.keyName.localeCompare(b.keyName));
+    const outboxIdComparison = { comparedScopeCount: 0, commonCount: 0, applicationOnlyCount: 0, journalOnlyCount: 0 };
+    for (const pair of scopedOutboxes.values()) {
+      if (!pair['v2-committed'] || !pair['v2-journal']) continue;
+      outboxIdComparison.comparedScopeCount++;
+      for (const id of pair['v2-committed']) {
+        if (pair['v2-journal'].has(id)) outboxIdComparison.commonCount++;
+        else outboxIdComparison.applicationOnlyCount++;
+      }
+      for (const id of pair['v2-journal']) if (!pair['v2-committed'].has(id)) outboxIdComparison.journalOnlyCount++;
+    }
     return JSON.stringify({
-      diagnosticVersion: 1,
+      diagnosticVersion: 2,
       appVersion: metadata.version,
       appCommit: metadata.commit,
       origin: metadata.origin,
@@ -127,6 +194,7 @@
       otherKeyCount,
       unknownTaskMemoKeyCount,
       unknownTaskMemoUtf16Bytes,
+      outboxIdComparison,
       entries,
     }, null, 2);
   }
