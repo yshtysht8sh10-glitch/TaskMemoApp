@@ -6,7 +6,7 @@ import type { TaskMemoEnvironment } from '@/services/firebaseConfig';
 import { useAppTheme, type ThemeColors } from '@/theme/theme';
 
 type Props = { protocol: 1 | 2; devNetwork?: { paused: boolean; toggle: () => Promise<void> }; configured: boolean; environment: TaskMemoEnvironment | null; configurationError: string | null; user: User | null; status: TaskMemoSyncStatus; error: string | null; onSignIn: (email: string, password: string) => Promise<void>; onSignUp: (email: string, password: string) => Promise<void>; onSignOut: () => Promise<void> };
-const labels: Record<TaskMemoSyncStatus, string> = { disabled: '未設定', 'signed-out': '未ログイン', connecting: '接続中…', synced: '同期済み', pending: '送信待ち', retrying: '再送中', offline: 'オフライン（ローカル保存中）', error: '同期エラー' };
+const labels: Record<TaskMemoSyncStatus, string> = { disabled: '未設定', 'signed-out': '未ログイン', connecting: '接続中…', diagnostic: '復旧診断のため安全停止', synced: '同期済み', pending: '送信待ち', retrying: '再送中', offline: 'オフライン（ローカル保存中）', error: '同期エラー' };
 
 export function SyncAccountPanel({ protocol, devNetwork, configured, environment, configurationError, user, status, error, onSignIn, onSignUp, onSignOut }: Props) {
   const styles = createStyles(useAppTheme().colors); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [busy, setBusy] = useState(false);

@@ -5,7 +5,10 @@ import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperatio
 import { validateCompatibilityGate } from "./compatibilityGate";
 import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode } from "./types";
 
-type AdapterOptions = { emulator?: boolean };
+type AdapterOptions = {
+  emulator?: boolean;
+  onReceiptBatch?: (event: { phase: "start" | "complete"; batch: number; completed: number; total: number; lastCompletedOperationIndex: number }) => void;
+};
 
 const stableValue = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -52,6 +55,8 @@ export function createFirebaseSyncAdapter(
       // Keep server reads bounded; never upload until every receipt is classified.
       for (let offset = 0; offset < operations.length; offset += 8) {
         const batch = operations.slice(offset, offset + 8);
+        const batchNumber = Math.floor(offset / 8) + 1;
+        options.onReceiptBatch?.({ phase: "start", batch: batchNumber, completed: offset, total: operations.length, lastCompletedOperationIndex: offset - 1 });
         const results = await Promise.all(batch.map(async (operation) => {
           try {
             const snapshot = await getDocFromServer(doc(db, "users", uid, "syncOperationsV2", operation.opId));
@@ -69,6 +74,7 @@ export function createFirebaseSyncAdapter(
         }));
         received += results.filter(Boolean).length;
         missing += results.filter((value) => !value).length;
+        options.onReceiptBatch?.({ phase: "complete", batch: batchNumber, completed: offset + batch.length, total: operations.length, lastCompletedOperationIndex: offset + batch.length - 1 });
       }
       return { received, missing };
     },

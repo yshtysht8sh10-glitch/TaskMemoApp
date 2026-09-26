@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { generateNKeysBetween } from "fractional-indexing";
 
 import type { ApplicationJournalPersistence } from "./applicationStore";
-import { recoverV2ApplicationAfterAudit } from "./recovery";
+import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "./recovery";
 import type { SyncAdapter } from "./types";
 
 class Persistence implements ApplicationJournalPersistence {
@@ -35,6 +35,24 @@ const envelope = (nodes: number, outbox = 0) => {
 };
 
 describe("journal recovery receipt barrier", () => {
+  it("records receipt progress but never promotes or clears the journal in observation mode", async () => {
+    const persistence = new Persistence();
+    persistence.committed = envelope(150, 969);
+    persistence.journal = envelope(151, 1024);
+    const committed = persistence.committed;
+    const journal = persistence.journal;
+    const writeCommitted = vi.spyOn(persistence, "writeCommitted");
+    const clearJournal = vi.spyOn(persistence, "clearJournal");
+    const progress = vi.fn();
+    const adapter = { connect: vi.fn(async () => undefined), auditOutbox: vi.fn(async () => ({ received: 900, missing: 124 })) } as unknown as SyncAdapter;
+    expect(await observePendingJournalReceipts(persistence, adapter, progress)).toBe(true);
+    expect(progress).toHaveBeenCalledWith(expect.objectContaining({ recoveryPhase: "firebase-connect-start", receiptComparisonTotal: 1024 }));
+    expect(progress).toHaveBeenCalledWith(expect.objectContaining({ recoveryPhase: "receipt-comparison-complete", receiptComparisonCompleted: 1024 }));
+    expect(writeCommitted).not.toHaveBeenCalled();
+    expect(clearJournal).not.toHaveBeenCalled();
+    expect(persistence.committed).toBe(committed);
+    expect(persistence.journal).toBe(journal);
+  });
   it("preserves both snapshots exactly if Firebase audit is unknown", async () => {
     const persistence = new Persistence();
     persistence.committed = envelope(150, 969);

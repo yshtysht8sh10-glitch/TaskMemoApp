@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
+import { observePendingJournalReceipts } from "./recovery";
+import type { SyncAdapter } from "./types";
 import type { MemoNode } from "../models/node";
 
 const storage = vi.hoisted(() => new Map<string, string>());
@@ -32,6 +34,9 @@ describe("IndexedDB V2 migration", () => {
     const migrated = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
     expect(await migrated.loadCommitted()).toBe(committed);
     expect(await migrated.loadJournal()).toBe(journal);
+    const observed = await IndexedDbTaskMemoApplicationJournal.open("account", factory, { allowLegacyCopy: false });
+    expect(await observed.loadCommitted()).toBe(committed);
+    expect(await observed.loadJournal()).toBe(journal);
     await migrated.writeCommitted(journal);
     await migrated.clearJournal();
     const reopened = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
@@ -53,6 +58,33 @@ describe("IndexedDB V2 migration", () => {
     await legacy.writeJournal("not-json");
     await expect(IndexedDbTaskMemoApplicationJournal.open("account", factory)).rejects.toThrow();
     expect(await legacy.loadJournal()).toBe("not-json");
+  });
+
+  it("does not create an IndexedDB recovery candidate in observation-only mode", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    await legacy.writeCommitted(envelope(150, 969));
+    await legacy.writeJournal(envelope(151, 1024));
+    const original = new Map(storage);
+    await expect(IndexedDbTaskMemoApplicationJournal.open("account", factory, { allowLegacyCopy: false })).rejects.toThrow("存在しないIndexedDB");
+    expect(storage).toEqual(original);
+    expect((await factory.databases()).some((item) => item.name === "taskmemo-v2-local-application")).toBe(false);
+  });
+
+  it("observes all 1024 receipts without changing either 150/151 snapshot", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const committed = envelope(150, 969);
+    const journal = envelope(151, 1024);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    const original = new Map(storage);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory, { allowLegacyCopy: false });
+    const auditOutbox = vi.fn(async (operations: unknown[]) => ({ received: 0, missing: operations.length }));
+    const adapter = { connect: vi.fn(async () => undefined), auditOutbox } as unknown as SyncAdapter;
+    expect(await observePendingJournalReceipts(persistence, adapter, () => undefined)).toBe(true);
+    expect(auditOutbox.mock.calls[0][0]).toHaveLength(1024);
+    expect(await persistence.loadCommitted()).toBe(committed);
+    expect(await persistence.loadJournal()).toBe(journal);
+    expect(storage).toEqual(original);
   });
 
   it("leaves both legacy snapshots intact when IndexedDB cannot open", async () => {

@@ -21,6 +21,35 @@
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const array = (value) => Array.isArray(value) ? value : [];
   const operationTypes = new Set(['create', 'update', 'complete', 'uncomplete', 'softDelete', 'restore', 'purge', 'undo', 'redo', 'import']);
+  const recoveryPhases = new Set(['starting', 'indexeddb-open-start', 'indexeddb-open-complete', 'firebase-connect-start', 'firebase-connect-complete', 'receipt-batch-start', 'receipt-batch-complete', 'receipt-comparison-complete', 'observation-paused', 'error']);
+  function recoveryObservation(storage) {
+    try {
+      const raw = storage && storage.getItem('@taskmemo/recovery-observation/v1');
+      if (!raw) return { recoveryPhase: 'not-recorded' };
+      const saved = object(JSON.parse(raw));
+      const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+      const index = (value) => Number.isSafeInteger(value) && value >= -1 ? value : null;
+      return {
+        recoveryPhase: recoveryPhases.has(saved.recoveryPhase) ? saved.recoveryPhase : 'invalid',
+        receiptComparisonTotal: count(saved.receiptComparisonTotal),
+        receiptComparisonCompleted: count(saved.receiptComparisonCompleted),
+        currentBatch: count(saved.currentBatch),
+        lastCompletedOperationIndex: index(saved.lastCompletedOperationIndex),
+        lastProgressAt: typeof saved.lastProgressAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(saved.lastProgressAt) ? saved.lastProgressAt : null,
+        firebaseConnectionState: ['not-started', 'connecting', 'connected', 'error'].includes(saved.firebaseConnectionState) ? saved.firebaseConnectionState : 'invalid',
+        lastRecoveryError: typeof saved.lastRecoveryError === 'string' && /^[a-z0-9/_-]{1,80}$/i.test(saved.lastRecoveryError) ? saved.lastRecoveryError : null,
+        batchEvents: array(saved.batchEvents).slice(0, 512).map((item) => {
+          const event = object(item);
+          return {
+            batch: count(event.batch),
+            phase: event.phase === 'start' || event.phase === 'complete' ? event.phase : 'invalid',
+            completed: count(event.completed),
+            at: typeof event.at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(event.at) ? event.at : null,
+          };
+        }),
+      };
+    } catch { return { recoveryPhase: 'unavailable' }; }
+  }
   function operationTimestamp(operation) {
     const rawDate = operation.createdAt;
     return typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(rawDate)
@@ -187,6 +216,7 @@
       origin: metadata.origin,
       displayMode: metadata.displayMode,
       firebaseReceiptComparison: 'not-performed',
+      recoveryObservation: metadata.recoveryObservation,
       sizeUnit: 'estimated UTF-16 bytes; not physical disk usage',
       taskMemoTotalUtf16Bytes,
       otherTotalUtf16Bytes,
@@ -207,6 +237,7 @@
         commit: document.querySelector('meta[name="taskmemo-commit"]').content,
         origin: location.origin,
         displayMode: navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser-or-unknown',
+        recoveryObservation: recoveryObservation(window.sessionStorage),
       };
       result.value = collect(window.localStorage, metadata);
       status.textContent = metadata.displayMode === 'standalone'

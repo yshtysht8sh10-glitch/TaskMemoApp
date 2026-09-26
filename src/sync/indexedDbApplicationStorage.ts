@@ -26,12 +26,19 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-async function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
-  const request = factory.open(DATABASE_NAME, 1);
+async function openDatabase(factory: IDBFactory, allowLegacyCopy: boolean): Promise<IDBDatabase> {
+  if (!allowLegacyCopy) {
+    if (typeof factory.databases !== "function" || !(await factory.databases()).some((item) => item.name === DATABASE_NAME))
+      throw new Error("観測専用モードでは存在しないIndexedDBを作成しません。");
+  }
+  const request = allowLegacyCopy ? factory.open(DATABASE_NAME, 1) : factory.open(DATABASE_NAME);
   request.onupgradeneeded = () => {
+    if (!allowLegacyCopy) { request.transaction?.abort(); return; }
     if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: "scope" });
   };
-  return requestResult(request);
+  const database = await requestResult(request);
+  if (!database.objectStoreNames.contains(STORE_NAME)) { database.close(); throw new Error("IndexedDBのV2保存領域が見つかりません。"); }
+  return database;
 }
 
 async function fingerprint(committed: string | null, journal: string | null): Promise<string> {
@@ -58,7 +65,7 @@ function validateEnvelope(raw: string | null) {
 export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPersistence {
   private constructor(private readonly database: IDBDatabase, private readonly scope: string) {}
 
-  static async open(scope: string, factory?: IDBFactory) {
+  static async open(scope: string, factory?: IDBFactory, options: { allowLegacyCopy?: boolean } = {}) {
     const selectedFactory = factory ?? globalThis.indexedDB;
     if (!selectedFactory) throw new Error("IndexedDBを利用できません。V2データの移行を中止しました。");
     const legacy = new TaskMemoV2ApplicationJournal(scope);
@@ -68,7 +75,7 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
     if (committedEnvelope && journalEnvelope && committedEnvelope.deviceId !== journalEnvelope.deviceId)
       throw new Error("applicationとjournalの端末識別が一致しません。移行を中止しました。");
     const legacyFingerprint = await fingerprint(committed, journal);
-    const database = await openDatabase(selectedFactory);
+    const database = await openDatabase(selectedFactory, options.allowLegacyCopy !== false);
     try {
       const adapter = new IndexedDbTaskMemoApplicationJournal(database, scope);
       const existing = await adapter.read();
@@ -85,6 +92,8 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
           throw new Error("移行後に旧localStorageが変更されています。自動復旧を停止しました。");
         return adapter;
       }
+      if (options.allowLegacyCopy === false)
+        throw new Error("観測専用モードではIndexedDBへ新規コピーを作成しません。");
       // Preserve both exact snapshots. A single transaction either installs all of them or none.
       const stored: StoredScope = { scope, committed, journal, legacyFingerprint };
       const transaction = database.transaction(STORE_NAME, "readwrite");
