@@ -59,6 +59,39 @@ describe("read-only recovery preflight", () => {
     expect(conflicted.decision).toBe("blocked");
   });
 
+  it("separates static remote revisions from per-operation conflicts and reports anonymous counts", () => {
+    const remote = record("node", 2);
+    const journal = record("node", 5);
+    const ops = [operation("device:1", "node", "update", 1),
+      operation("device:2", "node", "update", 5),
+      operation("device:3", "node", "create", 2)];
+    const report = compareRecoveryState(envelope([remote]), envelope([journal], ops),
+      { nodes: [remote], receiptDocumentCount: 0 }, true);
+    expect(report.remoteRevisionConflictCount).toBe(0);
+    expect(report.dryRunConflictCount).toBe(3);
+    expect(report.dryRunConflictByType).toMatchObject({ update: 2, create: 1 });
+    expect(report.dryRunConflictByReason).toEqual({ staleBaseRevision: 1, futureBaseRevision: 1,
+      createTargetExists: 1, candidateSuperseded: 0 });
+    expect(report.dryRunConflictNodeCount).toBe(1);
+    expect(report.dryRunConflictCountsPerNodeDescending).toEqual([3]);
+    expect(JSON.stringify(report)).not.toMatch(/device:|"node"|private-title/);
+  });
+
+  it("distinguishes Node existence, revision, sortKey, metadata, visible content and unknown fields", () => {
+    const make = (id: string) => ({ ...record(id), value: { ...record(id).value, sortKey: "a", updatedAt: "old", title: "same" } });
+    const expected = [make("exact"), make("revision"), make("sort"), make("metadata"), make("content"), make("other"), make("journal-only")];
+    const simulated = [make("exact"), { ...make("revision"), revision: 1 },
+      { ...make("sort"), value: { ...make("sort").value, sortKey: "b" } },
+      { ...make("metadata"), value: { ...make("metadata").value, updatedAt: "new" } },
+      { ...make("content"), value: { ...make("content").value, title: "changed" } },
+      { ...make("other"), value: { ...make("other").value, unknownField: "changed" } }, make("remote-only")];
+    const report = compareRecoveryState(envelope([]), envelope(expected),
+      { nodes: simulated, receiptDocumentCount: 0 }, true);
+    expect(report.dryRunJournalNodeDifference).toEqual({ exactRecord: 1, dryRunOnly: 1, journalOnly: 1,
+      revisionOnly: 1, sortKeyOnly: 1, metadataOnly: 1, userContent: 1, other: 1,
+      noUserContentDifference: 4 });
+  });
+
   it("never writes committed, journal, outbox or Firebase when a local copy disagrees", async () => {
     const raw = JSON.stringify(envelope([record("existing")]));
     const persistence: ApplicationJournalPersistence = {

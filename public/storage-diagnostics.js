@@ -60,6 +60,17 @@
             'dryRunSuccessCount', 'dryRunDuplicateCount', 'dryRunMissingCount', 'dryRunConflictCount',
             'dryRunInconsistencyCount', 'dryRunNodeCount'];
           return { ...Object.fromEntries(fields.map((field) => [field, count(p[field])])),
+            dryRunConflictByType: Object.fromEntries([...operationTypes].map((type) => [type, count(object(p.dryRunConflictByType)[type])])),
+            dryRunConflictByReason: Object.fromEntries(['staleBaseRevision', 'futureBaseRevision', 'createTargetExists', 'candidateSuperseded']
+              .map((reason) => [reason, count(object(p.dryRunConflictByReason)[reason])])),
+            dryRunConflictNodeCount: count(p.dryRunConflictNodeCount),
+            dryRunConflictMaxPerNode: count(p.dryRunConflictMaxPerNode),
+            dryRunConflictCountsPerNodeDescending: array(p.dryRunConflictCountsPerNodeDescending).slice(0, 10000).map(count),
+            dryRunConflictNodeFrequency: Object.fromEntries(['once', 'twoToFour', 'fiveToNine', 'tenOrMore']
+              .map((bucket) => [bucket, count(object(p.dryRunConflictNodeFrequency)[bucket])])),
+            dryRunJournalNodeDifference: Object.fromEntries(['exactRecord', 'dryRunOnly', 'journalOnly', 'revisionOnly', 'sortKeyOnly',
+              'metadataOnly', 'userContent', 'other', 'noUserContentDifference']
+              .map((category) => [category, count(object(p.dryRunJournalNodeDifference)[category])])),
             localCopyMatches: p.localCopyMatches === true,
             dryRunMatchesJournal: p.dryRunMatchesJournal === true,
             remoteSnapshotAtomic: p.remoteSnapshotAtomic === true,

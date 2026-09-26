@@ -33,8 +33,31 @@ export type RecoveryPreflight = {
   dryRunDuplicateCount: number;
   dryRunMissingCount: number;
   dryRunConflictCount: number;
+  dryRunConflictByType: Record<SyncOperation["type"], number>;
+  dryRunConflictByReason: {
+    staleBaseRevision: number;
+    futureBaseRevision: number;
+    createTargetExists: number;
+    candidateSuperseded: number;
+  };
+  dryRunConflictNodeCount: number;
+  dryRunConflictMaxPerNode: number;
+  /** Sorted counts only; no positional link to Node IDs. */
+  dryRunConflictCountsPerNodeDescending: number[];
+  dryRunConflictNodeFrequency: { once: number; twoToFour: number; fiveToNine: number; tenOrMore: number };
   dryRunInconsistencyCount: number;
   dryRunNodeCount: number;
+  dryRunJournalNodeDifference: {
+    exactRecord: number;
+    dryRunOnly: number;
+    journalOnly: number;
+    revisionOnly: number;
+    sortKeyOnly: number;
+    metadataOnly: number;
+    userContent: number;
+    other: number;
+    noUserContentDifference: number;
+  };
   dryRunMatchesJournal: boolean;
   remoteSnapshotAtomic: false;
   decision: "blocked" | "review-required";
@@ -43,6 +66,29 @@ export type RecoveryPreflight = {
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) =>
   item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+
+const operationTypes = ["create", "update", "complete", "uncomplete", "softDelete", "restore", "purge", "undo", "redo", "import"] as const;
+const userContentFields = new Set(["type", "parentId", "title", "body", "memoType", "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "repeatRule", "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt", "deletionBatchId", "purgedAt"]);
+const timestampFields = new Set(["createdAt", "updatedAt"]);
+
+/** Mutually exclusive differences; unknown fields are never silently treated as metadata. */
+function classifyNodeDifference(actual: VersionedNode, expected: VersionedNode) {
+  if (canonical(actual) === canonical(expected)) return "exactRecord" as const;
+  const actualValue = actual.value as Record<string, unknown>;
+  const expectedValue = expected.value as Record<string, unknown>;
+  const changed = new Set([...Object.keys(actualValue), ...Object.keys(expectedValue)]
+    .filter((field) => canonical(actualValue[field]) !== canonical(expectedValue[field])));
+  if ([...changed].some((field) => userContentFields.has(field))) return "userContent" as const;
+  if ([...changed].some((field) => field !== "sortKey" && !timestampFields.has(field))) return "other" as const;
+  const sortKey = changed.has("sortKey");
+  const metadata = [...changed].some((field) => timestampFields.has(field)) ||
+    canonical({ lastOpId: actual.lastOpId, lastDeviceId: actual.lastDeviceId, lastLocalSeq: actual.lastLocalSeq, operationType: actual.operationType }) !==
+    canonical({ lastOpId: expected.lastOpId, lastDeviceId: expected.lastDeviceId, lastLocalSeq: expected.lastLocalSeq, operationType: expected.operationType });
+  const revision = actual.revision !== expected.revision;
+  const numberOfGroups = Number(sortKey) + Number(metadata) + Number(revision);
+  if (numberOfGroups !== 1) return "other" as const;
+  return sortKey ? "sortKeyOnly" as const : revision ? "revisionOnly" as const : "metadataOnly" as const;
+}
 
 function parseEnvelope(raw: string | null): Envelope {
   if (!raw) throw { code: "preflight-missing-local" };
@@ -95,11 +141,24 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
   let simulatedPinned = remote.pinnedNote, simulatedFeatures = remote.features;
   let dryRunSuccessCount = 0, dryRunDuplicateCount = 0, dryRunMissingCount = 0;
   let dryRunConflictCount = 0, dryRunInconsistencyCount = 0;
+  const dryRunConflictByType = Object.fromEntries(operationTypes.map((type) => [type, 0])) as RecoveryPreflight["dryRunConflictByType"];
+  const dryRunConflictByReason: RecoveryPreflight["dryRunConflictByReason"] = {
+    staleBaseRevision: 0, futureBaseRevision: 0, createTargetExists: 0, candidateSuperseded: 0,
+  };
+  const conflictByNode = new Map<string, number>();
+  const conflict = (operation: SyncOperation, reason: keyof RecoveryPreflight["dryRunConflictByReason"]) => {
+    dryRunConflictCount++;
+    if (operationTypes.includes(operation.type)) dryRunConflictByType[operation.type]++;
+    dryRunConflictByReason[reason]++;
+    if ((operation.targetType ?? "node") === "node")
+      conflictByNode.set(operation.targetNodeId, (conflictByNode.get(operation.targetNodeId) ?? 0) + 1);
+  };
   const seen = new Set<string>();
   for (const operation of journal.sync.outbox) {
     if (!operation || typeof operation.opId !== "string" || !operation.opId || seen.has(operation.opId) ||
         !Number.isSafeInteger(operation.baseRevision) || operation.baseRevision < 0 ||
-        !Number.isSafeInteger(operation.localSeq) || !operation.targetNodeId) {
+        !Number.isSafeInteger(operation.localSeq) || !operation.targetNodeId ||
+        !operationTypes.includes(operation.type)) {
       dryRunInconsistencyCount++; continue;
     }
     seen.add(operation.opId);
@@ -119,21 +178,49 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     if (!current && operation.type !== "create" && operation.type !== "import") {
       dryRunMissingCount++; continue;
     }
-    if ((current && current.revision !== operation.baseRevision) ||
-        (current && (operation.type === "create" || operation.type === "import"))) {
-      dryRunConflictCount++; continue;
+    if (current && (operation.type === "create" || operation.type === "import")) {
+      conflict(operation, "createTargetExists"); continue;
+    }
+    if (current && current.revision > operation.baseRevision) {
+      conflict(operation, "staleBaseRevision"); continue;
+    }
+    if (current && current.revision < operation.baseRevision) {
+      conflict(operation, "futureBaseRevision"); continue;
     }
     try {
       const result = target === "node" ? applyRevisionOperation(current as VersionedNode | undefined, operation)
         : target === "pinnedNote" ? applyPinnedNoteOperation(current as VersionedPinnedNote | undefined, operation)
           : applyFeaturesOperation(current as VersionedFeatures | undefined, operation);
-      if (result.result !== "applied") { dryRunConflictCount++; continue; }
+      if (result.result !== "applied") { conflict(operation, "candidateSuperseded"); continue; }
       if (result.record) records.set(operation.targetNodeId, result.record);
       if (result.pinnedNoteRecord) simulatedPinned = result.pinnedNoteRecord;
       if (result.featuresRecord) simulatedFeatures = result.featuresRecord;
       dryRunSuccessCount++;
     } catch { dryRunInconsistencyCount++; }
   }
+  const dryRunConflictNodeFrequency = { once: 0, twoToFour: 0, fiveToNine: 0, tenOrMore: 0 };
+  for (const count of conflictByNode.values()) {
+    if (count === 1) dryRunConflictNodeFrequency.once++;
+    else if (count < 5) dryRunConflictNodeFrequency.twoToFour++;
+    else if (count < 10) dryRunConflictNodeFrequency.fiveToNine++;
+    else dryRunConflictNodeFrequency.tenOrMore++;
+  }
+  const dryRunJournalNodeDifference: RecoveryPreflight["dryRunJournalNodeDifference"] = {
+    exactRecord: 0, dryRunOnly: 0, journalOnly: 0, revisionOnly: 0, sortKeyOnly: 0,
+    metadataOnly: 0, userContent: 0, other: 0, noUserContentDifference: 0,
+  };
+  for (const [id, record] of records) {
+    const expected = journal.domain[id];
+    if (!expected) { dryRunJournalNodeDifference.dryRunOnly++; continue; }
+    const category = classifyNodeDifference(record, expected);
+    dryRunJournalNodeDifference[category]++;
+    const fields = new Set([...Object.keys(record.value), ...Object.keys(expected.value)]);
+    if ([...fields].every((field) => canonical(record.value[field]) === canonical(expected.value[field]) ||
+        field === "sortKey" || timestampFields.has(field)))
+      dryRunJournalNodeDifference.noUserContentDifference++;
+  }
+  for (const id of Object.keys(journal.domain))
+    if (!records.has(id)) dryRunJournalNodeDifference.journalOnly++;
   const dryRunMatchesJournal = records.size === Object.keys(journal.domain).length &&
     [...records].every(([id, record]) => canonical(record) === canonical(journal.domain[id])) &&
     canonical(simulatedPinned ?? null) === canonical(pinned?.synced ?? null) &&
@@ -153,7 +240,11 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     auditedReceivedCount, auditedMissingCount,
     nodeMatchCount, remoteOnlyNodeCount, journalOnlyNodeCount, nodeContentMismatchCount,
     remoteRevisionConflictCount, profileMismatchCount, dryRunSuccessCount, dryRunDuplicateCount,
-    dryRunMissingCount, dryRunConflictCount, dryRunInconsistencyCount, dryRunNodeCount: records.size,
+    dryRunMissingCount, dryRunConflictCount, dryRunConflictByType, dryRunConflictByReason,
+    dryRunConflictNodeCount: conflictByNode.size,
+    dryRunConflictMaxPerNode: Math.max(0, ...conflictByNode.values()), dryRunConflictNodeFrequency,
+    dryRunConflictCountsPerNodeDescending: [...conflictByNode.values()].sort((a, b) => b - a),
+    dryRunInconsistencyCount, dryRunNodeCount: records.size, dryRunJournalNodeDifference,
     dryRunMatchesJournal, remoteSnapshotAtomic: false, decision: blocked ? "blocked" : "review-required",
   };
 }

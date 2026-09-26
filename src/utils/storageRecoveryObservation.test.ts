@@ -17,6 +17,10 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     lastRecoveryError: "private@example.com", opId: "SECRET_OP", title: "SECRET_TITLE",
     preflight: { remoteNodeCount: 150, journalNodeCount: 151, journalOnlyNodeCount: 1,
       dryRunSuccessCount: 1024, dryRunMatchesJournal: true, localCopyMatches: true,
+      dryRunConflictCount: 664, dryRunConflictByType: { update: 664, title: "SECRET_TITLE" },
+      dryRunConflictByReason: { staleBaseRevision: 664, opId: "SECRET_OP" },
+      dryRunConflictCountsPerNodeDescending: [19, 17],
+      dryRunJournalNodeDifference: { userContent: 0, revisionOnly: 3, title: "SECRET_TITLE" },
       decision: "review-required", opId: "SECRET_OP", title: "SECRET_TITLE" },
     batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }],
     lookupEvents: [{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
@@ -45,7 +49,9 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     receiptServerReadCalls: 2, receiptServerDocumentsReturned: 4, receiptRetryCount: 1 });
   expect(output.recoveryObservation.receiptReadEvents).toMatchObject([{ attempt: 2, phase: "retry-success", returnedDocumentCount: 4 }]);
   expect(output.recoveryObservation.preflight).toMatchObject({ remoteNodeCount: 150, journalNodeCount: 151,
-    dryRunSuccessCount: 1024, decision: "review-required" });
+    dryRunSuccessCount: 1024, decision: "review-required",
+    dryRunConflictByType: { update: 664 }, dryRunConflictByReason: { staleBaseRevision: 664 },
+    dryRunConflictCountsPerNodeDescending: [19, 17], dryRunJournalNodeDifference: { userContent: 0, revisionOnly: 3 } });
   expect(output.recoveryObservation.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
   expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
     startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001, timeoutDelayMs: 10000 }]);
