@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { executeJournalRecovery } from "./executeRecovery";
 import { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
+import { prepareRecoveryPreflight } from "./recoveryPreflight";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { applyRevisionOperation } from "./revisionModel";
 import type { SyncAdapter, SyncOperation, VersionedNode } from "./types";
+import type { RecoveryExecutionObservation } from "./recoveryObservation";
 
 const storage = vi.hoisted(() => new Map<string, string>());
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
@@ -64,11 +66,17 @@ async function setup(count = 1) {
 describe("guarded recovery execution", () => {
   beforeEach(() => storage.clear());
 
+  const progress = () => {
+    const state: Partial<RecoveryExecutionObservation> = {};
+    return { state, update: (patch: Partial<RecoveryExecutionObservation>) => Object.assign(state, patch) };
+  };
+
   it("commits the exact 151st-node equivalent only after all receipts and remote records match", async () => {
     const fixture = await setup();
+    const observed = progress();
     const legacyBefore = new Map(storage);
     const result = await executeJournalRecovery(fixture.persistence, fixture.adapter, "account",
-      { received: 0, missing: 1 });
+      { received: 0, missing: 1 }, undefined, undefined, observed.update);
     expect(result).toEqual({ uploaded: 1, applied: 1, superseded: 0 });
     expect(fixture.adapter.upload).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fixture.adapter.upload).mock.calls[0][1]).toMatchObject({
@@ -90,6 +98,68 @@ describe("guarded recovery execution", () => {
     expect(reopened.historyDepths.past).toBe(1);
     expect(storage).toEqual(legacyBefore);
     expect(fixture.receipts.size).toBe(1);
+    expect(observed.state).toMatchObject({ status: "succeeded", totalOperations: 1,
+      uploadAttemptedCount: 1, uploadSucceededCount: 1,
+      lastSuccessfulOperationIndex: 0, lastCompletedOperationIndex: 0,
+      preExecutionReceiptReceivedCount: 0, preExecutionReceiptMissingCount: 1,
+      postExecutionReceiptReceivedCount: 1, postExecutionReceiptMissingCount: 0,
+      postExecutionReceiptAuditCompleted: true, currentPhase: "completed" });
+    expect(observed.state.startedAt).toBeTruthy();
+    expect(observed.state.endedAt).toBeTruthy();
+  });
+
+  it("records the first failed upload and a successful post-failure receipt audit", async () => {
+    const fixture = await setup();
+    const observed = progress();
+    vi.mocked(fixture.adapter.upload).mockRejectedValueOnce({ kind: "permanent", code: "invalid-argument",
+      recoveryReason: "predicted-winner-mismatch", message: "private node title" });
+    await expect(executeJournalRecovery(fixture.persistence, fixture.adapter, "account",
+      { received: 0, missing: 1 }, undefined, undefined, observed.update)).rejects.toMatchObject({ kind: "permanent" });
+    expect(observed.state).toMatchObject({ status: "failed", totalOperations: 1,
+      uploadAttemptedCount: 1, uploadSucceededCount: 0, uploadFailedCount: 1,
+      failedOperationIndex: 0, currentOperationIndex: 0, failedOperationType: "create",
+      lastSuccessfulOperationIndex: -1, failurePhase: "upload", errorCode: "invalid-argument",
+      failureReason: "predicted-winner-mismatch", postExecutionReceiptReceivedCount: 0,
+      postExecutionReceiptMissingCount: 1, postExecutionReceiptAuditCompleted: true });
+    expect(JSON.stringify(observed.state)).not.toContain("private node title");
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+  });
+
+  it("preserves partial upload progress and audits the receipts after a later failure", async () => {
+    const fixture = await setup(3);
+    const observed = progress();
+    const upload = vi.mocked(fixture.adapter.upload);
+    const original = upload.getMockImplementation()!;
+    upload.mockImplementationOnce(original).mockImplementationOnce(original)
+      .mockRejectedValueOnce({ kind: "permanent", code: "permission-denied", message: "private path" });
+    await expect(executeJournalRecovery(fixture.persistence, fixture.adapter, "account",
+      { received: 0, missing: 3 }, undefined, undefined, observed.update)).rejects.toMatchObject({ kind: "permanent" });
+    expect(observed.state).toMatchObject({ status: "failed", totalOperations: 3,
+      uploadAttemptedCount: 3, uploadSucceededCount: 2, uploadFailedCount: 1,
+      failedOperationIndex: 2, lastCompletedOperationIndex: 1, lastSuccessfulOperationIndex: 1,
+      failurePhase: "upload", failureReason: "permission-denied",
+      postExecutionReceiptReceivedCount: 2, postExecutionReceiptMissingCount: 1,
+      postExecutionReceiptAuditCompleted: true });
+    expect(fixture.receipts.size).toBe(2);
+    expect(await fixture.persistence.loadCommitted()).toBe(fixture.initial);
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+  });
+
+  it("retains the original upload failure when the post-failure receipt audit also fails", async () => {
+    const fixture = await setup();
+    const observed = progress();
+    const originalAudit = vi.mocked(fixture.adapter.auditOutbox!).getMockImplementation()!;
+    vi.mocked(fixture.adapter.auditOutbox!).mockImplementationOnce(originalAudit)
+      .mockImplementationOnce(originalAudit).mockRejectedValueOnce({ code: "unavailable" });
+    vi.mocked(fixture.adapter.upload).mockRejectedValueOnce(Object.assign(new Error("private SDK error"),
+      { code: "invalid-argument" }));
+    await expect(executeJournalRecovery(fixture.persistence, fixture.adapter, "account",
+      { received: 0, missing: 1 }, undefined, undefined, observed.update)).rejects.toThrow("private SDK error");
+    expect(observed.state).toMatchObject({ status: "failed", uploadAttemptedCount: 1,
+      uploadSucceededCount: 0, uploadFailedCount: 1, postExecutionReceiptAuditCompleted: false,
+      postExecutionReceiptAuditError: "unavailable", failurePhase: "upload",
+      failureReason: "firestore-sdk-error", errorCode: "invalid-argument" });
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
   });
 
   it("keeps both local snapshots untouched when the receipt status changes before the first upload", async () => {
@@ -200,6 +270,11 @@ describe("guarded recovery execution", () => {
         return ack;
       }),
     };
+    const { report } = await prepareRecoveryPreflight(persistence, adapter, "account",
+      { received: 0, missing: 1024 }, legacy);
+    expect(report.recoverySafetyDecision).toBe("blocked");
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("safe");
+    expect(report.finalPreflight.authorizesRecovery).toBe(true);
     const result = await executeJournalRecovery(persistence, adapter, "account",
       { received: 0, missing: 1024 });
     expect(result).toEqual({ uploaded: 1024, applied: 464, superseded: 560 });

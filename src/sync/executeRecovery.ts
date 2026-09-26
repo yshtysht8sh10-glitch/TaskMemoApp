@@ -1,7 +1,9 @@
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
 import { prepareRecoveryPreflight } from "./recoveryPreflight";
+import { recoveryFailureDetails } from "./recoveryFailure";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
+import type { RecoveryExecutionObservation, RecoveryExecutionPhase } from "./recoveryObservation";
 import type { SyncAdapter, SyncAcknowledgement, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) =>
@@ -48,48 +50,116 @@ export async function executeJournalRecovery(
   persistence: IndexedDbTaskMemoApplicationJournal, adapter: SyncAdapter, scope: string,
   initialAudit: { received: number; missing: number }, isCurrent: () => boolean = () => true,
   legacy: TaskMemoV2ApplicationJournal = new TaskMemoV2ApplicationJournal(scope),
+  onProgress?: (update: Partial<RecoveryExecutionObservation>) => void,
 ) {
+  const startedAtMs = Date.now();
+  const phaseState: { current: RecoveryExecutionPhase } = { current: "final-safety-check" };
+  let lastCompletedPhase: RecoveryExecutionPhase | null = null;
+  let operations: SyncOperation[] | null = null;
+  let attempted = 0, succeeded = 0, failed = 0, superseded = 0;
+  let currentIndex: number | null = null, lastSuccessfulIndex = -1;
+  const progress = (update: Partial<RecoveryExecutionObservation>) => {
+    try { onProgress?.({ elapsedMs: Math.max(0, Date.now() - startedAtMs), ...update }); }
+    catch { /* Observation must never affect recovery. */ }
+  };
+  const enter = (next: RecoveryExecutionPhase) => {
+    lastCompletedPhase = phaseState.current;
+    phaseState.current = next;
+    progress({ currentPhase: phaseState.current, lastCompletedPhase });
+  };
+  progress({ startedAt: new Date(startedAtMs).toISOString(), status: "running", currentPhase: phaseState.current });
   const readSnapshot = adapter.readRecoverySnapshot?.bind(adapter);
   const auditOutbox = adapter.auditOutbox?.bind(adapter);
-  if (!readSnapshot || !auditOutbox) stop("recovery-adapter-unavailable");
-  if (!isCurrent()) stop("recovery-cancelled");
-  const { report, committedRaw, journalRaw, remote } = await prepareRecoveryPreflight(
-    persistence, adapter, scope, initialAudit, legacy);
-  if (report.finalPreflight.finalRecoverySafetyDecision !== "safe" ||
-      !report.finalPreflight.authorizesRecovery) stop("recovery-preflight-blocked");
-  if (!isCurrent()) stop("recovery-cancelled");
-  const pending = JSON.parse(journalRaw) as Pending;
-  const plan = expectedExecution(pending.sync.outbox, remote);
-  if (canonical(plan.final.nodes.sort((a, b) => a.value.id.localeCompare(b.value.id))) !==
-      canonical(Object.values(pending.domain).sort((a, b) => a.value.id.localeCompare(b.value.id))) ||
-      canonical(plan.final.pinnedNote ?? null) !== canonical(pending.profile?.pinnedNote?.synced ?? null) ||
-      canonical(plan.final.features ?? null) !== canonical(pending.profile?.features?.synced ?? null))
-    stop("recovery-candidate-mismatch");
-  if (!sameSnapshot(remote, await readSnapshot())) stop("recovery-remote-changed");
-  const freshReceipts = await auditOutbox(pending.sync.outbox);
-  if (freshReceipts.received !== 0 || freshReceipts.missing !== pending.sync.outbox.length)
-    stop("recovery-receipt-changed");
-  if ((await persistence.loadCommitted()) !== committedRaw || (await persistence.loadJournal()) !== journalRaw ||
-      (await legacy.loadCommitted()) !== committedRaw || (await legacy.loadJournal()) !== journalRaw)
-    stop("recovery-local-changed");
-  // The adapter transaction re-reads this operation's receipt and target, then applies the
-  // same revisionModel winner rule. Every acknowledgement must equal the preflight plan.
-  for (let index = 0; index < pending.sync.outbox.length; index++) {
+  try {
+    if (!readSnapshot || !auditOutbox) stop("recovery-adapter-unavailable");
     if (!isCurrent()) stop("recovery-cancelled");
-    const actual = await adapter.upload(pending.sync.outbox[index], plan.acknowledgements[index]);
-    if (canonical(actual) !== canonical(plan.acknowledgements[index])) stop("recovery-ack-mismatch");
+    const { report, committedRaw, journalRaw, remote } = await prepareRecoveryPreflight(
+      persistence, adapter, scope, initialAudit, legacy);
+    if (report.finalPreflight.finalRecoverySafetyDecision !== "safe" ||
+        !report.finalPreflight.authorizesRecovery) stop("recovery-preflight-blocked");
+    if (!isCurrent()) stop("recovery-cancelled");
+    const pending = JSON.parse(journalRaw) as Pending;
+    operations = pending.sync.outbox;
+    progress({ totalOperations: operations.length });
+    const plan = expectedExecution(operations, remote);
+    if (canonical(plan.final.nodes.sort((a, b) => a.value.id.localeCompare(b.value.id))) !==
+        canonical(Object.values(pending.domain).sort((a, b) => a.value.id.localeCompare(b.value.id))) ||
+        canonical(plan.final.pinnedNote ?? null) !== canonical(pending.profile?.pinnedNote?.synced ?? null) ||
+        canonical(plan.final.features ?? null) !== canonical(pending.profile?.features?.synced ?? null))
+      stop("recovery-candidate-mismatch");
+    if (!sameSnapshot(remote, await readSnapshot())) stop("recovery-remote-changed");
+    enter("pre-execution-receipt-audit");
+    const freshReceipts = await auditOutbox(operations);
+    progress({ preExecutionReceiptReceivedCount: freshReceipts.received,
+      preExecutionReceiptMissingCount: freshReceipts.missing });
+    if (freshReceipts.received !== 0 || freshReceipts.missing !== operations.length)
+      stop("recovery-receipt-changed");
+    if ((await persistence.loadCommitted()) !== committedRaw || (await persistence.loadJournal()) !== journalRaw ||
+        (await legacy.loadCommitted()) !== committedRaw || (await legacy.loadJournal()) !== journalRaw)
+      stop("recovery-local-changed");
+    enter("upload");
+    // The adapter transaction re-reads this operation's receipt and target, then applies the
+    // same revisionModel winner rule. Every acknowledgement must equal the preflight plan.
+    for (let index = 0; index < operations.length; index++) {
+      if (!isCurrent()) stop("recovery-cancelled");
+      currentIndex = index;
+      attempted++;
+      progress({ currentOperationIndex: index, uploadAttemptedCount: attempted });
+      const actual = await adapter.upload(operations[index], plan.acknowledgements[index]);
+      if (canonical(actual) !== canonical(plan.acknowledgements[index])) stop("recovery-ack-mismatch");
+      succeeded++;
+      if (actual.result === "superseded") superseded++;
+      lastSuccessfulIndex = index;
+      currentIndex = null;
+      progress({ uploadSucceededCount: succeeded, uploadSupersededCount: superseded,
+        lastCompletedOperationIndex: index, lastSuccessfulOperationIndex: index,
+        currentOperationIndex: null });
+    }
+    if (!isCurrent()) stop("recovery-cancelled");
+    const after = await readSnapshot();
+    if (!sameSnapshot(plan.final, after)) stop("recovery-final-remote-mismatch");
+    enter("post-execution-receipt-audit");
+    const finalAudit = await auditOutbox(operations);
+    progress({ postExecutionReceiptReceivedCount: finalAudit.received,
+      postExecutionReceiptMissingCount: finalAudit.missing, postExecutionReceiptAuditCompleted: true });
+    if (finalAudit.received !== operations.length || finalAudit.missing !== 0)
+      stop("recovery-final-receipt-mismatch");
+    if (!isCurrent()) stop("recovery-cancelled");
+    enter("local-state-finalization");
+    if ((await legacy.loadCommitted()) !== committedRaw || (await legacy.loadJournal()) !== journalRaw)
+      stop("recovery-legacy-changed");
+    const recovered = JSON.stringify({ ...pending, sync: { ...pending.sync, outbox: [] } });
+    await persistence.finalizeRecovery(committedRaw, journalRaw, recovered);
+    enter("completed");
+    progress({ status: "succeeded", endedAt: new Date().toISOString() });
+    return { uploaded: operations.length, applied: report.finalPreflight.replay.applied,
+      superseded: report.finalPreflight.replay.superseded };
+  } catch (reason) {
+    const failurePhase = phaseState.current;
+    if (failurePhase === "upload" && currentIndex !== null) failed++;
+    const details = recoveryFailureDetails(reason);
+    progress({ status: "failed", failurePhase, failedOperationIndex: currentIndex,
+      failedOperationType: currentIndex !== null ? operations?.[currentIndex]?.type ?? null : null,
+      uploadAttemptedCount: attempted, uploadSucceededCount: succeeded, uploadFailedCount: failed,
+      uploadSupersededCount: superseded, currentOperationIndex: currentIndex,
+      lastSuccessfulOperationIndex: lastSuccessfulIndex, ...details });
+    // Diagnostic-only server read. Never reclassify a missing receipt as safe or replace the original failure.
+    if (operations && auditOutbox && (attempted > 0 || failurePhase === "post-execution-receipt-audit" ||
+        failurePhase === "local-state-finalization")) {
+      try {
+        const result = await auditOutbox(operations);
+        const complete = Number.isSafeInteger(result.received) && Number.isSafeInteger(result.missing) &&
+          result.received >= 0 && result.missing >= 0 && result.received + result.missing === operations.length;
+        progress({ postExecutionReceiptReceivedCount: complete ? result.received : null,
+          postExecutionReceiptMissingCount: complete ? result.missing : null,
+          postExecutionReceiptAuditCompleted: complete,
+          postExecutionReceiptAuditError: complete ? null : "receipt-count-mismatch" });
+      } catch (auditError) {
+        progress({ postExecutionReceiptAuditCompleted: false,
+          postExecutionReceiptAuditError: recoveryFailureDetails(auditError).errorCode });
+      }
+    }
+    progress({ status: "failed", currentPhase: failurePhase, endedAt: new Date().toISOString() });
+    throw reason;
   }
-  if (!isCurrent()) stop("recovery-cancelled");
-  const after = await readSnapshot();
-  if (!sameSnapshot(plan.final, after)) stop("recovery-final-remote-mismatch");
-  const finalAudit = await auditOutbox(pending.sync.outbox);
-  if (finalAudit.received !== pending.sync.outbox.length || finalAudit.missing !== 0)
-    stop("recovery-final-receipt-mismatch");
-  if (!isCurrent()) stop("recovery-cancelled");
-  if ((await legacy.loadCommitted()) !== committedRaw || (await legacy.loadJournal()) !== journalRaw)
-    stop("recovery-legacy-changed");
-  const recovered = JSON.stringify({ ...pending, sync: { ...pending.sync, outbox: [] } });
-  await persistence.finalizeRecovery(committedRaw, journalRaw, recovered);
-  return { uploaded: pending.sync.outbox.length, applied: report.finalPreflight.replay.applied,
-    superseded: report.finalPreflight.replay.superseded };
 }

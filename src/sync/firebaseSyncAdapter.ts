@@ -12,8 +12,16 @@ type AdapterOptions = {
   onReceiptRead?: (event: ReceiptReadEvent) => void;
   receiptLookupTimeoutMs?: number;
   receiptReadMode?: "chunked" | "parallel" | "serial";
+  onRecoveryTransaction?: (event: RecoveryTransactionEvent) => void;
   /** Diagnostic experiment only: pause after each completed serial receipt lookup. */
   receiptLookupIntervalMs?: number;
+};
+
+export type RecoveryTransactionEvent = {
+  phase: "start" | "success" | "failure";
+  receipt: "existing" | "created" | null;
+  nodeWrite: boolean;
+  serverWinnerNoWrite: boolean;
 };
 
 export type ReceiptLookupEvent = {
@@ -60,13 +68,17 @@ const stableValue = (value: unknown): unknown => {
 const sameOperation = (a: unknown, b: unknown) => JSON.stringify(stableValue(a)) === JSON.stringify(stableValue(b));
 
 const adapterError = (reason: unknown) => {
-  const code = reason && typeof reason === "object" && "code" in reason ? String(reason.code) : "";
-  const message = reason instanceof Error ? reason.message : String(reason);
+  const source = reason && typeof reason === "object" ? reason as Record<string, unknown> : {};
+  const code = typeof source.code === "string" ? source.code : "";
+  const message = reason instanceof Error ? reason.message : typeof source.message === "string" ? source.message :
+    reason && typeof reason === "object" ? "Firebase operation failed." : String(reason);
+  const recoveryReason = typeof source.recoveryReason === "string" ? source.recoveryReason : undefined;
+  const firestoreSdkError = reason instanceof Error;
   if (code.includes("permission-denied") || code.includes("invalid-argument") || code.includes("unauthenticated"))
-    return { kind: "permanent" as const, message };
+    return { kind: "permanent" as const, code, message, recoveryReason, firestoreSdkError };
   if (code.includes("unavailable") || code.includes("network") || code.includes("deadline-exceeded"))
-    return { kind: "offline" as const, message };
-  return { kind: "temporary" as const, message };
+    return { kind: "offline" as const, code, message, recoveryReason, firestoreSdkError };
+  return { kind: "temporary" as const, code, message, recoveryReason, firestoreSdkError };
 };
 
 export function createFirebaseSyncAdapter(
@@ -279,6 +291,10 @@ export function createFirebaseSyncAdapter(
     },
 
     async upload(operation: SyncOperation, expected?: SyncAcknowledgement) {
+      const emit = (event: RecoveryTransactionEvent) => {
+        if (expected) try { options.onRecoveryTransaction?.(event); }
+        catch { /* Diagnostics must never affect transaction behavior. */ }
+      };
       try {
         const operationRef = doc(db, "users", uid, "syncOperationsV2", operation.opId);
         const pinnedNote = operation.targetType === "pinnedNote";
@@ -288,15 +304,18 @@ export function createFirebaseSyncAdapter(
           : features
             ? doc(db, "users", uid, "profileV2", "features")
             : doc(db, "users", uid, "nodesV2", operation.targetNodeId);
-        return await runTransaction(db, async (transaction) => {
+        let outcome: RecoveryTransactionEvent = { phase: "success", receipt: null, nodeWrite: false, serverWinnerNoWrite: false };
+        const acknowledgement = await runTransaction(db, async (transaction) => {
+          emit({ phase: "start", receipt: null, nodeWrite: false, serverWinnerNoWrite: false });
           const existing = await transaction.get(operationRef);
           if (existing.exists()) {
             const data = existing.data();
             if (!sameOperation(data.operation, operation)) {
-              throw { code: "invalid-argument", message: "opId collision with different payload" };
+              throw { code: "invalid-argument", recoveryReason: "receipt-payload-mismatch", message: "opId collision with different payload" };
             }
             if (expected && !sameOperation(data.acknowledgement, expected))
-              throw { code: "invalid-argument", message: "recovery acknowledgement differs from preflight" };
+              throw { code: "invalid-argument", recoveryReason: "receipt-acknowledgement-mismatch", message: "recovery acknowledgement differs from preflight" };
+            outcome = { phase: "success", receipt: "existing", nodeWrite: false, serverWinnerNoWrite: false };
             return data.acknowledgement as SyncAcknowledgement;
           }
           const targetSnapshot = await transaction.get(targetRef);
@@ -306,12 +325,17 @@ export function createFirebaseSyncAdapter(
               ? applyFeaturesOperation(targetSnapshot.exists() ? targetSnapshot.data().record : undefined, operation)
               : applyRevisionOperation(targetSnapshot.exists() ? targetSnapshot.data().record as VersionedNode : undefined, operation);
           if (expected && !sameOperation(acknowledgement, expected))
-            throw { code: "invalid-argument", message: "recovery winner differs from preflight" };
+            throw { code: "invalid-argument", recoveryReason: "predicted-winner-mismatch", message: "recovery winner differs from preflight" };
           if (acknowledgement.result === "applied") transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : features ? acknowledgement.featuresRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
           transaction.set(operationRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
+          outcome = { phase: "success", receipt: "created", nodeWrite: acknowledgement.result === "applied",
+            serverWinnerNoWrite: acknowledgement.result === "superseded" };
           return acknowledgement;
         });
+        emit(outcome);
+        return acknowledgement;
       } catch (reason) {
+        emit({ phase: "failure", receipt: null, nodeWrite: false, serverWinnerNoWrite: false });
         throw adapterError(reason);
       }
     },

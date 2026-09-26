@@ -1,8 +1,46 @@
-/** Diagnostic metadata only. Never store operation IDs, payloads, account IDs, or error messages. */
-import type { ReceiptLookupEvent, ReceiptReadEvent } from "./firebaseSyncAdapter";
+/** Diagnostic metadata only. Never store operation IDs, payloads, account IDs, or raw error messages. */
+import type { ReceiptLookupEvent, ReceiptReadEvent, RecoveryTransactionEvent } from "./firebaseSyncAdapter";
 import type { RecoveryPreflight } from "./recoveryPreflight";
+import type { RecoveryFailureReason } from "./recoveryFailure";
 
 export const RECOVERY_OBSERVATION_KEY = "@taskmemo/recovery-observation/v1";
+
+export type RecoveryExecutionPhase = "final-safety-check" | "pre-execution-receipt-audit" |
+  "upload" | "post-execution-receipt-audit" | "local-state-finalization" | "completed";
+
+export type RecoveryExecutionObservation = {
+  startedAt: string | null; endedAt: string | null;
+  status: "not-started" | "running" | "succeeded" | "failed";
+  totalOperations: number; uploadAttemptedCount: number; uploadSucceededCount: number;
+  uploadFailedCount: number; uploadSupersededCount: number;
+  lastCompletedOperationIndex: number; currentOperationIndex: number | null;
+  lastSuccessfulOperationIndex: number; elapsedMs: number;
+  currentPhase: RecoveryExecutionPhase | null; lastCompletedPhase: RecoveryExecutionPhase | null;
+  failurePhase: RecoveryExecutionPhase | null; failedOperationIndex: number | null;
+  failedOperationType: string | null; errorCode: string | null;
+  errorMessage: string | null; failureReason: RecoveryFailureReason | null;
+  preExecutionReceiptReceivedCount: number | null; preExecutionReceiptMissingCount: number | null;
+  postExecutionReceiptReceivedCount: number | null; postExecutionReceiptMissingCount: number | null;
+  postExecutionReceiptAuditCompleted: boolean; postExecutionReceiptAuditError: string | null;
+  transactionStartedCount: number; transactionSucceededCount: number; transactionFailedCount: number;
+  receiptExistingCount: number; receiptCreatedCount: number; nodeWriteCount: number;
+  serverWinnerNoWriteCount: number;
+};
+
+const initialExecution = (): RecoveryExecutionObservation => ({
+  startedAt: null, endedAt: null, status: "not-started", totalOperations: 0,
+  uploadAttemptedCount: 0, uploadSucceededCount: 0, uploadFailedCount: 0,
+  uploadSupersededCount: 0, lastCompletedOperationIndex: -1, currentOperationIndex: null,
+  lastSuccessfulOperationIndex: -1, elapsedMs: 0, currentPhase: null,
+  lastCompletedPhase: null, failurePhase: null, failedOperationIndex: null,
+  failedOperationType: null, errorCode: null, errorMessage: null, failureReason: null,
+  preExecutionReceiptReceivedCount: null, preExecutionReceiptMissingCount: null,
+  postExecutionReceiptReceivedCount: null, postExecutionReceiptMissingCount: null,
+  postExecutionReceiptAuditCompleted: false, postExecutionReceiptAuditError: null,
+  transactionStartedCount: 0, transactionSucceededCount: 0, transactionFailedCount: 0,
+  receiptExistingCount: 0, receiptCreatedCount: 0, nodeWriteCount: 0,
+  serverWinnerNoWriteCount: 0,
+});
 
 export type RecoveryObservation = {
   recoveryPhase: string;
@@ -27,6 +65,7 @@ export type RecoveryObservation = {
   lookupEvents: (ReceiptLookupEvent & { at: string })[];
   receiptReadEvents: ReceiptReadEvent[];
   preflight: RecoveryPreflight | null;
+  execution: RecoveryExecutionObservation;
 };
 
 const initial = (): RecoveryObservation => ({
@@ -52,6 +91,7 @@ const initial = (): RecoveryObservation => ({
   lookupEvents: [],
   receiptReadEvents: [],
   preflight: null,
+  execution: initialExecution(),
 });
 
 let current = initial();
@@ -71,6 +111,25 @@ export function recordRecoveryObservation(update: Partial<Omit<RecoveryObservati
   const lookupEvents = phase === "start" ? [] : current.lookupEvents;
   current = { ...current, ...update, batchEvents, lookupEvents, lastProgressAt: at };
   persist();
+}
+
+export function recordRecoveryExecution(update: Partial<RecoveryExecutionObservation>) {
+  current = { ...current, execution: { ...current.execution, ...update }, lastProgressAt: new Date().toISOString() };
+  persist();
+}
+
+export function recordRecoveryTransaction(event: RecoveryTransactionEvent) {
+  const execution = current.execution;
+  const increment = (condition: boolean) => Number(condition);
+  recordRecoveryExecution({
+    transactionStartedCount: execution.transactionStartedCount + increment(event.phase === "start"),
+    transactionSucceededCount: execution.transactionSucceededCount + increment(event.phase === "success"),
+    transactionFailedCount: execution.transactionFailedCount + increment(event.phase === "failure"),
+    receiptExistingCount: execution.receiptExistingCount + increment(event.phase === "success" && event.receipt === "existing"),
+    receiptCreatedCount: execution.receiptCreatedCount + increment(event.phase === "success" && event.receipt === "created"),
+    nodeWriteCount: execution.nodeWriteCount + increment(event.phase === "success" && event.nodeWrite),
+    serverWinnerNoWriteCount: execution.serverWinnerNoWriteCount + increment(event.phase === "success" && event.serverWinnerNoWrite),
+  });
 }
 
 export function recordReceiptLookup(event: ReceiptLookupEvent) {

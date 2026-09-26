@@ -22,6 +22,35 @@
   const array = (value) => Array.isArray(value) ? value : [];
   const operationTypes = new Set(['create', 'update', 'complete', 'uncomplete', 'softDelete', 'restore', 'purge', 'undo', 'redo', 'import']);
   const recoveryPhases = new Set(['starting', 'indexeddb-open-start', 'indexeddb-open-complete', 'firebase-connect-start', 'firebase-connect-complete', 'receipt-batch-start', 'receipt-batch-complete', 'receipt-comparison-complete', 'preflight-start', 'preflight-complete', 'observation-paused', 'error']);
+  const executionPhases = new Set(['final-safety-check', 'pre-execution-receipt-audit', 'upload',
+    'post-execution-receipt-audit', 'local-state-finalization', 'completed']);
+  const failureReasons = new Set(['receipt-payload-mismatch', 'receipt-acknowledgement-mismatch',
+    'predicted-winner-mismatch', 'permission-denied', 'unauthenticated', 'firestore-sdk-error', 'unknown']);
+  const safeErrorCodes = new Set(['invalid-argument', 'permission-denied', 'unauthenticated',
+    'firestore/invalid-argument', 'firestore/permission-denied', 'firestore/unauthenticated',
+    'unavailable', 'deadline-exceeded', 'failed-precondition', 'aborted', 'resource-exhausted',
+    'receipt-count-mismatch',
+    'firestore/unavailable', 'firestore/deadline-exceeded', 'firestore/failed-precondition',
+    'firestore/aborted', 'firestore/resource-exhausted', 'firestore/internal',
+    'firestore/cancelled', 'firestore/unknown', 'firestore/not-found', 'firestore/already-exists',
+    'firestore/out-of-range', 'firestore/unimplemented', 'firestore/data-loss',
+    'temporary', 'offline', 'permanent', 'unknown', 'receipt-timeout',
+    'recovery-adapter-unavailable', 'recovery-cancelled', 'recovery-preflight-blocked',
+    'recovery-candidate-mismatch', 'recovery-remote-changed', 'recovery-receipt-changed',
+    'recovery-local-changed', 'recovery-ack-mismatch', 'recovery-final-remote-mismatch',
+    'recovery-final-receipt-mismatch', 'recovery-legacy-changed',
+    'preflight-adapter-unavailable', 'preflight-local-copy-mismatch',
+    'preflight-receipt-audit-unavailable', 'preflight-local-changed',
+    'preflight-invalid-remote', 'preflight-cache']);
+  const safeErrorMessages = new Set([
+    'An existing receipt has a different operation payload.',
+    'An existing receipt differs from the preflight acknowledgement.',
+    'The transaction winner differs from the preflight prediction.',
+    'Firestore denied this recovery transaction.',
+    'Firebase authentication was unavailable during recovery.',
+    'Firestore returned an error during recovery.',
+    'Recovery stopped after an unclassified error.',
+  ]);
   function recoveryObservation(storage) {
     try {
       const raw = storage && storage.getItem('@taskmemo/recovery-observation/v1');
@@ -31,6 +60,8 @@
       const index = (value) => Number.isSafeInteger(value) && value >= -1 ? value : null;
       const timestamp = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ? value : null;
       const elapsed = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e9 ? value : null;
+      const safeCode = (value) => safeErrorCodes.has(value) ? value : null;
+      const execution = object(saved.execution);
       return {
         recoveryPhase: recoveryPhases.has(saved.recoveryPhase) ? saved.recoveryPhase : 'invalid',
         receiptComparisonTotal: count(saved.receiptComparisonTotal),
@@ -50,6 +81,40 @@
         receiptServerReadCalls: count(saved.receiptServerReadCalls),
         receiptServerDocumentsReturned: count(saved.receiptServerDocumentsReturned),
         receiptRetryCount: count(saved.receiptRetryCount),
+        execution: {
+          startedAt: timestamp(execution.startedAt), endedAt: timestamp(execution.endedAt),
+          status: ['not-started', 'running', 'succeeded', 'failed'].includes(execution.status) ? execution.status : 'not-started',
+          totalOperations: count(execution.totalOperations),
+          uploadAttemptedCount: count(execution.uploadAttemptedCount),
+          uploadSucceededCount: count(execution.uploadSucceededCount),
+          uploadFailedCount: count(execution.uploadFailedCount),
+          uploadSupersededCount: count(execution.uploadSupersededCount),
+          lastCompletedOperationIndex: index(execution.lastCompletedOperationIndex),
+          currentOperationIndex: index(execution.currentOperationIndex),
+          lastSuccessfulOperationIndex: index(execution.lastSuccessfulOperationIndex),
+          elapsedMs: elapsed(execution.elapsedMs),
+          currentPhase: executionPhases.has(execution.currentPhase) ? execution.currentPhase : null,
+          lastCompletedPhase: executionPhases.has(execution.lastCompletedPhase) ? execution.lastCompletedPhase : null,
+          failurePhase: executionPhases.has(execution.failurePhase) ? execution.failurePhase : null,
+          failedOperationIndex: index(execution.failedOperationIndex),
+          failedOperationType: operationTypes.has(execution.failedOperationType) ? execution.failedOperationType : null,
+          errorCode: safeCode(execution.errorCode),
+          errorMessage: safeErrorMessages.has(execution.errorMessage) ? execution.errorMessage : null,
+          failureReason: failureReasons.has(execution.failureReason) ? execution.failureReason : null,
+          preExecutionReceiptReceivedCount: count(execution.preExecutionReceiptReceivedCount),
+          preExecutionReceiptMissingCount: count(execution.preExecutionReceiptMissingCount),
+          postExecutionReceiptReceivedCount: count(execution.postExecutionReceiptReceivedCount),
+          postExecutionReceiptMissingCount: count(execution.postExecutionReceiptMissingCount),
+          postExecutionReceiptAuditCompleted: execution.postExecutionReceiptAuditCompleted === true,
+          postExecutionReceiptAuditError: safeCode(execution.postExecutionReceiptAuditError),
+          transactionStartedCount: count(execution.transactionStartedCount),
+          transactionSucceededCount: count(execution.transactionSucceededCount),
+          transactionFailedCount: count(execution.transactionFailedCount),
+          receiptExistingCount: count(execution.receiptExistingCount),
+          receiptCreatedCount: count(execution.receiptCreatedCount),
+          nodeWriteCount: count(execution.nodeWriteCount),
+          serverWinnerNoWriteCount: count(execution.serverWinnerNoWriteCount),
+        },
         preflight: saved.preflight && typeof saved.preflight === 'object' ? (() => {
           const p = object(saved.preflight);
           const fields = ['applicationNodeCount', 'journalNodeCount', 'journalOutboxCount',

@@ -11,7 +11,8 @@ import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicatio
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "../sync/recovery";
-import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
+import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation,
+  recordRecoveryExecution, recordRecoveryTransaction, recoveryErrorCode } from "../sync/recoveryObservation";
 import { runRecoveryPreflight } from "../sync/recoveryPreflight";
 import { executeJournalRecovery } from "../sync/executeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
@@ -28,7 +29,7 @@ export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic";
 
 const message = (reason: unknown) => reason instanceof Error ? reason.message :
   reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string"
-    ? reason.message : String(reason);
+    ? reason.message : reason && typeof reason === "object" ? "V2同期・復旧でエラーが発生しました。診断情報を確認してください。" : String(reason);
 
 function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void, initialIdeasEnabled: boolean, onIdeasEnabled: (value: boolean) => void) {
   const firebase = firebaseConfiguration();
@@ -122,6 +123,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           receiptLookupIntervalMs: guardedRecovery ? receiptLookupIntervalMs : undefined,
           onReceiptLookup: guardedRecovery ? recordReceiptLookup : undefined,
           onReceiptRead: guardedRecovery ? recordReceiptRead : undefined,
+          onRecoveryTransaction: guardedRecovery ? recordRecoveryTransaction : undefined,
           onReceiptBatch: guardedRecovery ? (event) => recordRecoveryObservation({
             recoveryPhase: event.phase === "start" ? "receipt-batch-start" : "receipt-batch-complete",
             receiptComparisonTotal: event.total,
@@ -156,7 +158,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           if (!(persistence instanceof IndexedDbTaskMemoApplicationJournal))
             throw new Error("IndexedDB以外の保存先では実復旧を開始しません。");
           await executeJournalRecovery(persistence, adapter, scope, observation.auditResult,
-            () => currentGeneration === generation);
+            () => currentGeneration === generation, undefined, recordRecoveryExecution);
           if (currentGeneration !== generation) return;
         }
         if (guardedRecovery && legacyJournal && !(persistence instanceof IndexedDbTaskMemoApplicationJournal &&
