@@ -47,7 +47,7 @@ it('measures all localStorage while exposing only whitelisted names and aggregat
   const fixture = launch({ [scoped]: envelope, '@taskmemo/nodes/v1': 'SECRET_OLD', 'firebase:authUser': 'secret@example.com' });
   fixture.handlers.get('measure')!();
   const report = JSON.parse(fixture.result.value);
-  expect(report).toMatchObject({ appVersion: '1.0.0', appCommit: 'abcdef1234567890', origin: 'https://taskmemoapp-eabc3.web.app', displayMode: 'standalone', otherKeyCount: 1 });
+  expect(report).toMatchObject({ appVersion: '1.0.0', appCommit: 'abcdef1234567890', origin: 'https://taskmemoapp-eabc3.web.app', displayMode: 'standalone', firebaseReceiptComparison: 'not-performed', otherKeyCount: 1 });
   expect(report.entries[1]).toMatchObject({ nodes: 1, undoCount: 1, redoCount: 1, outboxCount: 1, pinnedNoteDirty: true });
   expect(report.taskMemoTotalUtf16Bytes + report.otherTotalUtf16Bytes).toBe(report.allLocalStorageTotalUtf16Bytes);
   for (const secret of ['SECRET_TITLE', 'SECRET_BODY', 'SECRET_PINNED', 'SECRET_OLD', 'SECRET_UID', 'privateId', 'privateOp', 'secret@example.com', 'firebase:authUser']) expect(fixture.result.value).not.toContain(secret);
@@ -61,5 +61,30 @@ it('leaves invalid journal untouched and never exposes its raw contents', () => 
   fixture.handlers.get('measure')!();
   expect(JSON.parse(fixture.result.value).entries[0].parse).toBe('invalid-json');
   expect(fixture.result.value).not.toContain('SECRET');
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
+it('summarizes operation types, repeated IDs and valid date range without exposing raw operations', () => {
+  const envelope = JSON.stringify({
+    version: 2, domain: {}, history: { past: [], future: [] }, profile: {},
+    sync: { outbox: [
+      { opId: 'private-op-1', type: 'create', createdAt: '2026-09-20T00:00:00.000Z', payload: { title: 'SECRET_TITLE' } },
+      { opId: 'private-op-2', type: 'update', createdAt: '2026-09-26T12:00:00.000Z' },
+      { opId: 'private-op-1', type: 'update', createdAt: '2026-09-21T00:00:00.000Z' },
+      { opId: 'private-op-3', type: 'SECRET_TYPE', createdAt: 'SECRET_DATE' },
+    ], seenOpIds: [] },
+  });
+  const fixture = launch({ '@taskmemo/sync-v2/taskmemo-application/v2/project%2Fprivate': envelope });
+  fixture.handlers.get('measure')!();
+  const entry = JSON.parse(fixture.result.value).entries[0];
+  expect(entry).toMatchObject({
+    outboxCount: 4,
+    outboxTypeCounts: { create: 1, update: 2, unknown: 1 },
+    duplicateOperationIdCount: 1,
+    oldestOperationAt: '2026-09-20T00:00:00.000Z',
+    newestOperationAt: '2026-09-26T12:00:00.000Z',
+    invalidOperationDateCount: 1,
+  });
+  for (const secret of ['private-op-1', 'private-op-2', 'private-op-3', 'SECRET_TITLE', 'SECRET_TYPE', 'SECRET_DATE']) expect(fixture.result.value).not.toContain(secret);
   expect(fixture.writes).not.toHaveBeenCalled();
 });

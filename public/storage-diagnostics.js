@@ -20,6 +20,40 @@
   const bytes = (value) => value.length * 2; // UTF-16 estimate, not physical browser allocation.
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const array = (value) => Array.isArray(value) ? value : [];
+  const operationTypes = new Set(['create', 'update', 'complete', 'uncomplete', 'softDelete', 'restore', 'purge', 'undo', 'redo', 'import']);
+  function outboxMetrics(operations) {
+    const outboxTypeCounts = {};
+    const seenIds = new Set();
+    let duplicateOperationIdCount = 0;
+    let missingOperationIdCount = 0;
+    let invalidOperationDateCount = 0;
+    let oldest = null;
+    let newest = null;
+    for (const item of operations) {
+      const operation = object(item);
+      const type = operationTypes.has(operation.type) ? operation.type : 'unknown';
+      outboxTypeCounts[type] = (outboxTypeCounts[type] || 0) + 1;
+      if (typeof operation.opId !== 'string' || !operation.opId) missingOperationIdCount++;
+      else if (seenIds.has(operation.opId)) duplicateOperationIdCount++;
+      else seenIds.add(operation.opId);
+      // Never output a raw stored string: only a validated, normalized timestamp.
+      const rawDate = operation.createdAt;
+      const timestamp = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(rawDate)
+        ? Date.parse(rawDate) : NaN;
+      if (!Number.isFinite(timestamp)) { invalidOperationDateCount++; continue; }
+      if (oldest === null || timestamp < oldest) oldest = timestamp;
+      if (newest === null || timestamp > newest) newest = timestamp;
+    }
+    return {
+      outboxTypeCounts,
+      uniqueOperationIdCount: seenIds.size,
+      duplicateOperationIdCount,
+      missingOperationIdCount,
+      oldestOperationAt: oldest === null ? null : new Date(oldest).toISOString(),
+      newestOperationAt: newest === null ? null : new Date(newest).toISOString(),
+      invalidOperationDateCount,
+    };
+  }
   function envelopeMetrics(raw) {
     try {
       const root = object(JSON.parse(raw));
@@ -29,14 +63,16 @@
       const sync = object(root.sync);
       const profile = object(root.profile);
       const entries = [...array(history.past), ...array(history.future)];
+      const outbox = array(sync.outbox);
       return {
         parse: 'ok', nodes: Object.keys(domain).length,
         undoCount: array(history.past).length, redoCount: array(history.future).length,
         historyUtf16Bytes: bytes(JSON.stringify(history)),
         averageHistoryEntryUtf16Bytes: entries.length ? Math.round(entries.reduce((sum, entry) => sum + bytes(JSON.stringify(entry)), 0) / entries.length) : 0,
         domainUtf16Bytes: bytes(JSON.stringify(domain)),
-        outboxCount: array(sync.outbox).length,
-        outboxUtf16Bytes: bytes(JSON.stringify(array(sync.outbox))),
+        outboxCount: outbox.length,
+        outboxUtf16Bytes: bytes(JSON.stringify(outbox)),
+        ...outboxMetrics(outbox),
         seenOpIdsCount: array(sync.seenOpIds).length,
         profileUtf16Bytes: bytes(JSON.stringify(profile)),
         pinnedNoteDirty: Boolean(object(profile.pinnedNote).dirtySince),
@@ -83,6 +119,7 @@
       appCommit: metadata.commit,
       origin: metadata.origin,
       displayMode: metadata.displayMode,
+      firebaseReceiptComparison: 'not-performed',
       sizeUnit: 'estimated UTF-16 bytes; not physical disk usage',
       taskMemoTotalUtf16Bytes,
       otherTotalUtf16Bytes,
