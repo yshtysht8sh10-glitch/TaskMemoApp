@@ -78,6 +78,20 @@ type FinalPreflight = {
 };
 export type RecoveryPreflight = {
   finalPreflight: FinalPreflight;
+  /** Sensitive, read-only provenance for candidate-only sibling sortKey collisions. */
+  candidateSortKeyCollisionTrace: {
+    parentId: string | null; sortKey: string; nodes: {
+      nodeId: string;
+      application: { sortKey: string; revision: number; lastOpId: string } | null;
+      journal: { sortKey: string; revision: number; lastOpId: string } | null;
+      remote: { sortKey: string; revision: number; lastOpId: string } | null;
+      candidate: { sortKey: string; revision: number; lastOpId: string };
+      operations: { index: number; opId: string; type: SyncOperation["type"];
+        baseRevision: number; payloadSortKey: string | null; priorPayloadSortKey: string | null;
+        beforeSortKey: string | null; afterSortKey: string | null;
+        result: "applied" | "superseded" | "invalid"; reason: WinnerReason | null }[];
+    }[];
+  }[];
   localCopyMatches: boolean;
   applicationNodeCount: number;
   journalNodeCount: number;
@@ -255,6 +269,68 @@ function checkStructure(records: NodeMap): StructureCheck {
     inactiveParentCount, nonCategoryParentCount, invalidParentCount, cycleNodeCount,
     invalidActiveSortKeyCount, duplicateActiveSortKeyNodeCount,
     duplicateActiveSortKeyGroupCount, valid };
+}
+
+function collisionTrace(candidate: NodeMap, application: NodeMap, journal: NodeMap,
+  remote: NodeMap, operations: SyncOperation[]): RecoveryPreflight["candidateSortKeyCollisionTrace"] {
+  const groups = new Map<string, VersionedNode[]>();
+  for (const record of candidate.values()) {
+    if (record.value.deletedAt || record.value.purgedAt ||
+        !isValidSortKey(record.value.sortKey as string)) continue;
+    const key = JSON.stringify([record.value.parentId, record.value.sortKey]);
+    groups.set(key, [...(groups.get(key) ?? []), record]);
+  }
+  const snapshot = (record: VersionedNode | undefined) => record ? {
+    sortKey: String(record.value.sortKey), revision: record.revision, lastOpId: record.lastOpId,
+  } : null;
+  const sourceHasSameCollision = (source: NodeMap, group: VersionedNode[]) => group.every((item) => {
+    const record = source.get(item.value.id);
+    return record && !record.value.deletedAt && !record.value.purgedAt &&
+      record.value.parentId === group[0].value.parentId && record.value.sortKey === group[0].value.sortKey;
+  });
+  const collisions = [...groups.values()].filter((group) => group.length > 1 &&
+    !sourceHasSameCollision(application, group) && !sourceHasSameCollision(journal, group) &&
+    !sourceHasSameCollision(remote, group));
+  const related = new Set(collisions
+    .flatMap((group) => group.map((record) => record.value.id)));
+  const histories = new Map<string, NonNullable<RecoveryPreflight["candidateSortKeyCollisionTrace"][number]["nodes"][number]["operations"]>>();
+  const replay = new Map(remote);
+  const priorPayload = new Map<string, string>();
+  for (const [index, operation] of operations.entries()) {
+    if (!related.has(operation.targetNodeId) || (operation.targetType ?? "node") !== "node") continue;
+    const current = replay.get(operation.targetNodeId);
+    const rawPayloadSortKey = (operation.payload?.node as { sortKey?: unknown } | undefined)?.sortKey;
+    const payloadSortKey = typeof rawPayloadSortKey === "string" ? rawPayloadSortKey : null;
+    const previousPayloadSortKey = priorPayload.get(operation.targetNodeId) ?? null;
+    let result: "applied" | "superseded" | "invalid" = "invalid";
+    let reason: WinnerReason | null = null;
+    let after = current;
+    try {
+      const ack = applyRevisionOperation(current, operation);
+      result = ack.result === "applied" || ack.result === "superseded" ? ack.result : "invalid";
+      if (result === "superseded") reason = classifyWinnerReason(current, operation, "node");
+      after = ack.record;
+      if (after) replay.set(operation.targetNodeId, after);
+    } catch { /* A malformed operation stays invalid and cannot authorize recovery. */ }
+    histories.set(operation.targetNodeId, [...(histories.get(operation.targetNodeId) ?? []), {
+      index, opId: operation.opId, type: operation.type, baseRevision: operation.baseRevision,
+      payloadSortKey, priorPayloadSortKey: previousPayloadSortKey,
+      beforeSortKey: current ? String(current.value.sortKey) : null,
+      afterSortKey: after ? String(after.value.sortKey) : null,
+      result, reason,
+    }]);
+    if (payloadSortKey !== null) priorPayload.set(operation.targetNodeId, payloadSortKey);
+  }
+  return collisions.map((group) => ({
+    parentId: typeof group[0].value.parentId === "string" ? group[0].value.parentId : null,
+    sortKey: String(group[0].value.sortKey),
+    nodes: group.map((record) => ({ nodeId: record.value.id,
+      application: snapshot(application.get(record.value.id)),
+      journal: snapshot(journal.get(record.value.id)),
+      remote: snapshot(remote.get(record.value.id)), candidate: snapshot(record)!,
+      operations: histories.get(record.value.id) ?? [],
+    })),
+  }));
 }
 export const RECOVERY_NODE_DIFFERENCE_FIELDS = [
   ...[...knownValueFields].map((field) => `value.${field}`),
@@ -837,6 +913,8 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     operationUnrecognizedTypeCount, dryRunInconsistencyCount);
   return {
     finalPreflight,
+    candidateSortKeyCollisionTrace: collisionTrace(replayDetails.serverWinner.nodes,
+      applicationMap, journalMap, remoteMap, journal.sync.outbox),
     localCopyMatches, applicationNodeCount: Object.keys(application.domain).length,
     journalNodeCount: Object.keys(journal.domain).length, journalOutboxCount: journal.sync.outbox.length,
     applicationNodeNotInJournalCount, applicationOutboxNotInJournalCount,

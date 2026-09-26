@@ -195,8 +195,38 @@
               'unrecognizedOperationType']),
             authorizesRecovery: final.authorizesRecovery === true && final.finalRecoverySafetyDecision === 'safe',
           } : null;
+          // Sensitive opt-in investigation detail: IDs and sortKeys are included only for
+          // candidate collisions. Never include titles, bodies or operation payloads.
+          const nodeVersion = (value) => value && typeof value === 'object' ? {
+            sortKey: typeof value.sortKey === 'string' ? value.sortKey : null,
+            revision: count(value.revision),
+            lastOpId: typeof value.lastOpId === 'string' ? value.lastOpId : null,
+          } : null;
+          const candidateSortKeyCollisionTrace = array(p.candidateSortKeyCollisionTrace).map((group) => ({
+            parentId: typeof group.parentId === 'string' ? group.parentId : null,
+            sortKey: typeof group.sortKey === 'string' ? group.sortKey : null,
+            nodes: array(group.nodes).map((node) => ({
+              nodeId: typeof node.nodeId === 'string' ? node.nodeId : null,
+              application: nodeVersion(node.application), journal: nodeVersion(node.journal),
+              remote: nodeVersion(node.remote), candidate: nodeVersion(node.candidate),
+              operations: array(node.operations).map((operation) => ({
+                index: count(operation.index),
+                opId: typeof operation.opId === 'string' ? operation.opId : null,
+                type: operationTypes.has(operation.type) ? operation.type : 'invalid',
+                baseRevision: count(operation.baseRevision),
+                payloadSortKey: typeof operation.payloadSortKey === 'string' ? operation.payloadSortKey : null,
+                priorPayloadSortKey: typeof operation.priorPayloadSortKey === 'string' ? operation.priorPayloadSortKey : null,
+                beforeSortKey: typeof operation.beforeSortKey === 'string' ? operation.beforeSortKey : null,
+                afterSortKey: typeof operation.afterSortKey === 'string' ? operation.afterSortKey : null,
+                result: ['applied', 'superseded', 'invalid'].includes(operation.result) ? operation.result : 'invalid',
+                reason: ['purgedTombstoneWins', 'higherRevisionWins', 'deletionRankWins',
+                  'opIdTieBreakWins', 'unclassified'].includes(operation.reason) ? operation.reason : null,
+              })),
+            })),
+          }));
           return { ...Object.fromEntries(fields.map((field) => [field, count(p[field])])),
             finalPreflight,
+            candidateSortKeyCollisionTrace,
             dryRunConflictByType: Object.fromEntries([...operationTypes].map((type) => [type, count(object(p.dryRunConflictByType)[type])])),
             dryRunConflictByReason: Object.fromEntries(['staleBaseRevision', 'futureBaseRevision', 'createTargetExists', 'candidateSuperseded']
               .map((reason) => [reason, count(object(p.dryRunConflictByReason)[reason])])),

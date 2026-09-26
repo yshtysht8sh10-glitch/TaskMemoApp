@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 
 const script = readFileSync("public/storage-diagnostics.js", "utf8");
 
-it("exports only validated recovery metadata, never injected IDs or private strings", () => {
+it("exports allowlisted collision provenance but never titles, bodies, or unrelated private strings", () => {
   const handlers = new Map<string, () => void>();
   const result = { value: "", focus() {}, select() {} };
   const status = { textContent: "" };
@@ -31,6 +31,13 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     lastProgressAt: "2026-09-26T07:00:00.000Z", firebaseConnectionState: "connected",
     lastRecoveryError: "private@example.com", opId: "SECRET_OP", title: "SECRET_TITLE",
     preflight: { remoteNodeCount: 150, journalNodeCount: 151, journalOnlyNodeCount: 1,
+      candidateSortKeyCollisionTrace: [{ parentId: null, sortKey: 'a1', title: 'SECRET_TITLE',
+        nodes: [{ nodeId: 'NODE_A', title: 'SECRET_TITLE', application: { sortKey: 'a0', revision: 1, lastOpId: 'OLD_OP' },
+          journal: { sortKey: 'a1', revision: 2, lastOpId: 'NEW_OP' }, remote: null,
+          candidate: { sortKey: 'a1', revision: 2, lastOpId: 'NEW_OP' },
+          operations: [{ index: 42, opId: 'NEW_OP', type: 'update', baseRevision: 1,
+            payloadSortKey: 'a1', priorPayloadSortKey: 'a0', beforeSortKey: 'a0', afterSortKey: 'a1',
+            result: 'applied', reason: null, body: 'SECRET_TITLE' }] }] }],
       finalPreflight: { candidateNodeCount: 151, finalRecoverySafetyDecision: 'blocked',
         remoteToCandidate: { create: 1, update: 58, privateNodeId: 'SECRET_OP' },
         candidateJournal: { common: 151, exactMatches: true, title: 'SECRET_TITLE' },
@@ -102,6 +109,8 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     dryRunConflictByType: { update: 664 }, dryRunConflictByReason: { staleBaseRevision: 664 },
     dryRunConflictCountsPerNodeDescending: [19, 17], dryRunJournalNodeDifference: { userContent: 0, revisionOnly: 3 } });
   expect(output.recoveryObservation.preflight).toMatchObject({
+    candidateSortKeyCollisionTrace: [{ sortKey: 'a1', nodes: [{ nodeId: 'NODE_A',
+      operations: [{ index: 42, opId: 'NEW_OP', result: 'applied' }] }] }],
     finalPreflight: { candidateNodeCount: 151, finalRecoverySafetyDecision: 'blocked',
       remoteToCandidate: { create: 1, update: 58 },
       candidateJournal: { common: 151, exactMatches: true },

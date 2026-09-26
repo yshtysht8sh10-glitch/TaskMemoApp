@@ -20,6 +20,28 @@ const envelope = (nodes: VersionedNode[], outbox: SyncOperation[] = []) => ({
 });
 
 describe("read-only recovery preflight", () => {
+  it("traces candidate-only sortKey collisions to partial Node-level winners without changing recovery", () => {
+    const make = (id: string, sortKey: string, revision: number): VersionedNode => ({
+      ...record(id, revision), value: { id, type: "category", parentId: null, sortKey, title: id,
+        createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null },
+    });
+    const remoteA = make("a", "a0", 0), remoteB = make("b", "a1", 3);
+    const moveA = { ...operation("device:1", "a", "update", 0), payload: { node: make("a", "a1", 1).value } };
+    const moveB = { ...operation("device:2", "b", "update", 0), payload: { node: make("b", "a2", 1).value } };
+    const report = compareRecoveryState(envelope([remoteA, remoteB]),
+      envelope([make("a", "a1", 1), make("b", "a2", 1)], [moveA, moveB]),
+      { nodes: [remoteA, remoteB], receiptDocumentCount: 0 }, true);
+    expect(report.structureChecks.remote.valid).toBe(true);
+    expect(report.structureChecks.journal.valid).toBe(true);
+    expect(report.finalPreflight.candidateStructure.duplicateActiveSortKeyGroupCount).toBe(1);
+    expect(report.finalPreflight.authorizesRecovery).toBe(false);
+    expect(report.candidateSortKeyCollisionTrace).toMatchObject([{
+      sortKey: "a1", nodes: [
+        { nodeId: "a", candidate: { sortKey: "a1" }, operations: [{ result: "applied" }] },
+        { nodeId: "b", candidate: { sortKey: "a1" }, operations: [{ result: "superseded", reason: "higherRevisionWins" }] },
+      ],
+    }]);
+  });
   it("compares remote and journal and simulates ordered operations without exporting private data", () => {
     const create = operation("private-device:1", "new", "create", 0);
     const journal = envelope([record("existing"), applyRevisionOperation(undefined, create).record!], [create]);
