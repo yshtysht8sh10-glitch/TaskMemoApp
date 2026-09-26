@@ -51,6 +51,52 @@
     return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
   }
 
+  async function readIndexedDbSnapshot() {
+    const factory = window.indexedDB;
+    if (!factory) return { available: false, records: [] };
+    if (typeof factory.databases !== 'function')
+      throw new Error('IndexedDBの存在確認に対応していないため、完全バックアップを保証できません。元データは変更していません。');
+    const known = await factory.databases();
+    if (!known.some((database) => database.name === 'taskmemo-v2-local-application'))
+      return { available: true, records: [] };
+    const database = await new Promise((resolve, reject) => {
+      const request = factory.open('taskmemo-v2-local-application');
+      request.onupgradeneeded = () => {
+        request.transaction.abort();
+        reject(new Error('IndexedDBが変化しました。バックアップを中止しました。'));
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('IndexedDBを開けません。'));
+    });
+    try {
+      if (!database.objectStoreNames.contains('scopes')) throw new Error('IndexedDBのV2保存領域が見つかりません。');
+      const transaction = database.transaction('scopes', 'readonly');
+      const done = new Promise((resolve, reject) => {
+        transaction.oncomplete = resolve;
+        transaction.onabort = () => reject(transaction.error || new Error('IndexedDBの読み取りが中断されました。'));
+        transaction.onerror = () => reject(transaction.error || new Error('IndexedDBの読み取りに失敗しました。'));
+      });
+      const records = await new Promise((resolve, reject) => {
+        const request = transaction.objectStore('scopes').getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('IndexedDBを読み取れません。'));
+      });
+      await done;
+      for (const record of records) {
+        if (typeof record.scope !== 'string' || typeof record.legacyFingerprint !== 'string')
+          throw new Error('IndexedDBのV2データを検証できません。');
+        for (const raw of [record.committed, record.journal]) {
+          if (raw !== null && raw !== undefined) {
+            const root = JSON.parse(raw);
+            if (root.version !== 2 || !root.domain || !Array.isArray(root.sync?.outbox))
+              throw new Error('IndexedDBのV2データを検証できません。');
+          }
+        }
+      }
+      return { available: true, records };
+    } finally { database.close(); }
+  }
+
   document.getElementById('prepare').addEventListener('click', async function () {
     prepared = null;
     shareButton.disabled = true;
@@ -59,22 +105,31 @@
     try {
       const entries = readSnapshot(window.localStorage);
       const pairs = summary(entries);
+      const indexedDb = await readIndexedDbSnapshot();
       const archive = JSON.stringify({
-        format: 'taskmemo-raw-localstorage-recovery-v1',
+        format: 'taskmemo-v2-recovery-v2',
         capturedAt: new Date().toISOString(),
         origin: location.origin,
         appCommit: document.querySelector('meta[name="taskmemo-commit"]').content,
         entries,
+        indexedDb,
       });
       const sha256 = await digest(archive);
       if (JSON.stringify(readSnapshot(window.localStorage)) !== JSON.stringify(entries))
         throw new Error('バックアップ準備中に保存内容が変わりました。再度準備してください。');
+      if (JSON.stringify(await readIndexedDbSnapshot()) !== JSON.stringify(indexedDb))
+        throw new Error('バックアップ準備中にIndexedDBが変わりました。再度準備してください。');
       const file = new File([archive], `taskmemo-v2-recovery-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, { type: 'application/json' });
       prepared = { file, sha256 };
       shareButton.disabled = false;
       downloadButton.disabled = false;
       const pairSummary = pairs.map((pair, index) => `組${index + 1}: application ${pair.application.nodes} Node / ${pair.application.outbox} outbox、journal ${pair.journal.nodes} Node / ${pair.journal.outbox} outbox`).join('\n');
-      status.textContent = `準備完了（まだファイルへ保存していません）。\nキー: ${entries.length}、同一アカウントの組: ${pairs.length}\n${pairSummary}\nファイル: ${file.name}\nサイズ: ${file.size} bytes\nSHA-256: ${sha256}\n保存後、ファイルの存在とサイズを確認してください。`;
+      const idbSummary = indexedDb.records.map((record, index) => {
+        const committed = record.committed ? JSON.parse(record.committed) : null;
+        const journal = record.journal ? JSON.parse(record.journal) : null;
+        return `IndexedDB組${index + 1}: application ${committed ? Object.keys(committed.domain).length : 0} Node / ${committed ? committed.sync.outbox.length : 0} outbox、journal ${journal ? Object.keys(journal.domain).length : 0} Node / ${journal ? journal.sync.outbox.length : 0} outbox`;
+      }).join('\n');
+      status.textContent = `準備完了（まだファイルへ保存していません）。\nキー: ${entries.length}、同一アカウントの組: ${pairs.length}\n${pairSummary}\nIndexedDB: ${indexedDb.available ? indexedDb.records.length + '組' : '未対応'}${idbSummary ? '\n' + idbSummary : ''}\nファイル: ${file.name}\nサイズ: ${file.size} bytes\nSHA-256: ${sha256}\n保存後、ファイルの存在とサイズを確認してください。`;
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : 'バックアップの準備に失敗しました。';
     }

@@ -2,11 +2,12 @@ import { readFileSync } from 'node:fs';
 import { webcrypto, createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 
 const html = readFileSync('public/v2-recovery-backup.html', 'utf8');
 const script = readFileSync('public/v2-recovery-backup.js', 'utf8');
 
-function launch(values: Record<string, string>) {
+function launch(values: Record<string, string>, indexedDB?: IDBFactory) {
   const handlers = new Map<string, () => Promise<void> | void>();
   const status = { textContent: '' };
   const buttons = Object.fromEntries(['prepare', 'share', 'download'].map((id) => [id, {
@@ -24,7 +25,7 @@ function launch(values: Record<string, string>) {
   const share = vi.fn(async (_input: { files: File[] }) => undefined);
   runInNewContext(script, {
     document: { getElementById: (id: string) => id === 'status' ? status : buttons[id], querySelector: () => ({ content: 'COMMIT' }) },
-    window: { localStorage: storage }, location: { origin: 'https://taskmemoapp-eabc3.web.app' },
+    window: { localStorage: storage, indexedDB }, location: { origin: 'https://taskmemoapp-eabc3.web.app' },
     navigator: { share, canShare: () => true }, crypto: webcrypto, TextEncoder, File, URL, setTimeout,
   });
   return { handlers, status, buttons, writes, share };
@@ -35,6 +36,38 @@ it('is standalone and has no storage-write or network path', () => {
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
   expect(script).not.toMatch(/(?:fetch|importScripts|register)\s*\(/);
   expect(html).not.toMatch(/expo-router|index\.js|service-worker\.js/i);
+});
+
+it('includes the current IndexedDB application and journal in the read-only backup', async () => {
+  const indexedDB = new IDBFactory();
+  const opened = indexedDB.open('taskmemo-v2-local-application', 1);
+  opened.onupgradeneeded = () => opened.result.createObjectStore('scopes', { keyPath: 'scope' });
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    opened.onsuccess = () => resolve(opened.result);
+    opened.onerror = () => reject(opened.error);
+  });
+  const committed = JSON.stringify({ version: 2, domain: { one: {} }, sync: { outbox: [{ opId: 'private' }] } });
+  const journal = JSON.stringify({ version: 2, domain: { one: {}, two: {} }, sync: { outbox: [] } });
+  const transaction = database.transaction('scopes', 'readwrite');
+  transaction.objectStore('scopes').put({ scope: 'project/SECRET_UID', committed, journal, legacyFingerprint: 'hash' });
+  await new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+  const scope = 'project%2FSECRET_UID';
+  const values = {
+    [`@taskmemo/sync-v2/taskmemo-application/v2/${scope}`]: committed,
+    [`@taskmemo/sync-v2/taskmemo-application-journal/v2/${scope}`]: journal,
+  };
+  const fixture = launch(values, indexedDB);
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.status.textContent).toContain('IndexedDB組1: application 1 Node / 1 outbox、journal 2 Node / 0 outbox');
+  expect(fixture.status.textContent).not.toContain('SECRET_UID');
+  fixture.handlers.get('share')!();
+  const archive = JSON.parse(await fixture.share.mock.calls[0][0].files[0].text());
+  expect(archive.indexedDb.records).toEqual([{ scope: 'project/SECRET_UID', committed, journal, legacyFingerprint: 'hash' }]);
+  expect(fixture.writes).not.toHaveBeenCalled();
 });
 
 it('exports exact application, journal, outbox, history and legacy values without showing private content', async () => {
