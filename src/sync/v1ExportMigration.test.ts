@@ -28,7 +28,8 @@ describe("production schema 1 V1 Export migration", () => {
   it("rejects wrong schema and semantic sort-key normalization", () => {
     const wrong = JSON.parse(serializeNodeBackup(nodes, at)); wrong.schemaVersion = 2;
     expect(() => prepareSchema1V1Export(JSON.stringify(wrong), "x")).toThrow(/schemaVersion/);
-    expect(() => prepareSchema1V1Export(serializeNodeBackup(nodes.map((node) => node.id === "idea" ? { ...node, sortKey: "zzzz" } : node), at), "x")).toThrow(/semantic normalization/);
+    expect(() => prepareSchema1V1Export(serializeNodeBackup(nodes.map((node) => node.id === "task" ? { ...node, sortKey: "zzzz" } : node), at), "x")).toThrow(/semantic normalization/);
+    expect(prepareSchema1V1Export(serializeNodeBackup(nodes.map((node) => node.id === "idea" ? { ...node, sortKey: "zzzz" } : node), at), "x").migration.changedFields).toEqual([]);
   });
 
   it("classifies identical, export-only, Firestore-only and field differences without merging", () => {

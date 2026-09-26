@@ -16,6 +16,7 @@ import {
   toggleRoutineCompletion,
 } from "./routine";
 import { isIdea } from "./memoType";
+import { isValidSortKey } from "./sortKeys";
 
 export type NodeDraft = {
   title: string;
@@ -43,6 +44,7 @@ export function siblingsOf(
       (node) =>
         node.parentId === parentId &&
         node.deletedAt === null &&
+        !node.purgedAt &&
         node.id !== excludedId,
     )
     .sort(compareNodes);
@@ -594,7 +596,7 @@ export function restoreNode(nodes: Node[], id: string, now = new Date()) {
           .map((node) => node.id),
       )
     : new Set([id]);
-  return nodes.map((node) => {
+  let restored = nodes.map((node) => {
     if (!restoreIds.has(node.id)) return node;
     const parent = node.parentId
       ? nodes.find((item) => item.id === node.parentId)
@@ -612,6 +614,16 @@ export function restoreNode(nodes: Node[], id: string, now = new Date()) {
       updatedAt: now,
     };
   });
+  for (const restoredId of [...restoreIds].sort()) {
+    const node = restored.find((item) => item.id === restoredId);
+    if (!node || node.deletedAt !== null || node.purgedAt) continue;
+    const peers = siblingsOf(restored, node.parentId, restoredId);
+    if (isValidSortKey(node.sortKey) && !peers.some((peer) => peer.sortKey === node.sortKey)) continue;
+    const lastValid = peers.filter((peer) => isValidSortKey(peer.sortKey)).at(-1);
+    const sortKey = generateKeyBetween(lastValid?.sortKey ?? null, null);
+    restored = restored.map((item) => item.id === restoredId ? { ...item, sortKey } : item);
+  }
+  return restored;
 }
 
 export function hardDeleteNode(nodes: Node[], id: string, now = new Date()) {

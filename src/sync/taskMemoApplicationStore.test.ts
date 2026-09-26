@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { generateNKeysBetween } from "fractional-indexing";
 
 import { completeMemo, createNode, hardDeleteNode, moveNode, restoreMemo, restoreNode, softDeleteNode, updateNode } from "../domain/nodeOperations";
 import type { MemoNode, Node } from "../models/node";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { InMemoryRevisionServer } from "./revisionModel";
+import { nodeToV2Value } from "./nodeV2Codec";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 
 class MemoryPersistence implements ApplicationJournalPersistence {
@@ -19,6 +21,81 @@ const initialMemo = (): MemoNode => ({ id: "memo-a", type: "memo", memoType: "ta
 const unrelatedMemo = (): MemoNode => ({ ...initialMemo(), id: "memo-b", sortKey: "b0", title: "B", routineHistory: {} });
 
 describe("TaskMemo V2 application store", () => {
+  it("queues only the new Node when a deleted sibling owns the same sortKey", async () => {
+    const keys = generateNKeysBetween(null, null, 55);
+    const initial = keys.map((sortKey, index): Node => ({
+      id: `category-${index}`, type: "category", parentId: null, sortKey, title: `C${index}`,
+      createdAt: at(0), updatedAt: at(0), deletedAt: index === 54 ? at(1) : null,
+    }));
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, initial, { deviceId: "device-a" });
+    const operations = await store.command("Nodeを作成", "create", (nodes) =>
+      createNode(nodes, "memo", { title: "new", parentId: null }, at(2), "memo-new"));
+    expect(operations.map((operation) => [operation.type, operation.targetNodeId])).toEqual([["create", "memo-new"]]);
+    expect(store.nodes).toHaveLength(56);
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
+    expect(store.outbox.map((operation) => operation.targetNodeId)).toEqual(["memo-new"]);
+    expect(store.nodes).toHaveLength(56);
+  });
+
+  it("repairs a received invalid key once without updating the valid sibling group", async () => {
+    const keys = generateNKeysBetween(null, null, 54);
+    const initial = keys.map((sortKey, index): Node => ({
+      id: `category-${index}`, type: "category", parentId: null, sortKey, title: `C${index}`,
+      createdAt: at(0), updatedAt: at(0), deletedAt: null,
+    }));
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), initial, { deviceId: "device-a" });
+    const incoming: import("./types").VersionedNode = {
+      value: { id: "remote-invalid", type: "category", parentId: null, sortKey: "zzzz", title: "legacy", createdAt: at(0).toISOString(), updatedAt: at(0).toISOString(), deletedAt: null },
+      revision: 0, lastOpId: "remote:1", lastDeviceId: "remote", lastLocalSeq: 1, operationType: "import",
+    };
+    await store.receive(incoming);
+    expect(store.outbox.map((operation) => operation.targetNodeId)).toEqual(["remote-invalid"]);
+    await store.receive(incoming);
+    expect(store.outbox.map((operation) => operation.targetNodeId)).toEqual(["remote-invalid"]);
+  });
+
+  it("limits repeated remote duplicate-key arrivals to one repair per conflicting Node", async () => {
+    const seed: Node = { id: "seed", type: "category", parentId: null, sortKey: "a0", title: "seed", createdAt: at(0), updatedAt: at(0), deletedAt: null };
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [seed], { deviceId: "device-a" });
+    for (let index = 0; index < 54; index++) {
+      const id = `remote-${String(index).padStart(2, "0")}`;
+      const incoming: import("./types").VersionedNode = {
+        value: nodeToV2Value({ ...seed, id, sortKey: "a0" }), revision: 0,
+        lastOpId: `remote:${index}`, lastDeviceId: "remote", lastLocalSeq: index + 1, operationType: "create",
+      };
+      const before = store.outbox.length;
+      await store.receive(incoming);
+      expect(store.outbox.length - before).toBeLessThanOrEqual(1);
+      await store.receive(incoming);
+      expect(store.outbox.length - before).toBeLessThanOrEqual(1);
+    }
+    expect(store.outbox).toHaveLength(54);
+    expect(new Set(store.nodes.map((node) => node.sortKey)).size).toBe(55);
+  });
+
+  it("converges concurrent same-rank creates from two devices with bounded repair", async () => {
+    const seed: Node = { id: "seed", type: "category", parentId: null, sortKey: "a0", title: "seed", createdAt: at(0), updatedAt: at(0), deletedAt: null };
+    const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [seed], { deviceId: "device-a" });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [seed], { deviceId: "device-b" });
+    await a.command("Nodeを作成", "create", (nodes) => createNode(nodes, "memo", { title: "A", parentId: null }, at(1), "a-new"));
+    await b.command("Nodeを作成", "create", (nodes) => createNode(nodes, "memo", { title: "B", parentId: null }, at(1), "b-new"));
+    const server = new InMemoryRevisionServer();
+    const aCreated = server.apply(a.outbox[0]).record!;
+    const bCreated = server.apply(b.outbox[0]).record!;
+    await a.receive(bCreated);
+    await b.receive(aCreated);
+    const repairs = [...a.outbox, ...b.outbox].filter((operation) => operation.type === "update");
+    expect(repairs.length).toBeLessThanOrEqual(2);
+    for (const operation of repairs) {
+      const ack = server.apply(operation);
+      await a.receive(ack.record!);
+      await b.receive(ack.record!);
+    }
+    expect(a.nodes.map((node) => [node.id, node.sortKey]).sort()).toEqual(b.nodes.map((node) => [node.id, node.sortKey]).sort());
+    expect(new Set(a.nodes.map((node) => node.sortKey)).size).toBe(3);
+  });
+
   it("uses deterministic feature revisions, suppresses duplicate/self echo, and never touches History", async () => {
     const server = new InMemoryRevisionServer();
     const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a", initialIdeasEnabled: false });
