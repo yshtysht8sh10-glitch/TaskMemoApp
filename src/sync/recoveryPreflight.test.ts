@@ -271,7 +271,7 @@ describe("read-only recovery preflight", () => {
     const report = compareRecoveryState(state, state, snapshot, true, 0, 0, true, snapshot,
       { received: 0, missing: 0 });
     expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("safe");
-    expect(report.finalPreflight.authorizesRecovery).toBe(false);
+    expect(report.finalPreflight.authorizesRecovery).toBe(true);
     expect(report.finalPreflight.receiptSafety.bothAuditsCompleteAndMissing).toBe(true);
     expect(report.finalPreflight.candidateJournal.exactMatches).toBe(true);
     expect(report.finalPreflight.candidateStructure.valid).toBe(true);

@@ -59,24 +59,33 @@ describe("journal recovery receipt barrier", () => {
     persistence.journal = envelope(151, 1024);
     const auditOutbox = vi.fn(async (_operations: unknown[]) => { throw { kind: "offline", message: "unknown" }; });
     const adapter = { connect: vi.fn(async () => undefined), auditOutbox } as unknown as SyncAdapter;
-    await expect(recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: "ignored" })).rejects.toMatchObject({ kind: "offline" });
+    await expect(observePendingJournalReceipts(persistence, adapter, () => undefined)).rejects.toMatchObject({ kind: "offline" });
     expect(JSON.parse(persistence.committed!).domain).toHaveProperty("node-149");
     expect(JSON.parse(persistence.journal!).domain).toHaveProperty("node-150");
     expect(auditOutbox).toHaveBeenCalledTimes(1);
     expect(auditOutbox.mock.calls[0][0]).toHaveLength(1024);
   });
 
-  it("promotes the 151-Node journal only after a complete audit", async () => {
+  it("never promotes the 151-Node journal based only on receipt counts", async () => {
     const persistence = new Persistence();
     persistence.committed = envelope(150, 969);
     persistence.journal = envelope(151, 1024);
     const auditOutbox = vi.fn(async (_operations: unknown[]) => ({ received: 0, missing: 1024 }));
     const adapter = { connect: vi.fn(async () => undefined), auditOutbox } as unknown as SyncAdapter;
+    await expect(recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: "ignored" }, true))
+      .rejects.toThrow("最終Preflight");
+    expect(persistence.journal).toBe(envelope(151, 1024));
+    expect(auditOutbox).not.toHaveBeenCalled();
+  });
+
+  it("preserves the established non-production journal path", async () => {
+    const persistence = new Persistence();
+    persistence.committed = envelope(1);
+    persistence.journal = envelope(2);
+    const adapter = { connect: vi.fn(async () => undefined),
+      auditOutbox: vi.fn(async () => ({ received: 0, missing: 0 })) } as unknown as SyncAdapter;
     const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: "ignored" });
-    expect(store.nodes).toHaveLength(151);
+    expect(store.nodes).toHaveLength(2);
     expect(persistence.journal).toBeNull();
-    expect(auditOutbox).toHaveBeenCalledTimes(1);
-    expect(auditOutbox.mock.calls[0][0]).toHaveLength(1024);
-    expect(store.outbox).toHaveLength(1024);
   });
 });

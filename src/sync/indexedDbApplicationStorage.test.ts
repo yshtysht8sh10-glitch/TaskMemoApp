@@ -45,6 +45,43 @@ describe("IndexedDB V2 migration", () => {
     expect(storage).toEqual(original);
   });
 
+  it("atomically finalizes only the expected journal and preserves the legacy backup", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const committed = envelope(150, 969);
+    const journal = envelope(151, 1024);
+    const recovered = envelope(151, 0);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const original = new Map(storage);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    await expect(persistence.finalizeRecovery(committed, "wrong", recovered)).rejects.toThrow();
+    expect(await persistence.loadCommitted()).toBe(committed);
+    expect(await persistence.loadJournal()).toBe(journal);
+    await persistence.finalizeRecovery(committed, journal, recovered);
+    expect(await persistence.loadCommitted()).toBe(recovered);
+    expect(await persistence.loadJournal()).toBeNull();
+    expect(await persistence.isRecoveryCompleted()).toBe(true);
+    expect(storage).toEqual(original);
+  });
+
+  it("retains the journal if the final IndexedDB write fails", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const committed = envelope(150, 969);
+    const journal = envelope(151, 1024);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    const original = FakeIDBDatabase.prototype.transaction;
+    const failure = vi.spyOn(FakeIDBDatabase.prototype, "transaction").mockImplementation(function (this: IDBDatabase, names, mode, options) {
+      if (mode === "readwrite") throw new DOMException("quota", "QuotaExceededError");
+      return original.call(this, names, mode, options);
+    });
+    try {
+      await expect(persistence.finalizeRecovery(committed, journal, envelope(151, 0))).rejects.toThrow("quota");
+      expect(await persistence.loadCommitted()).toBe(committed);
+      expect(await persistence.loadJournal()).toBe(journal);
+      expect(await persistence.isRecoveryCompleted()).toBe(false);
+    } finally { failure.mockRestore(); }
+  });
+
   it("fails closed when the legacy source changes after migration", async () => {
     const legacy = new TaskMemoV2ApplicationJournal("account");
     await legacy.writeCommitted(envelope(150, 969));

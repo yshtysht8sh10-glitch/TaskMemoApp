@@ -9,7 +9,7 @@ if (!/EXPO_PUBLIC_TASKMEMO_ENV\s*=\s*["']?production/.test(envFile) || !/EXPO_PU
   throw new Error(`Production V2 export requires ${environmentFile} for taskmemoapp-eabc3.`);
 const parsed = Object.fromEntries(envFile.split(/\r?\n/).map(line => line.match(/^\s*([A-Z0-9_]+)\s*=\s*["']?(.*?)["']?\s*$/)).filter(Boolean).map(match => [match[1], match[2]]));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-const env = { ...process.env, ...parsed, TASKMEMO_ENV_FILE: environmentFile, EXPO_PUBLIC_BUILD_SHA: commit, EXPO_PUBLIC_TASKMEMO_ENV: "production", EXPO_PUBLIC_SYNC_V2_ENABLED: "true", EXPO_PUBLIC_RECOVERY_OBSERVATION_ONLY: "true", EXPO_PUBLIC_RELEASE_CHANNEL: "production-v2-cutover" };
+const env = { ...process.env, ...parsed, TASKMEMO_ENV_FILE: environmentFile, EXPO_PUBLIC_BUILD_SHA: commit, EXPO_PUBLIC_TASKMEMO_ENV: "production", EXPO_PUBLIC_SYNC_V2_ENABLED: "true", EXPO_PUBLIC_GUARDED_RECOVERY_ENABLED: "true", EXPO_PUBLIC_RELEASE_CHANNEL: "production-v2-cutover" };
 execFileSync(process.execPath, ["scripts/verify-firebase-environment.js"], { stdio: "inherit", env });
 const exported = spawnSync("npx", ["expo", "export", "--platform", "web", "--clear"], { stdio: "inherit", env, shell: process.platform === "win32" });
 if (exported.status !== 0) process.exit(exported.status ?? 1);

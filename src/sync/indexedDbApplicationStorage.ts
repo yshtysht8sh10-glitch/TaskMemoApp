@@ -9,6 +9,7 @@ type StoredScope = {
   committed: string | null;
   journal: string | null;
   legacyFingerprint: string;
+  recoveryCompleted?: boolean;
 };
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -133,6 +134,29 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
 
   async loadCommitted() { return (await this.read())?.committed ?? null; }
   async loadJournal() { return (await this.read())?.journal ?? null; }
+  async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }
+  /** One IndexedDB transaction: old WAL survives every failed precondition or failed write. */
+  async finalizeRecovery(expectedCommitted: string, expectedJournal: string, recoveredCommitted: string) {
+    const pending = validateEnvelope(expectedJournal)!;
+    validateEnvelope(recoveredCommitted);
+    if (recoveredCommitted !== JSON.stringify({ ...pending, sync: {
+      ...(pending.sync as Record<string, unknown>), outbox: [],
+    } })) throw new Error("復旧確定データがjournalと一致しません。");
+    const transaction = this.database.transaction(STORE_NAME, "readwrite");
+    const done = transactionDone(transaction);
+    const objectStore = transaction.objectStore(STORE_NAME);
+    try {
+      const current = await requestResult(objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>);
+      if (!current || current.committed !== expectedCommitted || current.journal !== expectedJournal ||
+          current.recoveryCompleted) throw new Error("復旧中にローカル状態が変更されました。確定を停止しました。");
+      objectStore.put({ ...current, committed: recoveredCommitted, journal: null, recoveryCompleted: true });
+      await done;
+    } catch (error) {
+      try { transaction.abort(); } catch { /* The transaction may already be finished. */ }
+      await done.catch(() => undefined);
+      throw error;
+    }
+  }
   writeJournal(value: string) { return this.update((current) => ({ ...current, journal: value })); }
   writeCommitted(value: string) { return this.update((current) => ({ ...current, committed: value })); }
   clearJournal() { return this.update((current) => ({ ...current, journal: null })); }

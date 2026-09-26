@@ -73,8 +73,8 @@ type FinalPreflight = {
     candidateProfileMismatch: number; localProfileUnsynced: number; invalidRemoteReceiptCount: number;
     unknownFieldDifference: number; journalOnlyMissingFromCandidate: number;
     journalOnlyMissingCreate: number; unrecognizedOperationType: number };
-  /** This is an observation decision, never permission to commit or upload. */
-  authorizesRecovery: false;
+  /** The execution path still repeats the preflight immediately before any upload. */
+  authorizesRecovery: boolean;
 };
 export type RecoveryPreflight = {
   finalPreflight: FinalPreflight;
@@ -551,6 +551,7 @@ function buildFinalPreflight(application: Envelope, journal: Envelope, remote: N
     journalOnlyMissingCreate: journalOnlyFromApplication.count - journalOnlyFromApplication.uniqueCreateTargetCount,
     unrecognizedOperationType,
   };
+  const finalRecoverySafetyDecision = Object.values(blockReasons).some((count) => count > 0) ? "blocked" : "safe";
   return {
     remoteBeforeNodeCount: remote.size, candidateNodeCount: candidate.size,
     replay: { total: journal.sync.outbox.length, applied: replay.result.applied,
@@ -563,8 +564,7 @@ function buildFinalPreflight(application: Envelope, journal: Envelope, remote: N
       userVisibleChangeNodeCount, syncMetadataOnlyNodeCount },
     journalOnlyFromApplication, superseded: replay.superseded, receiptSafety,
     remoteSnapshotStable, localCopyMatches,
-    finalRecoverySafetyDecision: Object.values(blockReasons).some((count) => count > 0) ? "blocked" : "safe",
-    blockReasons, authorizesRecovery: false,
+    finalRecoverySafetyDecision, blockReasons, authorizesRecovery: finalRecoverySafetyDecision === "safe",
   };
 }
 
@@ -865,7 +865,7 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
 
 const remoteReceiptCountInvalid = (count: number) => !Number.isSafeInteger(count) || count < 0;
 
-export async function runRecoveryPreflight(persistence: ApplicationJournalPersistence, adapter: SyncAdapter, scope: string,
+export async function prepareRecoveryPreflight(persistence: ApplicationJournalPersistence, adapter: SyncAdapter, scope: string,
   auditedReceipts: { received: number; missing: number },
   legacy: ApplicationJournalPersistence = new TaskMemoV2ApplicationJournal(scope)) {
   if (!adapter.readRecoverySnapshot) throw { code: "preflight-adapter-unavailable" };
@@ -886,6 +886,13 @@ export async function runRecoveryPreflight(persistence: ApplicationJournalPersis
   if (latestCommitted !== committed || latestJournal !== journal ||
       latestLegacyCommitted !== legacyCommitted || latestLegacyJournal !== legacyJournal)
     throw { code: "preflight-local-changed" };
-  return compareRecoveryState(application, pending, remote, localCopyMatches, auditedReceipts.received,
+  const report = compareRecoveryState(application, pending, remote, localCopyMatches, auditedReceipts.received,
     auditedReceipts.missing, true, secondRemote, postAudit);
+  return { report, committedRaw: committed!, journalRaw: journal!, remote };
+}
+
+export async function runRecoveryPreflight(persistence: ApplicationJournalPersistence, adapter: SyncAdapter, scope: string,
+  auditedReceipts: { received: number; missing: number },
+  legacy: ApplicationJournalPersistence = new TaskMemoV2ApplicationJournal(scope)) {
+  return (await prepareRecoveryPreflight(persistence, adapter, scope, auditedReceipts, legacy)).report;
 }

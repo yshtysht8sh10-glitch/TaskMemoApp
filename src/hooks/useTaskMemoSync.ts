@@ -13,6 +13,7 @@ import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../s
 import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "../sync/recovery";
 import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
 import { runRecoveryPreflight } from "../sync/recoveryPreflight";
+import { executeJournalRecovery } from "../sync/executeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -25,12 +26,14 @@ import { appAlert } from "../utils/appAlert";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic";
 
-const message = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
+const message = (reason: unknown) => reason instanceof Error ? reason.message :
+  reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string"
+    ? reason.message : String(reason);
 
 function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void, initialIdeasEnabled: boolean, onIdeasEnabled: (value: boolean) => void) {
   const firebase = firebaseConfiguration();
-  const observationOnly = Platform.OS === "web" && firebase.environment === "production" && process.env.EXPO_PUBLIC_RECOVERY_OBSERVATION_ONLY === "true";
-  const receiptModeParameter = observationOnly && typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("receiptMode") : null;
+  const guardedRecovery = Platform.OS === "web" && firebase.environment === "production" && process.env.EXPO_PUBLIC_GUARDED_RECOVERY_ENABLED === "true";
+  const receiptModeParameter = guardedRecovery && typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("receiptMode") : null;
   const receiptReadMode = receiptModeParameter === "serial" || receiptModeParameter === "serial-interval-100" ? "serial"
     : receiptModeParameter === "parallel" ? "parallel" : "chunked";
   const receiptLookupIntervalMs = receiptModeParameter === "serial-interval-100" ? 100 : 0;
@@ -104,7 +107,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setUser(nextUser); setAuthReady(true); setError(null);
       if (!nextUser) { setStatus("signed-out"); return; }
       setStatus("connecting");
-      if (observationOnly) {
+      if (guardedRecovery) {
         beginRecoveryObservation();
         recordRecoveryObservation({ receiptReadMode, receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs,
           receiptChunkSize: receiptReadMode === "chunked" ? 20 : 0, receiptMaxAttempts: receiptReadMode === "chunked" ? 3 : 1 });
@@ -114,12 +117,12 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const adapterEnvironment = emulator ? "test" : firebase.environment === "production" ? "production" : "development";
         const adapter = createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator,
-          receiptLookupTimeoutMs: observationOnly ? 10000 : undefined,
-          receiptReadMode: observationOnly ? receiptReadMode : undefined,
-          receiptLookupIntervalMs: observationOnly ? receiptLookupIntervalMs : undefined,
-          onReceiptLookup: observationOnly ? recordReceiptLookup : undefined,
-          onReceiptRead: observationOnly ? recordReceiptRead : undefined,
-          onReceiptBatch: observationOnly ? (event) => recordRecoveryObservation({
+          receiptLookupTimeoutMs: guardedRecovery ? 10000 : undefined,
+          receiptReadMode: guardedRecovery ? receiptReadMode : undefined,
+          receiptLookupIntervalMs: guardedRecovery ? receiptLookupIntervalMs : undefined,
+          onReceiptLookup: guardedRecovery ? recordReceiptLookup : undefined,
+          onReceiptRead: guardedRecovery ? recordReceiptRead : undefined,
+          onReceiptBatch: guardedRecovery ? (event) => recordRecoveryObservation({
             recoveryPhase: event.phase === "start" ? "receipt-batch-start" : "receipt-batch-complete",
             receiptComparisonTotal: event.total,
             receiptComparisonCompleted: event.completed,
@@ -128,14 +131,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           }) : undefined,
         });
         const scope = `${db.app.options.projectId}/${nextUser.uid}`;
-        const legacyJournal = observationOnly ? await new TaskMemoV2ApplicationJournal(scope).loadJournal() : null;
-        if (observationOnly) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-start" });
+        const legacyJournal = guardedRecovery ? await new TaskMemoV2ApplicationJournal(scope).loadJournal() : null;
+        if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-start" });
         const persistence = Platform.OS === "web"
           ? await IndexedDbTaskMemoApplicationJournal.open(scope, undefined, { allowLegacyCopy: !legacyJournal })
           : new TaskMemoV2ApplicationJournal(scope);
-        if (observationOnly) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
+        if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
-        if (observationOnly && await persistence.loadJournal()) {
+        if (guardedRecovery && await persistence.loadJournal()) {
           const observation = await observePendingJournalReceipts(persistence, adapter, recordRecoveryObservation);
           if (currentGeneration !== generation) return;
           recordRecoveryObservation({ recoveryPhase: "preflight-start" });
@@ -143,19 +146,29 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           const preflight = await runRecoveryPreflight(persistence, adapter, scope, observation.auditResult);
           if (currentGeneration !== generation) return;
           recordRecoveryObservation({ recoveryPhase: "preflight-complete", preflight });
-          recordRecoveryObservation({ recoveryPhase: "observation-paused" });
-          setStatus("diagnostic");
-          setError("復旧診断のため安全停止中です。journalの確定・再送は行っていません。");
-          return;
+          if (preflight.finalPreflight.finalRecoverySafetyDecision !== "safe" ||
+              !preflight.finalPreflight.authorizesRecovery) {
+            recordRecoveryObservation({ recoveryPhase: "observation-paused" });
+            setStatus("diagnostic");
+            setError("最終復旧確認がblockedのため安全停止中です。journalの確定・再送は行っていません。");
+            return;
+          }
+          if (!(persistence instanceof IndexedDbTaskMemoApplicationJournal))
+            throw new Error("IndexedDB以外の保存先では実復旧を開始しません。");
+          await executeJournalRecovery(persistence, adapter, scope, observation.auditResult,
+            () => currentGeneration === generation);
+          if (currentGeneration !== generation) return;
         }
-        if (observationOnly && legacyJournal) throw new Error("旧journalとIndexedDBの状態が一致しません。診断を停止しました。");
-        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current });
+        if (guardedRecovery && legacyJournal && !(persistence instanceof IndexedDbTaskMemoApplicationJournal &&
+            await persistence.isRecoveryCompleted()))
+          throw new Error("旧journalとIndexedDBの状態が一致しません。復旧を停止しました。");
+        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current }, firebase.environment === "production");
         if (currentGeneration !== generation) return;
         const controller = new TaskMemoV2SyncController(store, adapter, publish);
         storeRef.current = store; controllerRef.current = controller; publish(); await controller.start(); publish();
       } catch (reason) {
         if (currentGeneration === generation) {
-          if (observationOnly) recordRecoveryObservation({ recoveryPhase: "error", lastRecoveryError: recoveryErrorCode(reason) });
+          if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "error", lastRecoveryError: recoveryErrorCode(reason) });
           setStatus("error"); setError(message(reason));
           appAlert("V2データの復旧を停止しました", `データを削除せず、バックアップを保持してください。\n${message(reason)}`);
         }
@@ -171,7 +184,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       removeOnlineListener();
     };
-  }, [configured, ready, firebase.environment, observationOnly, receiptReadMode, receiptLookupIntervalMs]);
+  }, [configured, ready, firebase.environment, guardedRecovery, receiptReadMode, receiptLookupIntervalMs]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {

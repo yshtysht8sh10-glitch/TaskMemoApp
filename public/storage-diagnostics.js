@@ -128,7 +128,7 @@
               'candidateProfileMismatch', 'localProfileUnsynced', 'invalidRemoteReceiptCount',
               'unknownFieldDifference', 'journalOnlyMissingFromCandidate', 'journalOnlyMissingCreate',
               'unrecognizedOperationType']),
-            authorizesRecovery: false,
+            authorizesRecovery: final.authorizesRecovery === true && final.finalRecoverySafetyDecision === 'safe',
           } : null;
           return { ...Object.fromEntries(fields.map((field) => [field, count(p[field])])),
             finalPreflight,

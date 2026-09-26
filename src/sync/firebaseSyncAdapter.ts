@@ -278,7 +278,7 @@ export function createFirebaseSyncAdapter(
       }
     },
 
-    async upload(operation: SyncOperation) {
+    async upload(operation: SyncOperation, expected?: SyncAcknowledgement) {
       try {
         const operationRef = doc(db, "users", uid, "syncOperationsV2", operation.opId);
         const pinnedNote = operation.targetType === "pinnedNote";
@@ -295,6 +295,8 @@ export function createFirebaseSyncAdapter(
             if (!sameOperation(data.operation, operation)) {
               throw { code: "invalid-argument", message: "opId collision with different payload" };
             }
+            if (expected && !sameOperation(data.acknowledgement, expected))
+              throw { code: "invalid-argument", message: "recovery acknowledgement differs from preflight" };
             return data.acknowledgement as SyncAcknowledgement;
           }
           const targetSnapshot = await transaction.get(targetRef);
@@ -303,6 +305,8 @@ export function createFirebaseSyncAdapter(
             : features
               ? applyFeaturesOperation(targetSnapshot.exists() ? targetSnapshot.data().record : undefined, operation)
               : applyRevisionOperation(targetSnapshot.exists() ? targetSnapshot.data().record as VersionedNode : undefined, operation);
+          if (expected && !sameOperation(acknowledgement, expected))
+            throw { code: "invalid-argument", message: "recovery winner differs from preflight" };
           if (acknowledgement.result === "applied") transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : features ? acknowledgement.featuresRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
           transaction.set(operationRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
           return acknowledgement;

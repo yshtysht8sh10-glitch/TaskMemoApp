@@ -10,8 +10,13 @@ export async function recoverV2ApplicationAfterAudit(
   persistence: ApplicationJournalPersistence,
   adapter: SyncAdapter,
   options: Options,
+  requireFinalPreflight = false,
 ) {
-  await auditPendingJournal(persistence, adapter);
+  // Receipt counts alone cannot authorize journal promotion. The guarded executor
+  // must finish its final preflight, uploads, remote verification and atomic commit first.
+  if (requireFinalPreflight && await persistence.loadJournal())
+    throw new Error("未確定journalがあります。最終Preflightと実復旧が完了するまで確定しません。");
+  if (!requireFinalPreflight) await auditPendingJournal(persistence, adapter);
   return TaskMemoV2ApplicationStore.open(persistence, [], options);
 }
 

@@ -142,6 +142,24 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await expect(adapter.auditOutbox?.([{ ...operation, payload: { node: { id: "node-a", title: "wrong" } } }])).rejects.toMatchObject({ kind: "permanent" });
   });
 
+  it("aborts a recovery transaction before writing when its winner differs from preflight", async () => {
+    const uid = "owner";
+    const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, uid, "test", { emulator: true });
+    const operation = { opId: "recovery:1", deviceId: "recovery", localSeq: 1,
+      targetNodeId: "recovery-node", type: "create" as const, baseRevision: 0,
+      payload: { node: { id: "recovery-node", title: "private" } }, createdAt: now(1).toISOString(),
+      status: "pending" as const, attemptCount: 0, nextRetryAt: null, lastError: null };
+    const wrongExpected = { opId: operation.opId, revision: 2,
+      result: "superseded" as const };
+    await expect(adapter.upload(operation, wrongExpected)).rejects.toMatchObject({ kind: "permanent" });
+    expect((await getDoc(doc(db, `users/${uid}/nodesV2/recovery-node`))).exists()).toBe(false);
+    expect((await getDoc(doc(db, `users/${uid}/syncOperationsV2/recovery:1`))).exists()).toBe(false);
+    const actual = await adapter.upload(operation);
+    await expect(adapter.upload(operation, wrongExpected)).rejects.toMatchObject({ kind: "permanent" });
+    expect((await getDoc(doc(db, `users/${uid}/syncOperationsV2/recovery:1`))).data()?.acknowledgement).toEqual(actual);
+  });
+
   it("reads the server Node/profile snapshot and receipt count without changing any document", async () => {
     const uid = "owner";
     const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
