@@ -197,14 +197,17 @@ describe("read-only recovery preflight", () => {
       loadCommitted: vi.fn(async () => raw), loadJournal: vi.fn(async () => raw),
       writeJournal: vi.fn(), writeCommitted: vi.fn(), clearJournal: vi.fn(),
     };
-    const adapter = { readRecoverySnapshot: vi.fn()
+    const adapter = { auditOutbox: vi.fn(async () => ({ received: 0, missing: 0 })), readRecoverySnapshot: vi.fn()
       .mockResolvedValueOnce({ nodes: [record("private-node")], receiptDocumentCount: 0 })
       .mockResolvedValueOnce({ nodes: [record("private-node", 1)], receiptDocumentCount: 0 }),
       upload: vi.fn() } as unknown as SyncAdapter;
     const report = await runRecoveryPreflight(persistence, adapter, "test-scope",
       { received: 0, missing: 0 }, persistence);
     expect(adapter.readRecoverySnapshot).toHaveBeenCalledTimes(2);
+    expect(adapter.auditOutbox).toHaveBeenCalledTimes(1);
     expect(report.remoteSnapshotStable).toBe(false);
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("blocked");
+    expect(report.finalPreflight.blockReasons.remoteSnapshotUnstable).toBe(1);
     expect(report.recoverySafetyBlockReasons.remoteSnapshotUnstable).toBe(1);
     expect(report.recoverySafetyDecision).toBe("blocked");
     expect(persistence.writeJournal).not.toHaveBeenCalled();
@@ -226,6 +229,122 @@ describe("read-only recovery preflight", () => {
     expect(report.remoteSnapshotStable).toBe(true);
     expect(report.recoverySafetyDecision).toBe("manual-review");
     expect(Object.values(report.recoverySafetyBlockReasons).every((count) => count === 0)).toBe(true);
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("blocked");
+    expect(report.finalPreflight.blockReasons.receiptAuditIncompleteOrReceived).toBe(1);
+  });
+
+  it("produces a read-only final candidate with independent journal/application and receipt checks", () => {
+    const create = operation("device:1", "private-new", "create", 0);
+    const initial = record("private-existing");
+    const added = applyRevisionOperation(undefined, create).record!;
+    const report = compareRecoveryState(envelope([initial]), envelope([initial, added], [create]),
+      { nodes: [initial], receiptDocumentCount: 16964 }, true, 0, 1, true,
+      { nodes: [initial], receiptDocumentCount: 16964 }, { received: 0, missing: 1 });
+    const final = report.finalPreflight;
+    expect(final.remoteToCandidate).toMatchObject({ create: 1, update: 0, delete: 0, unchanged: 1 });
+    expect(final.candidateJournal).toMatchObject({ exactMatches: true, profileMatches: true });
+    expect(final.candidateApplication).toMatchObject({ leftOnly: 1, semanticMatches: false });
+    expect(final.journalOnlyFromApplication).toMatchObject({ count: 1, remoteAbsent: 1,
+      candidatePresent: 1, createOperationCount: 1 });
+    expect(final.candidateStructure.valid).toBe(false); // minimal test Node lacks structural fields
+    expect(final.finalRecoverySafetyDecision).toBe("blocked");
+    expect(final.authorizesRecovery).toBe(false);
+    expect(JSON.stringify(final)).not.toMatch(/private-existing|private-new|device:1/);
+  });
+
+  it("classifies a stale server-winner operation by revision without exporting its ID", () => {
+    const current = record("private-node", 5);
+    const stale = operation("device:1", "private-node", "update", 0);
+    const report = compareRecoveryState(envelope([current]), envelope([current], [stale]),
+      { nodes: [current], receiptDocumentCount: 0 }, true, 0, 1, true,
+      { nodes: [current], receiptDocumentCount: 0 }, { received: 0, missing: 1 });
+    expect(report.finalPreflight.superseded).toMatchObject({ total: 1, classified: 1,
+      byReason: { higherRevisionWins: 1 }, byType: { update: { higherRevisionWins: 1 } } });
+  });
+
+  it("marks a fully validated stable snapshot safe for review, never authorizes recovery", () => {
+    const complete = { ...record("private-node"), value: { id: "private-node", type: "category",
+      parentId: null, sortKey: "a0", title: "private-title", createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null } };
+    const state = envelope([complete]);
+    const snapshot = { nodes: [complete], receiptDocumentCount: 0 };
+    const report = compareRecoveryState(state, state, snapshot, true, 0, 0, true, snapshot,
+      { received: 0, missing: 0 });
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("safe");
+    expect(report.finalPreflight.authorizesRecovery).toBe(false);
+    expect(report.finalPreflight.receiptSafety.bothAuditsCompleteAndMissing).toBe(true);
+    expect(report.finalPreflight.candidateJournal.exactMatches).toBe(true);
+    expect(report.finalPreflight.candidateStructure.valid).toBe(true);
+  });
+
+  it("blocks when the second receipt audit finds an acknowledged operation", () => {
+    const complete = { ...record("private-node"), value: { id: "private-node", type: "category",
+      parentId: null, sortKey: "a0", title: "private-title", createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null } };
+    const op = operation("device:1", "private-node", "update", 0);
+    const state = envelope([complete], [op]);
+    const snapshot = { nodes: [complete], receiptDocumentCount: 1 };
+    const report = compareRecoveryState(state, state, snapshot, true, 0, 1, true, snapshot,
+      { received: 1, missing: 0 });
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("blocked");
+    expect(report.finalPreflight.blockReasons.receiptAuditIncompleteOrReceived).toBe(1);
+  });
+
+  it("blocks an unrecognized or invalid operation even if the candidate equals the journal", () => {
+    const complete = { ...record("private-node"), value: { id: "private-node", type: "category",
+      parentId: null, sortKey: "a0", title: "private-title", createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null } };
+    const bad = { ...operation("device:1", "private-node", "update", 0), type: "unknown" } as unknown as SyncOperation;
+    const state = envelope([complete], [bad]);
+    const snapshot = { nodes: [complete], receiptDocumentCount: 0 };
+    const report = compareRecoveryState(state, state, snapshot, true, 0, 1, true, snapshot,
+      { received: 0, missing: 1 });
+    expect(report.finalPreflight.candidateJournal.exactMatches).toBe(true);
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("blocked");
+    expect(report.finalPreflight.blockReasons.unrecognizedOperationType).toBe(1);
+    expect(report.finalPreflight.blockReasons.invalidOperation).toBe(1);
+  });
+
+  it("blocks a valid-structure candidate whose journal content differs", () => {
+    const base = { ...record("private-node"), value: { id: "private-node", type: "category",
+      parentId: null, sortKey: "a0", title: "private-title", createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null } };
+    const state = envelope([{ ...base, value: { ...base.value, title: "journal-secret" } }]);
+    const snapshot = { nodes: [base], receiptDocumentCount: 0 };
+    const report = compareRecoveryState(state, state, snapshot, true, 0, 0, true, snapshot,
+      { received: 0, missing: 0 });
+    expect(report.finalPreflight.candidateStructure.valid).toBe(true);
+    expect(report.finalPreflight.finalRecoverySafetyDecision).toBe("blocked");
+    expect(report.finalPreflight.blockReasons.candidateSemanticMismatch).toBe(1);
+  });
+
+  it("classifies remote create, update, logical delete and unchanged nodes without writing", () => {
+    const base = (id: string) => ({ ...record(id), value: { id, type: "category" as const,
+      parentId: null, sortKey: `a${id}`, title: "private-title", createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null } });
+    const remote = [base("1"), base("2"), base("3")];
+    const created = base("4");
+    const changed = { ...base("1"), revision: 1, lastOpId: "changed", value: { ...base("1").value, title: "changed" } };
+    const deleted = { ...base("2"), revision: 1, lastOpId: "deleted", value: { ...base("2").value,
+      deletedAt: "2026-09-26T01:00:00.000Z" } };
+    const ops = [
+      { ...operation("device:1", "1", "update", 0), payload: { node: changed.value } },
+      { ...operation("device:2", "2", "softDelete", 0), payload: { node: deleted.value } },
+      { ...operation("device:3", "4", "create", 0), payload: { node: created.value } },
+    ];
+    const journalNodes = [applyRevisionOperation(remote[0], ops[0]).record!,
+      applyRevisionOperation(remote[1], ops[1]).record!, remote[2],
+      applyRevisionOperation(undefined, ops[2]).record!];
+    const report = compareRecoveryState(envelope(remote), envelope(journalNodes, ops),
+      { nodes: remote, receiptDocumentCount: 0 }, true, 0, 3, true,
+      { nodes: remote, receiptDocumentCount: 0 }, { received: 0, missing: 3 });
+    expect(report.finalPreflight.remoteToCandidate).toMatchObject({ create: 1, update: 1,
+      delete: 1, unchanged: 1, semanticUpdate: 1, logicalDelete: 1 });
+    expect(report.finalPreflight.candidateJournal.exactMatches).toBe(true);
+    expect(report.finalPreflight.candidateApplication.differingFieldCounts["value.title"]).toBe(1);
+    expect(report.finalPreflight.candidateApplication.differingFieldCounts["value.deletedAt"]).toBe(1);
+    expect(report.finalPreflight.replay).toMatchObject({ total: 3, applied: 3, inconsistency: 0 });
+    expect(JSON.stringify(report.finalPreflight)).not.toMatch(/"changed"|"deleted"|private-title|device:1/);
   });
 
   it("shows stale operations as skipped versus server-superseded without applying them", () => {

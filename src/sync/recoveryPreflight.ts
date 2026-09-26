@@ -1,6 +1,6 @@
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
-import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
+import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation, candidateForOperation } from "./revisionModel";
 import { isValidSortKey } from "../domain/sortKeys";
 import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
@@ -36,7 +36,48 @@ type ReplayResult = {
   exactMatchesJournal: boolean; profileMatchesJournal: boolean;
 };
 type OperationResultCounts = { success: number; duplicate: number; missing: number; conflict: number; inconsistency: number };
+type WinnerReason = "purgedTombstoneWins" | "higherRevisionWins" | "deletionRankWins" | "opIdTieBreakWins" | "unclassified";
+const winnerReasons: WinnerReason[] = ["purgedTombstoneWins", "higherRevisionWins", "deletionRankWins", "opIdTieBreakWins", "unclassified"];
+type FinalPreflight = {
+  remoteBeforeNodeCount: number; candidateNodeCount: number;
+  replay: { total: number; applied: number; superseded: number; invalid: number;
+    duplicate: number; inconsistency: number; unclassified: number };
+  remoteToCandidate: { create: number; update: number; delete: number; unchanged: number;
+    physicalDelete: number; logicalDelete: number; semanticUpdate: number; syncMetadataOnlyUpdate: number;
+    sortKeyOnlyUpdate: number; otherUpdate: number };
+  candidateStructure: StructureCheck;
+  candidateJournal: PairComparison & { profileMatches: boolean };
+  candidateApplication: PairComparison & { differingFieldCounts: Record<string, number>;
+    userVisibleChangeNodeCount: number; syncMetadataOnlyNodeCount: number };
+  journalOnlyFromApplication: { count: number; remoteAbsent: number; candidatePresent: number;
+    createOperationCount: number; uniqueCreateTargetCount: number; activeCount: number;
+    categoryCount: number; memoCount: number; otherTypeCount: number;
+    createPayloadMatchesFinalJournalCount: number;
+    createdByReplayCount: number };
+  superseded: { total: number; classified: number; unclassified: number;
+    byReason: Record<WinnerReason, number>; byType: Record<SyncOperation["type"], Record<WinnerReason, number>>;
+    effectAlreadyRepresentedCount: number };
+  receiptSafety: { outboxCount: number; preReceived: number; preMissing: number;
+    postReceived: number; postMissing: number; remoteReceiptDocumentCount: number;
+    bothAuditsCompleteAndMissing: boolean; candidateReplayDependsOnReceipt: false;
+    actualUploadChecksReceiptInTransaction: true;
+    requiresTransactionalReceiptRecheck: true };
+  remoteSnapshotStable: boolean; localCopyMatches: boolean;
+  finalRecoverySafetyDecision: "safe" | "blocked";
+  blockReasons: { localCopyMismatch: number; applicationJournalDivergence: number;
+    remoteSnapshotUnstable: number; receiptAuditIncompleteOrReceived: number;
+    invalidOperation: number; strictDryRunInconsistency: number; duplicateOperation: number;
+    replayInconsistency: number; unexplainedSuperseded: number;
+    candidateStructureInvalid: number; candidateSemanticMismatch: number;
+    candidateSyncMetadataMismatch: number; candidateExactMismatch: number;
+    candidateProfileMismatch: number; localProfileUnsynced: number; invalidRemoteReceiptCount: number;
+    unknownFieldDifference: number; journalOnlyMissingFromCandidate: number;
+    journalOnlyMissingCreate: number; unrecognizedOperationType: number };
+  /** This is an observation decision, never permission to commit or upload. */
+  authorizesRecovery: false;
+};
 export type RecoveryPreflight = {
+  finalPreflight: FinalPreflight;
   localCopyMatches: boolean;
   applicationNodeCount: number;
   journalNodeCount: number;
@@ -306,9 +347,13 @@ function analyzeCreateAndUpdate(operations: SyncOperation[], remote: NodeMap, jo
 function replayForDiagnosis(strategy: "strict" | "createCompatible" | "serverWinner" | "skipStale",
   operations: SyncOperation[], remote: NodeMap, journal: NodeMap,
   remotePinned: VersionedPinnedNote | undefined, remoteFeatures: VersionedFeatures | undefined,
-  journalPinned: VersionedPinnedNote | null | undefined, journalFeatures: VersionedFeatures | null | undefined): ReplayResult {
+  journalPinned: VersionedPinnedNote | null | undefined, journalFeatures: VersionedFeatures | null | undefined) {
   const nodes = new Map(remote);
   let pinned = remotePinned, features = remoteFeatures;
+  const byReason = Object.fromEntries(winnerReasons.map((reason) => [reason, 0])) as Record<WinnerReason, number>;
+  const byType = Object.fromEntries(operationTypes.map((type) => [type,
+    Object.fromEntries(winnerReasons.map((reason) => [reason, 0]))])) as Record<SyncOperation["type"], Record<WinnerReason, number>>;
+  let effectAlreadyRepresentedCount = 0;
   const result: ReplayResult = { applied: 0, superseded: 0, skippedStale: 0, skippedFuture: 0,
     skippedCreateExisting: 0, skippedMissing: 0, duplicate: 0, invalid: 0, finalNodeCount: 0,
     semanticMatchesJournal: false, syncMetadataMatchesJournal: false,
@@ -359,7 +404,15 @@ function replayForDiagnosis(strategy: "strict" | "createCompatible" | "serverWin
         target === "pinnedNote" ? applyPinnedNoteOperation(current as VersionedPinnedNote | undefined, operation) :
           applyFeaturesOperation(current as VersionedFeatures | undefined, operation);
       if (ack.result === "applied") result.applied++;
-      else result.superseded++;
+      else {
+        result.superseded++;
+        const reason = classifyWinnerReason(current, operation, target);
+        byReason[reason]++;
+        byType[operation.type][reason]++;
+        const value = target === "node" ? operation.payload.node :
+          target === "pinnedNote" ? operation.payload.pinnedNote : operation.payload.features;
+        if (canonical(current?.value) === canonical(value)) effectAlreadyRepresentedCount++;
+      }
       if (ack.record) nodes.set(operation.targetNodeId, ack.record);
       if (ack.pinnedNoteRecord) pinned = ack.pinnedNoteRecord;
       if (ack.featuresRecord) features = ack.featuresRecord;
@@ -372,7 +425,147 @@ function replayForDiagnosis(strategy: "strict" | "createCompatible" | "serverWin
   result.exactMatchesJournal = comparison.exactMatches;
   result.profileMatchesJournal = canonical(pinned ?? null) === canonical(journalPinned ?? null) &&
     canonical(features ?? null) === canonical(journalFeatures ?? null);
-  return result;
+  return { result, nodes, pinned, features, superseded: {
+    total: result.superseded, classified: result.superseded - byReason.unclassified,
+    unclassified: byReason.unclassified, byReason, byType, effectAlreadyRepresentedCount } };
+}
+
+/** Mirrors the exact winner precedence in revisionModel, with no inferred reason. */
+function classifyWinnerReason(current: VersionedNode | VersionedPinnedNote | VersionedFeatures | undefined,
+  operation: SyncOperation, target: "node" | "pinnedNote" | "features"): WinnerReason {
+  if (!current) return "unclassified";
+  const candidateRevision = operation.baseRevision + 1;
+  if (target === "node") {
+    const candidate = candidateForOperation(operation);
+    const existing = current as VersionedNode;
+    if (existing.value.purgedAt && !candidate.value.purgedAt) return "purgedTombstoneWins";
+    if (!existing.value.purgedAt && candidate.value.purgedAt) return "unclassified";
+    if (existing.revision > candidateRevision) return "higherRevisionWins";
+    if (existing.revision < candidateRevision) return "unclassified";
+    const rank = (value: VersionedNode["value"]) => value.purgedAt ? 2 : value.deletedAt ? 1 : 0;
+    if (rank(existing.value) > rank(candidate.value)) return "deletionRankWins";
+    if (rank(existing.value) < rank(candidate.value)) return "unclassified";
+  } else {
+    if (current.revision > candidateRevision) return "higherRevisionWins";
+    if (current.revision < candidateRevision) return "unclassified";
+  }
+  return current.lastOpId >= operation.opId ? "opIdTieBreakWins" : "unclassified";
+}
+
+function buildFinalPreflight(application: Envelope, journal: Envelope, remote: NodeMap,
+  replay: ReturnType<typeof replayForDiagnosis>, journalMap: NodeMap, localCopyMatches: boolean,
+  remoteSnapshotStable: boolean, remoteReceiptDocumentCount: number,
+  preReceived: number, preMissing: number, postAudit: { received: number; missing: number } | null,
+  applicationNodeNotInJournalCount: number, applicationOutboxNotInJournalCount: number,
+  unrecognizedOperationType: number, strictDryRunInconsistency: number): FinalPreflight {
+  const candidate = replay.nodes;
+  const remoteToCandidate: FinalPreflight["remoteToCandidate"] = {
+    create: 0, update: 0, delete: 0, unchanged: 0, physicalDelete: 0,
+    logicalDelete: 0, semanticUpdate: 0, syncMetadataOnlyUpdate: 0, sortKeyOnlyUpdate: 0, otherUpdate: 0,
+  };
+  for (const [id, record] of candidate) {
+    const previous = remote.get(id);
+    if (!previous) { remoteToCandidate.create++; continue; }
+    if (canonical(record) === canonical(previous)) { remoteToCandidate.unchanged++; continue; }
+    const wasActive = !previous.value.deletedAt && !previous.value.purgedAt;
+    const nowInactive = !!(record.value.deletedAt || record.value.purgedAt);
+    if (wasActive && nowInactive) { remoteToCandidate.delete++; remoteToCandidate.logicalDelete++; continue; }
+    remoteToCandidate.update++;
+    const fields = differingFieldNames(previous, record);
+    const valueFields = fields.filter((field) => field.startsWith("value."));
+    if (fields.includes("value.unknownField") || fields.includes("record.unknownField")) remoteToCandidate.otherUpdate++;
+    else if (valueFields.length === 0) remoteToCandidate.syncMetadataOnlyUpdate++;
+    else if (valueFields.length === 1 && valueFields[0] === "value.sortKey") remoteToCandidate.sortKeyOnlyUpdate++;
+    else remoteToCandidate.semanticUpdate++;
+  }
+  for (const id of remote.keys()) if (!candidate.has(id)) {
+    remoteToCandidate.delete++; remoteToCandidate.physicalDelete++;
+  }
+  const candidateJournal = { ...compareNodeMaps(candidate, journalMap),
+    profileMatches: canonical(replay.pinned ?? null) === canonical(journal.profile?.pinnedNote?.synced ?? null) &&
+      canonical(replay.features ?? null) === canonical(journal.profile?.features?.synced ?? null) };
+  const candidateApplicationBase = compareNodeMaps(candidate, nodeMap(application.domain));
+  const differingFieldCounts = emptyFieldCounts();
+  let userVisibleChangeNodeCount = candidateApplicationBase.leftOnly + candidateApplicationBase.rightOnly;
+  let syncMetadataOnlyNodeCount = 0;
+  for (const [id, record] of candidate) {
+    const previous = application.domain[id];
+    if (!previous) continue;
+    const fields = differingFieldNames(record, previous);
+    for (const field of fields) differingFieldCounts[field]++;
+    if (fields.some((field) => field.startsWith("value."))) userVisibleChangeNodeCount++;
+    else if (fields.length) syncMetadataOnlyNodeCount++;
+  }
+  const journalOnlyIds = Object.keys(journal.domain).filter((id) => !application.domain[id]);
+  const journalOnly = new Set(journalOnlyIds);
+  const createOperations = journal.sync.outbox.filter((operation) => operation?.type === "create" &&
+    (operation.targetType ?? "node") === "node" && journalOnly.has(operation.targetNodeId));
+  const journalOnlyFromApplication: FinalPreflight["journalOnlyFromApplication"] = {
+    count: journalOnlyIds.length,
+    remoteAbsent: journalOnlyIds.filter((id) => !remote.has(id)).length,
+    candidatePresent: journalOnlyIds.filter((id) => candidate.has(id)).length,
+    createOperationCount: createOperations.length,
+    uniqueCreateTargetCount: new Set(createOperations.map((operation) => operation.targetNodeId)).size,
+    activeCount: journalOnlyIds.filter((id) => !journal.domain[id].value.deletedAt && !journal.domain[id].value.purgedAt).length,
+    categoryCount: journalOnlyIds.filter((id) => journal.domain[id].value.type === "category").length,
+    memoCount: journalOnlyIds.filter((id) => journal.domain[id].value.type === "memo").length,
+    otherTypeCount: journalOnlyIds.filter((id) => journal.domain[id].value.type !== "category" &&
+      journal.domain[id].value.type !== "memo").length,
+    createPayloadMatchesFinalJournalCount: createOperations.filter((operation) =>
+      canonical(operation.payload?.node) === canonical(journal.domain[operation.targetNodeId]?.value)).length,
+    createdByReplayCount: journalOnlyIds.filter((id) => !remote.has(id) && candidate.has(id)).length,
+  };
+  const receiptSafety: FinalPreflight["receiptSafety"] = {
+    outboxCount: journal.sync.outbox.length, preReceived, preMissing,
+    postReceived: postAudit?.received ?? -1, postMissing: postAudit?.missing ?? -1,
+    remoteReceiptDocumentCount,
+    bothAuditsCompleteAndMissing: preReceived === 0 && preMissing === journal.sync.outbox.length &&
+      postAudit?.received === 0 && postAudit.missing === journal.sync.outbox.length,
+    candidateReplayDependsOnReceipt: false,
+    actualUploadChecksReceiptInTransaction: true, requiresTransactionalReceiptRecheck: true,
+  };
+  const candidateStructure = checkStructure(candidate);
+  const blockReasons: FinalPreflight["blockReasons"] = {
+    localCopyMismatch: Number(!localCopyMatches),
+    applicationJournalDivergence: applicationNodeNotInJournalCount + applicationOutboxNotInJournalCount,
+    remoteSnapshotUnstable: Number(!remoteSnapshotStable),
+    receiptAuditIncompleteOrReceived: Number(!receiptSafety.bothAuditsCompleteAndMissing),
+    invalidOperation: replay.result.invalid,
+    strictDryRunInconsistency,
+    duplicateOperation: replay.result.duplicate,
+    replayInconsistency: Number(replay.result.applied + replay.result.superseded +
+      replay.result.invalid + replay.result.duplicate !== journal.sync.outbox.length),
+    unexplainedSuperseded: replay.superseded.unclassified,
+    candidateStructureInvalid: Number(!candidateStructure.valid),
+    candidateSemanticMismatch: candidateJournal.semanticDifferent + candidateJournal.leftOnly + candidateJournal.rightOnly,
+    candidateSyncMetadataMismatch: candidateJournal.syncMetadataDifferent,
+    candidateExactMismatch: candidateJournal.exactDifferent,
+    candidateProfileMismatch: Number(!candidateJournal.profileMatches),
+    localProfileUnsynced: Number(!!journal.profile?.pinnedNote?.dirtySince ||
+      !!journal.profile?.pinnedNote?.migrationPending || !!journal.profile?.features?.migrationPending ||
+      journal.profile?.pinnedNote?.localBody !== (journal.profile?.pinnedNote?.synced?.value.body ?? "") ||
+      journal.profile?.features?.localIdeasEnabled !== (journal.profile?.features?.synced?.value.ideasEnabled ?? false)),
+    invalidRemoteReceiptCount: Number(remoteReceiptCountInvalid(remoteReceiptDocumentCount)),
+    unknownFieldDifference: candidateJournal.unknownFieldDifference + candidateApplicationBase.unknownFieldDifference,
+    journalOnlyMissingFromCandidate: journalOnlyFromApplication.count - journalOnlyFromApplication.candidatePresent,
+    journalOnlyMissingCreate: journalOnlyFromApplication.count - journalOnlyFromApplication.uniqueCreateTargetCount,
+    unrecognizedOperationType,
+  };
+  return {
+    remoteBeforeNodeCount: remote.size, candidateNodeCount: candidate.size,
+    replay: { total: journal.sync.outbox.length, applied: replay.result.applied,
+      superseded: replay.result.superseded, invalid: replay.result.invalid,
+      duplicate: replay.result.duplicate, inconsistency: Number(
+        replay.result.applied + replay.result.superseded + replay.result.invalid + replay.result.duplicate !==
+        journal.sync.outbox.length), unclassified: replay.superseded.unclassified },
+    remoteToCandidate, candidateStructure, candidateJournal,
+    candidateApplication: { ...candidateApplicationBase, differingFieldCounts,
+      userVisibleChangeNodeCount, syncMetadataOnlyNodeCount },
+    journalOnlyFromApplication, superseded: replay.superseded, receiptSafety,
+    remoteSnapshotStable, localCopyMatches,
+    finalRecoverySafetyDecision: Object.values(blockReasons).some((count) => count > 0) ? "blocked" : "safe",
+    blockReasons, authorizesRecovery: false,
+  };
 }
 
 /** Mutually exclusive differences; unknown fields are never silently treated as metadata. */
@@ -409,7 +602,8 @@ function parseEnvelope(raw: string | null): Envelope {
 export function compareRecoveryState(application: Envelope, journal: Envelope,
   remote: Awaited<ReturnType<NonNullable<SyncAdapter["readRecoverySnapshot"]>>>, localCopyMatches: boolean,
   auditedReceivedCount = 0, auditedMissingCount = journal.sync.outbox.length,
-  remoteSnapshotStable = true, secondRemote = remote): RecoveryPreflight {
+  remoteSnapshotStable = true, secondRemote = remote,
+  postAudit: { received: number; missing: number } | null = null): RecoveryPreflight {
   const records = new Map<string, VersionedNode>();
   for (const record of remote.nodes) {
     if (!record?.value?.id || records.has(record.value.id) || !Number.isSafeInteger(record.revision))
@@ -595,9 +789,12 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     remote: checkStructure(remoteMap), dryRun: checkStructure(dryRunMap),
   };
   const { createAnalysis, updateAnalysis } = analyzeCreateAndUpdate(journal.sync.outbox, remoteMap, journalMap);
-  const replayStrategies = Object.fromEntries((["strict", "createCompatible", "serverWinner", "skipStale"] as const)
+  const replayDetails = Object.fromEntries((["strict", "createCompatible", "serverWinner", "skipStale"] as const)
     .map((strategy) => [strategy, replayForDiagnosis(strategy, journal.sync.outbox, remoteMap, journalMap,
-      remote.pinnedNote, remote.features, pinned?.synced, features?.synced)])) as RecoveryPreflight["replayStrategies"];
+      remote.pinnedNote, remote.features, pinned?.synced, features?.synced)])) as
+    Record<keyof RecoveryPreflight["replayStrategies"], ReturnType<typeof replayForDiagnosis>>;
+  const replayStrategies = Object.fromEntries(Object.entries(replayDetails)
+    .map(([strategy, details]) => [strategy, details.result])) as RecoveryPreflight["replayStrategies"];
   const secondRemoteMap = new Map(secondRemote.nodes.map((record) => [record.value.id, record]));
   const remoteSnapshotComparison = compareNodeMaps(remoteMap, secondRemoteMap);
   const remoteReceiptCountStable = remote.receiptDocumentCount === secondRemote.receiptDocumentCount;
@@ -633,7 +830,13 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     unrecognizedOperationType: operationUnrecognizedTypeCount,
   };
   const recoverySafetyDecision = Object.values(recoverySafetyBlockReasons).some((count) => count > 0) ? "blocked" : "manual-review";
+  const finalPreflight = buildFinalPreflight(application, journal, remoteMap, replayDetails.serverWinner,
+    journalMap, localCopyMatches, remoteSnapshotIsStable, remote.receiptDocumentCount,
+    auditedReceivedCount, auditedMissingCount, postAudit,
+    applicationNodeNotInJournalCount, applicationOutboxNotInJournalCount,
+    operationUnrecognizedTypeCount, dryRunInconsistencyCount);
   return {
+    finalPreflight,
     localCopyMatches, applicationNodeCount: Object.keys(application.domain).length,
     journalNodeCount: Object.keys(journal.domain).length, journalOutboxCount: journal.sync.outbox.length,
     applicationNodeNotInJournalCount, applicationOutboxNotInJournalCount,
@@ -675,6 +878,8 @@ export async function runRecoveryPreflight(persistence: ApplicationJournalPersis
   const pending = parseEnvelope(journal);
   const remote = await adapter.readRecoverySnapshot();
   const secondRemote = await adapter.readRecoverySnapshot();
+  if (!adapter.auditOutbox) throw { code: "preflight-receipt-audit-unavailable" };
+  const postAudit = await adapter.auditOutbox(pending.sync.outbox);
   const [latestCommitted, latestJournal, latestLegacyCommitted, latestLegacyJournal] = await Promise.all([
     persistence.loadCommitted(), persistence.loadJournal(), legacy.loadCommitted(), legacy.loadJournal(),
   ]);
@@ -682,5 +887,5 @@ export async function runRecoveryPreflight(persistence: ApplicationJournalPersis
       latestLegacyCommitted !== legacyCommitted || latestLegacyJournal !== legacyJournal)
     throw { code: "preflight-local-changed" };
   return compareRecoveryState(application, pending, remote, localCopyMatches, auditedReceipts.received,
-    auditedReceipts.missing, true, secondRemote);
+    auditedReceipts.missing, true, secondRemote, postAudit);
 }
