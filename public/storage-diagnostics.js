@@ -47,6 +47,17 @@
             at: typeof event.at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(event.at) ? event.at : null,
           };
         }),
+          lookupEvents: array(saved.lookupEvents).slice(-32).map((item) => {
+            const event = object(item);
+            return {
+              batch: count(event.batch),
+              slot: Number.isSafeInteger(event.slot) && event.slot >= 0 && event.slot < 8 ? event.slot : null,
+              operationIndex: count(event.operationIndex),
+              phase: ['start', 'found', 'not-found', 'error', 'timeout'].includes(event.phase) ? event.phase : 'invalid',
+              durationMs: count(event.durationMs),
+              at: typeof event.at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(event.at) ? event.at : null,
+            };
+          }),
       };
     } catch { return { recoveryPhase: 'unavailable' }; }
   }

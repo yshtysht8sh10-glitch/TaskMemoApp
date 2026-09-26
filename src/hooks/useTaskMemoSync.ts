@@ -11,7 +11,7 @@ import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicatio
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "../sync/recovery";
-import { beginRecoveryObservation, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
+import { beginRecoveryObservation, recordReceiptLookup, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -105,6 +105,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const adapterEnvironment = emulator ? "test" : firebase.environment === "production" ? "production" : "development";
         const adapter = createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator,
+          receiptLookupTimeoutMs: observationOnly ? 20000 : undefined,
+          onReceiptLookup: observationOnly ? recordReceiptLookup : undefined,
           onReceiptBatch: observationOnly ? (event) => recordRecoveryObservation({
             recoveryPhase: event.phase === "start" ? "receipt-batch-start" : "receipt-batch-complete",
             receiptComparisonTotal: event.total,

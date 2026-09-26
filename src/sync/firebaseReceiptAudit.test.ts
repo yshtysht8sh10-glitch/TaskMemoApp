@@ -53,4 +53,26 @@ describe("read-only Firebase receipt audit", () => {
     expect(events.at(-1)).toMatchObject({ phase: "complete", batch: 2, completed: 9, lastCompletedOperationIndex: 8 });
     state.blockedPath = null; state.release = null;
   });
+
+  it("times out one unresolved lookup and stops without classifying it missing or writing", async () => {
+    state.documents.clear(); state.writes = 0;
+    state.blockedPath = path(9);
+    const batches: string[] = [];
+    const lookups: { batch: number; slot: number; operationIndex: number; phase: string; durationMs: number }[] = [];
+    try {
+      const audit = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
+        receiptLookupTimeoutMs: 20,
+        onReceiptBatch: (event) => batches.push(`${event.batch}:${event.phase}`),
+        onReceiptLookup: (event) => lookups.push(event),
+      }).auditOutbox!(Array.from({ length: 17 }, (_, index) => operation(index + 1)));
+      await expect(audit).rejects.toMatchObject({ kind: "temporary", code: "receipt-timeout" });
+      expect(batches).toContain("2:start");
+      expect(batches).not.toContain("2:complete");
+      expect(batches).not.toContain("3:start");
+      expect(lookups).toContainEqual(expect.objectContaining({ batch: 2, slot: 0, operationIndex: 8, phase: "timeout" }));
+      expect(lookups).not.toContainEqual(expect.objectContaining({ operationIndex: 8, phase: "not-found" }));
+      expect(lookups.every((event) => event.durationMs >= 0)).toBe(true);
+      expect(state.writes).toBe(0);
+    } finally { state.release?.(); state.blockedPath = null; state.release = null; }
+  });
 });

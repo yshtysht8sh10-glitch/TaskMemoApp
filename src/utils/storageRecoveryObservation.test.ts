@@ -12,7 +12,9 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7,
     lastProgressAt: "2026-09-26T07:00:00.000Z", firebaseConnectionState: "connected",
     lastRecoveryError: "private@example.com", opId: "SECRET_OP", title: "SECRET_TITLE",
-    batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }] });
+    batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }],
+    lookupEvents: [{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
+      at: "2026-09-26T07:00:20.000Z", opId: "SECRET_OP", title: "SECRET_TITLE" }] });
   runInNewContext(script, {
     document: {
       getElementById: (id: string) => id === "result" ? result : id === "status" ? status : { addEventListener: (_event: string, action: () => void) => handlers.set(id, action) },
@@ -27,6 +29,7 @@ it("exports only validated recovery metadata, never injected IDs or private stri
   expect(output.recoveryObservation).toMatchObject({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7, lastRecoveryError: null });
   expect(output.recoveryObservation.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
+  expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000 }]);
   expect(result.value).not.toMatch(/SECRET_OP|SECRET_TITLE|private@example.com/);
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
 });

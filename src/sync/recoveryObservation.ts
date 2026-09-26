@@ -11,6 +11,7 @@ export type RecoveryObservation = {
   firebaseConnectionState: "not-started" | "connecting" | "connected" | "error";
   lastRecoveryError: string | null;
   batchEvents: { batch: number; phase: "start" | "complete"; completed: number; at: string }[];
+  lookupEvents: { batch: number; slot: number; operationIndex: number; phase: "start" | "found" | "not-found" | "error" | "timeout"; durationMs: number; at: string }[];
 };
 
 const initial = (): RecoveryObservation => ({
@@ -23,6 +24,7 @@ const initial = (): RecoveryObservation => ({
   firebaseConnectionState: "not-started",
   lastRecoveryError: null,
   batchEvents: [],
+  lookupEvents: [],
 });
 
 let current = initial();
@@ -39,7 +41,14 @@ export function recordRecoveryObservation(update: Partial<Omit<RecoveryObservati
   const batchEvents = phase && Number.isSafeInteger(update.currentBatch) && Number.isSafeInteger(update.receiptComparisonCompleted)
     ? [...current.batchEvents, { batch: update.currentBatch!, phase, completed: update.receiptComparisonCompleted!, at }]
     : current.batchEvents;
-  current = { ...current, ...update, batchEvents, lastProgressAt: at };
+  const lookupEvents = phase === "start" ? [] : current.lookupEvents;
+  current = { ...current, ...update, batchEvents, lookupEvents, lastProgressAt: at };
+  persist();
+}
+
+export function recordReceiptLookup(event: Omit<RecoveryObservation["lookupEvents"][number], "at">) {
+  const at = new Date().toISOString();
+  current = { ...current, lookupEvents: [...current.lookupEvents, { ...event, at }].slice(-32), lastProgressAt: at };
   persist();
 }
 
