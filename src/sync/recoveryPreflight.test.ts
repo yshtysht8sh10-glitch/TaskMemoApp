@@ -72,6 +72,9 @@ describe("read-only recovery preflight", () => {
     expect(report.dryRunConflictByType).toMatchObject({ update: 2, create: 1 });
     expect(report.dryRunConflictByReason).toEqual({ staleBaseRevision: 1, futureBaseRevision: 1,
       createTargetExists: 1, candidateSuperseded: 0 });
+    expect(report.dryRunConflictReasonByType.update).toMatchObject({ staleBaseRevision: 1,
+      futureBaseRevision: 1, createTargetExists: 0 });
+    expect(report.dryRunConflictReasonByType.create.createTargetExists).toBe(1);
     expect(report.dryRunConflictNodeCount).toBe(1);
     expect(report.dryRunConflictCountsPerNodeDescending).toEqual([3]);
     expect(JSON.stringify(report)).not.toMatch(/device:|"node"|private-title/);
@@ -123,6 +126,118 @@ describe("read-only recovery preflight", () => {
     expect(report.dryRunMetadataOnlyFieldCounts["value.createdAt"]).toBe(1);
     expect(report.dryRunMetadataOnlyFieldCounts["value.updatedAt"]).toBe(1);
     expect(report.semanticNodeStateMatchesJournal).toBe(false);
+  });
+
+  it("compares four states pairwise and separates semantic, metadata, and exact matches", () => {
+    const base = record("private-node");
+    const metadataChanged = { ...base, revision: 1 };
+    const report = compareRecoveryState(envelope([base]), envelope([metadataChanged]),
+      { nodes: [base], receiptDocumentCount: 0 }, true);
+    expect(report.nodeComparisons.applicationRemote).toMatchObject({ semanticMatches: true,
+      syncMetadataMatches: true, exactMatches: true });
+    expect(report.nodeComparisons.applicationJournal).toMatchObject({ semanticMatches: true,
+      syncMetadataMatches: false, exactMatches: false });
+    expect(report.semanticNodeStateMatchesJournal).toBe(true);
+    expect(report.syncMetadataMatchesJournal).toBe(false);
+    expect(report.exactNodeStateMatchesJournal).toBe(false);
+  });
+
+  it("finds parent, cycle, and sortKey defects without reporting identities", () => {
+    const make = (id: string, parentId: string | null, sortKey: string, type = "category") => ({
+      ...record(id), value: { ...record(id).value, type, parentId, sortKey, deletedAt: null },
+    });
+    const nodes = [make("a", "b", "a0"), make("b", "a", "a0"),
+      make("orphan", "missing-private", "a0"), make("invalid-rank", null, ""), make("root", null, "a0"),
+      make("duplicate-rank", null, "a0")];
+    const report = compareRecoveryState(envelope(nodes), envelope(nodes),
+      { nodes, receiptDocumentCount: 0 }, true);
+    expect(report.structureChecks.journal).toMatchObject({ nodeCount: 6, missingParentCount: 1,
+      cycleNodeCount: 2, invalidActiveSortKeyCount: 1, duplicateActiveSortKeyGroupCount: 1,
+      valid: false });
+    expect(report.recoverySafetyDecision).toBe("blocked");
+    expect(JSON.stringify(report)).not.toMatch(/missing-private|"orphan"|"invalid-rank"/);
+  });
+
+  it("contrasts strict, create-compatible, and server-winner replay without mutating inputs", () => {
+    const remote = record("private-node", 0);
+    const create = operation("private-device:1", "private-node", "create", 0);
+    const journal = applyRevisionOperation(remote, create).record!;
+    const raw = JSON.stringify({ remote, create, journal });
+    const report = compareRecoveryState(envelope([remote]), envelope([journal], [create]),
+      { nodes: [remote], receiptDocumentCount: 0 }, true);
+    expect(report.replayStrategies.strict.exactMatchesJournal).toBe(false);
+    expect(report.replayStrategies.strict.skippedCreateExisting).toBe(1);
+    expect(report.replayStrategies.createCompatible.exactMatchesJournal).toBe(true);
+    expect(report.replayStrategies.serverWinner.exactMatchesJournal).toBe(true);
+    expect(report.recoverySafetyDecision).toBe("blocked");
+    expect(JSON.stringify({ remote, create, journal })).toBe(raw);
+  });
+
+  it("classifies 55 creates and 967 updates without exporting target IDs", () => {
+    const creates = Array.from({ length: 55 }, (_, index) => operation(`private:${index + 1}`, `new-${index}`, "create", 0));
+    const updates = Array.from({ length: 967 }, (_, index) => operation(`private:${index + 56}`, `node-${index % 62}`, "update", 0));
+    const completes = [operation("private:1023", "node-0", "complete", 0), operation("private:1024", "node-1", "complete", 0)];
+    const report = compareRecoveryState(envelope([]), envelope([], [...creates, ...updates, ...completes]),
+      { nodes: [], receiptDocumentCount: 0 }, true);
+    expect(report.operationTypeCounts).toMatchObject({ create: 55, update: 967, complete: 2 });
+    expect(report.createAnalysis).toMatchObject({ total: 55, uniqueTargets: 55,
+      maxSameTimestampCount: 55, targetAlreadyRemote: 0 });
+    expect(report.updateAnalysis).toMatchObject({ total: 967, uniqueTargets: 62 });
+    expect(report.dryRunResultsByType.update.missing + report.dryRunResultsByType.update.conflict +
+      report.dryRunResultsByType.update.success + report.dryRunResultsByType.update.inconsistency +
+      report.dryRunResultsByType.update.duplicate).toBe(967);
+    expect(Object.values(report.dryRunInconsistencyByReason).reduce((a, b) => a + b, 0))
+      .toBe(report.dryRunInconsistencyCount);
+    expect(JSON.stringify(report)).not.toMatch(/private:|new-0|node-0/);
+  });
+
+  it("flags a changed second server snapshot and leaves every persistence method read-only", async () => {
+    const raw = JSON.stringify(envelope([record("private-node")]));
+    const persistence: ApplicationJournalPersistence = {
+      loadCommitted: vi.fn(async () => raw), loadJournal: vi.fn(async () => raw),
+      writeJournal: vi.fn(), writeCommitted: vi.fn(), clearJournal: vi.fn(),
+    };
+    const adapter = { readRecoverySnapshot: vi.fn()
+      .mockResolvedValueOnce({ nodes: [record("private-node")], receiptDocumentCount: 0 })
+      .mockResolvedValueOnce({ nodes: [record("private-node", 1)], receiptDocumentCount: 0 }),
+      upload: vi.fn() } as unknown as SyncAdapter;
+    const report = await runRecoveryPreflight(persistence, adapter, "test-scope",
+      { received: 0, missing: 0 }, persistence);
+    expect(adapter.readRecoverySnapshot).toHaveBeenCalledTimes(2);
+    expect(report.remoteSnapshotStable).toBe(false);
+    expect(report.recoverySafetyBlockReasons.remoteSnapshotUnstable).toBe(1);
+    expect(report.recoverySafetyDecision).toBe("blocked");
+    expect(persistence.writeJournal).not.toHaveBeenCalled();
+    expect(persistence.writeCommitted).not.toHaveBeenCalled();
+    expect(persistence.clearJournal).not.toHaveBeenCalled();
+    expect(adapter.upload).not.toHaveBeenCalled();
+  });
+
+  it("keeps even an exact stable preflight at manual review, never authorizes recovery", () => {
+    const complete = { ...record("private-node"), value: { id: "private-node", type: "category",
+      parentId: null, sortKey: "a0", title: "private-title", createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z", deletedAt: null } };
+    const report = compareRecoveryState(envelope([complete]), envelope([complete]),
+      { nodes: [complete], receiptDocumentCount: 0 }, true);
+    expect(report.structureChecks.journal.valid).toBe(true);
+    expect(report.semanticNodeStateMatchesJournal).toBe(true);
+    expect(report.syncMetadataMatchesJournal).toBe(true);
+    expect(report.exactNodeStateMatchesJournal).toBe(true);
+    expect(report.remoteSnapshotStable).toBe(true);
+    expect(report.recoverySafetyDecision).toBe("manual-review");
+    expect(Object.values(report.recoverySafetyBlockReasons).every((count) => count === 0)).toBe(true);
+  });
+
+  it("shows stale operations as skipped versus server-superseded without applying them", () => {
+    const remote = record("private-node", 5);
+    const stale = operation("private-device:1", "private-node", "update", 0);
+    const report = compareRecoveryState(envelope([remote]), envelope([remote], [stale]),
+      { nodes: [remote], receiptDocumentCount: 0 }, true);
+    expect(report.replayStrategies.strict.skippedStale).toBe(1);
+    expect(report.replayStrategies.skipStale.skippedStale).toBe(1);
+    expect(report.replayStrategies.serverWinner.superseded).toBe(1);
+    expect(report.replayStrategies.serverWinner.exactMatchesJournal).toBe(true);
+    expect(report.recoverySafetyDecision).toBe("blocked");
   });
 
   it("never writes committed, journal, outbox or Firebase when a local copy disagrees", async () => {

@@ -67,10 +67,31 @@
             'value.updatedAt', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq',
             'operationType', 'value.unknownField', 'record.unknownField'];
           const fieldCounts = (value) => Object.fromEntries(differenceFields.map((field) => [field, count(object(value)[field])]));
+          const numericFields = (value, names) => Object.fromEntries(names.map((name) => [name, count(object(value)[name])]));
+          const booleanFields = (value, names) => Object.fromEntries(names.map((name) => [name, object(value)[name] === true]));
+          const pairFields = ['leftOnly', 'rightOnly', 'common', 'semanticEqual', 'semanticDifferent',
+            'syncMetadataEqual', 'syncMetadataDifferent', 'exactEqual', 'exactDifferent', 'unknownFieldDifference'];
+          const pairNames = ['applicationJournal', 'applicationRemote', 'applicationDryRun',
+            'journalRemote', 'journalDryRun', 'remoteDryRun'];
+          const pair = (value) => ({ ...numericFields(value, pairFields),
+            ...booleanFields(value, ['semanticMatches', 'syncMetadataMatches', 'exactMatches']) });
+          const structureFields = ['nodeCount', 'activeNodeCount', 'missingParentCount', 'inactiveParentCount',
+            'nonCategoryParentCount', 'invalidParentCount', 'cycleNodeCount', 'invalidActiveSortKeyCount',
+            'duplicateActiveSortKeyNodeCount', 'duplicateActiveSortKeyGroupCount'];
+          const replayFields = ['applied', 'superseded', 'skippedStale', 'skippedFuture',
+            'skippedCreateExisting', 'skippedMissing', 'duplicate', 'invalid', 'finalNodeCount'];
+          const replay = (value) => ({ ...numericFields(value, replayFields),
+            ...booleanFields(value, ['semanticMatchesJournal', 'syncMetadataMatchesJournal',
+              'exactMatchesJournal', 'profileMatchesJournal']) });
           return { ...Object.fromEntries(fields.map((field) => [field, count(p[field])])),
             dryRunConflictByType: Object.fromEntries([...operationTypes].map((type) => [type, count(object(p.dryRunConflictByType)[type])])),
             dryRunConflictByReason: Object.fromEntries(['staleBaseRevision', 'futureBaseRevision', 'createTargetExists', 'candidateSuperseded']
               .map((reason) => [reason, count(object(p.dryRunConflictByReason)[reason])])),
+            dryRunConflictReasonByType: Object.fromEntries([...operationTypes].map((type) => [type,
+              numericFields(object(p.dryRunConflictReasonByType)[type],
+                ['staleBaseRevision', 'futureBaseRevision', 'createTargetExists', 'candidateSuperseded'])])),
+            dryRunInconsistencyByReason: numericFields(p.dryRunInconsistencyByReason,
+              ['invalidOperation', 'duplicateOperationId', 'invalidTarget', 'currentOperationMismatch', 'invalidPayload']),
             dryRunConflictNodeCount: count(p.dryRunConflictNodeCount),
             dryRunConflictMaxPerNode: count(p.dryRunConflictMaxPerNode),
             dryRunConflictCountsPerNodeDescending: array(p.dryRunConflictCountsPerNodeDescending).slice(0, 10000).map(count),
@@ -82,9 +103,38 @@
             dryRunOtherFieldCounts: fieldCounts(p.dryRunOtherFieldCounts),
             dryRunMetadataOnlyFieldCounts: fieldCounts(p.dryRunMetadataOnlyFieldCounts),
             semanticNodeStateMatchesJournal: p.semanticNodeStateMatchesJournal === true,
+            syncMetadataMatchesJournal: p.syncMetadataMatchesJournal === true,
+            exactNodeStateMatchesJournal: p.exactNodeStateMatchesJournal === true,
             semanticNodeStateReasons: Object.fromEntries(['nodeExistenceDifferenceCount', 'meaningfulFieldDifferenceNodeCount',
               'unknownFieldDifferenceNodeCount', 'internalOnlyDifferenceNodeCount']
               .map((reason) => [reason, count(object(p.semanticNodeStateReasons)[reason])])),
+            nodeComparisons: Object.fromEntries(pairNames.map((name) => [name, pair(object(p.nodeComparisons)[name])])),
+            structureChecks: Object.fromEntries(['application', 'journal', 'remote', 'dryRun']
+              .map((name) => [name, { ...numericFields(object(p.structureChecks)[name], structureFields),
+                ...booleanFields(object(p.structureChecks)[name], ['valid']) }])),
+            operationTypeCounts: numericFields(p.operationTypeCounts, [...operationTypes]),
+            operationUnrecognizedTypeCount: count(p.operationUnrecognizedTypeCount),
+            dryRunResultsByType: Object.fromEntries([...operationTypes].map((type) =>
+              [type, numericFields(object(p.dryRunResultsByType)[type], ['success', 'duplicate', 'missing', 'conflict', 'inconsistency'])])),
+            createAnalysis: numericFields(p.createAnalysis, ['total', 'uniqueTargets', 'repeatedTargetOperations',
+              'targetAlreadyRemote', 'targetInJournal', 'targetMissingJournal', 'payloadMatchesJournalValue',
+              'invalidPayload', 'distinctTimestampCount', 'maxSameTimestampCount']),
+            updateAnalysis: numericFields(p.updateAnalysis, ['total', 'uniqueTargets', 'maxPerNode',
+              'noPreviousValue', 'noChange', 'sortKeyOnly', 'sortKeyAndTimestampOnly',
+              'timestampOnly', 'userContent', 'unknownOrMixed', 'invalidPayload']),
+            replayStrategies: Object.fromEntries(['strict', 'createCompatible', 'serverWinner', 'skipStale']
+              .map((name) => [name, replay(object(p.replayStrategies)[name])])),
+            remoteSnapshotStable: p.remoteSnapshotStable === true,
+            remoteSnapshotComparison: pair(p.remoteSnapshotComparison),
+            remoteReceiptCountStable: p.remoteReceiptCountStable === true,
+            recoverySafetyDecision: ['blocked', 'manual-review'].includes(p.recoverySafetyDecision)
+              ? p.recoverySafetyDecision : 'invalid',
+            recoverySafetyBlockReasons: numericFields(p.recoverySafetyBlockReasons, ['localCopyMismatch',
+              'receiptAuditMismatch', 'invalidRemoteReceiptCount', 'applicationJournalDivergence',
+              'remoteSnapshotUnstable', 'structureInvalid', 'nodeSemanticMismatch',
+              'nodeSyncMetadataMismatch', 'nodeExactMismatch', 'profileMismatch', 'remoteRevisionAhead',
+              'strictReplayConflict', 'noReplayExactlyMatches', 'unknownFieldDifference',
+              'unrecognizedOperationType']),
             localCopyMatches: p.localCopyMatches === true,
             dryRunMatchesJournal: p.dryRunMatchesJournal === true,
             remoteSnapshotAtomic: p.remoteSnapshotAtomic === true,
