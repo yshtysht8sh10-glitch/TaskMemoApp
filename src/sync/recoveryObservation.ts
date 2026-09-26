@@ -1,5 +1,6 @@
 /** Diagnostic metadata only. Never store operation IDs, payloads, account IDs, or error messages. */
 import type { ReceiptLookupEvent, ReceiptReadEvent } from "./firebaseSyncAdapter";
+import type { RecoveryPreflight } from "./recoveryPreflight";
 
 export const RECOVERY_OBSERVATION_KEY = "@taskmemo/recovery-observation/v1";
 
@@ -7,6 +8,8 @@ export type RecoveryObservation = {
   recoveryPhase: string;
   receiptComparisonTotal: number;
   receiptComparisonCompleted: number;
+  receiptReceivedCount: number;
+  receiptMissingCount: number;
   currentBatch: number;
   lastCompletedOperationIndex: number;
   lastProgressAt: string;
@@ -23,12 +26,15 @@ export type RecoveryObservation = {
   batchEvents: { batch: number; phase: "start" | "complete"; completed: number; at: string }[];
   lookupEvents: (ReceiptLookupEvent & { at: string })[];
   receiptReadEvents: ReceiptReadEvent[];
+  preflight: RecoveryPreflight | null;
 };
 
 const initial = (): RecoveryObservation => ({
   recoveryPhase: "starting",
   receiptComparisonTotal: 0,
   receiptComparisonCompleted: 0,
+  receiptReceivedCount: 0,
+  receiptMissingCount: 0,
   currentBatch: 0,
   lastCompletedOperationIndex: -1,
   lastProgressAt: new Date().toISOString(),
@@ -45,6 +51,7 @@ const initial = (): RecoveryObservation => ({
   batchEvents: [],
   lookupEvents: [],
   receiptReadEvents: [],
+  preflight: null,
 });
 
 let current = initial();

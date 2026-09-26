@@ -15,6 +15,9 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     receiptServerDocumentsReturned: 4, receiptRetryCount: 1,
     lastProgressAt: "2026-09-26T07:00:00.000Z", firebaseConnectionState: "connected",
     lastRecoveryError: "private@example.com", opId: "SECRET_OP", title: "SECRET_TITLE",
+    preflight: { remoteNodeCount: 150, journalNodeCount: 151, journalOnlyNodeCount: 1,
+      dryRunSuccessCount: 1024, dryRunMatchesJournal: true, localCopyMatches: true,
+      decision: "review-required", opId: "SECRET_OP", title: "SECRET_TITLE" },
     batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }],
     lookupEvents: [{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
       startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001,
@@ -41,6 +44,8 @@ it("exports only validated recovery metadata, never injected IDs or private stri
   expect(output.recoveryObservation).toMatchObject({ receiptChunkSize: 20, receiptMaxAttempts: 3,
     receiptServerReadCalls: 2, receiptServerDocumentsReturned: 4, receiptRetryCount: 1 });
   expect(output.recoveryObservation.receiptReadEvents).toMatchObject([{ attempt: 2, phase: "retry-success", returnedDocumentCount: 4 }]);
+  expect(output.recoveryObservation.preflight).toMatchObject({ remoteNodeCount: 150, journalNodeCount: 151,
+    dryRunSuccessCount: 1024, decision: "review-required" });
   expect(output.recoveryObservation.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
   expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
     startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001, timeoutDelayMs: 10000 }]);

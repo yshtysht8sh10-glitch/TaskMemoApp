@@ -142,6 +142,20 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     await expect(adapter.auditOutbox?.([{ ...operation, payload: { node: { id: "node-a", title: "wrong" } } }])).rejects.toMatchObject({ kind: "permanent" });
   });
 
+  it("reads the server Node/profile snapshot and receipt count without changing any document", async () => {
+    const uid = "owner";
+    const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, uid, "test", { emulator: true });
+    const node = { ownerUid: uid, schemaVersion: 2,
+      record: { value: { id: "node-a", title: "private" }, revision: 1, lastOpId: "device:1",
+        lastDeviceId: "device", lastLocalSeq: 1, operationType: "create" } };
+    await setDoc(doc(db, `users/${uid}/nodesV2/node-a`), node);
+    const snapshot = await adapter.readRecoverySnapshot?.();
+    expect(snapshot).toMatchObject({ receiptDocumentCount: 0, nodes: [node.record] });
+    expect(await getDoc(doc(db, `users/${uid}/nodesV2/node-a`))).toMatchObject({ exists: expect.any(Function) });
+    expect((await getDoc(doc(db, `users/${uid}/nodesV2/node-a`))).data()).toEqual(node);
+  });
+
   it("reads 21 immutable receipt IDs as two server queries under the existing owner rules", async () => {
     const uid = "owner";
     const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;

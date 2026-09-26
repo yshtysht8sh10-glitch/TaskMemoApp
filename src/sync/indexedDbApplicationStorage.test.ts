@@ -80,7 +80,7 @@ describe("IndexedDB V2 migration", () => {
     const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory, { allowLegacyCopy: false });
     const auditOutbox = vi.fn(async (operations: unknown[]) => ({ received: 0, missing: operations.length }));
     const adapter = { connect: vi.fn(async () => undefined), auditOutbox } as unknown as SyncAdapter;
-    expect(await observePendingJournalReceipts(persistence, adapter, () => undefined)).toBe(true);
+    expect(await observePendingJournalReceipts(persistence, adapter, () => undefined)).toEqual({ hadJournal: true, auditResult: { received: 0, missing: 1024 } });
     expect(auditOutbox.mock.calls[0][0]).toHaveLength(1024);
     expect(await persistence.loadCommitted()).toBe(committed);
     expect(await persistence.loadJournal()).toBe(journal);

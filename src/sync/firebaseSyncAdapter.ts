@@ -1,4 +1,4 @@
-import { collection, doc, documentId, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, serverTimestamp, where, type Firestore } from "firebase/firestore";
+import { collection, doc, documentId, getCountFromServer, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, serverTimestamp, where, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
@@ -84,6 +84,32 @@ export function createFirebaseSyncAdapter(
   }
 
   return {
+    async readRecoverySnapshot() {
+      const [nodes, pinnedNote, features, receiptCount] = await Promise.all([
+        getDocsFromServer(collection(db, "users", uid, "nodesV2")),
+        getDocFromServer(doc(db, "users", uid, "profileV2", "pinnedNote")),
+        getDocFromServer(doc(db, "users", uid, "profileV2", "features")),
+        getCountFromServer(collection(db, "users", uid, "syncOperationsV2")),
+      ]);
+      if (nodes.metadata.fromCache || pinnedNote.metadata.fromCache || features.metadata.fromCache)
+        throw { code: "preflight-cache", kind: "temporary" };
+      for (const snapshot of [pinnedNote, features]) {
+        if (snapshot.exists() && (snapshot.data().ownerUid !== uid || snapshot.data().schemaVersion !== 2 ||
+            !snapshot.data().record || !Number.isSafeInteger(snapshot.data().record.revision)))
+          throw { code: "preflight-invalid-remote", kind: "permanent" };
+      }
+      return {
+        nodes: nodes.docs.map((snapshot) => {
+          const data = snapshot.data();
+          if (data.ownerUid !== uid || data.schemaVersion !== 2 || data.record?.value?.id !== snapshot.id)
+            throw { code: "preflight-invalid-remote", kind: "permanent" };
+          return data.record as VersionedNode;
+        }),
+        pinnedNote: pinnedNote.exists() ? pinnedNote.data().record : undefined,
+        features: features.exists() ? features.data().record as VersionedFeatures : undefined,
+        receiptDocumentCount: receiptCount.data().count,
+      };
+    },
     async auditOutbox(operations) {
       const seen = new Set<string>();
       for (const operation of operations) {

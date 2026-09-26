@@ -12,6 +12,7 @@ import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "../sync/recovery";
 import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation, recoveryErrorCode } from "../sync/recoveryObservation";
+import { runRecoveryPreflight } from "../sync/recoveryPreflight";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -135,8 +136,13 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         if (observationOnly) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
         if (observationOnly && await persistence.loadJournal()) {
-          await observePendingJournalReceipts(persistence, adapter, recordRecoveryObservation);
+          const observation = await observePendingJournalReceipts(persistence, adapter, recordRecoveryObservation);
           if (currentGeneration !== generation) return;
+          recordRecoveryObservation({ recoveryPhase: "preflight-start" });
+          if (!observation.auditResult) throw { code: "preflight-audit-missing" };
+          const preflight = await runRecoveryPreflight(persistence, adapter, scope, observation.auditResult);
+          if (currentGeneration !== generation) return;
+          recordRecoveryObservation({ recoveryPhase: "preflight-complete", preflight });
           recordRecoveryObservation({ recoveryPhase: "observation-paused" });
           setStatus("diagnostic");
           setError("復旧診断のため安全停止中です。journalの確定・再送は行っていません。");

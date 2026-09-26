@@ -21,7 +21,7 @@
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const array = (value) => Array.isArray(value) ? value : [];
   const operationTypes = new Set(['create', 'update', 'complete', 'uncomplete', 'softDelete', 'restore', 'purge', 'undo', 'redo', 'import']);
-  const recoveryPhases = new Set(['starting', 'indexeddb-open-start', 'indexeddb-open-complete', 'firebase-connect-start', 'firebase-connect-complete', 'receipt-batch-start', 'receipt-batch-complete', 'receipt-comparison-complete', 'observation-paused', 'error']);
+  const recoveryPhases = new Set(['starting', 'indexeddb-open-start', 'indexeddb-open-complete', 'firebase-connect-start', 'firebase-connect-complete', 'receipt-batch-start', 'receipt-batch-complete', 'receipt-comparison-complete', 'preflight-start', 'preflight-complete', 'observation-paused', 'error']);
   function recoveryObservation(storage) {
     try {
       const raw = storage && storage.getItem('@taskmemo/recovery-observation/v1');
@@ -35,6 +35,8 @@
         recoveryPhase: recoveryPhases.has(saved.recoveryPhase) ? saved.recoveryPhase : 'invalid',
         receiptComparisonTotal: count(saved.receiptComparisonTotal),
         receiptComparisonCompleted: count(saved.receiptComparisonCompleted),
+        receiptReceivedCount: count(saved.receiptReceivedCount),
+        receiptMissingCount: count(saved.receiptMissingCount),
         currentBatch: count(saved.currentBatch),
         lastCompletedOperationIndex: index(saved.lastCompletedOperationIndex),
         lastProgressAt: timestamp(saved.lastProgressAt),
@@ -48,6 +50,21 @@
         receiptServerReadCalls: count(saved.receiptServerReadCalls),
         receiptServerDocumentsReturned: count(saved.receiptServerDocumentsReturned),
         receiptRetryCount: count(saved.receiptRetryCount),
+        preflight: saved.preflight && typeof saved.preflight === 'object' ? (() => {
+          const p = object(saved.preflight);
+          const fields = ['applicationNodeCount', 'journalNodeCount', 'journalOutboxCount',
+            'applicationNodeNotInJournalCount', 'applicationOutboxNotInJournalCount', 'remoteNodeCount',
+            'remoteReceiptDocumentCount', 'auditedReceivedCount', 'auditedMissingCount',
+            'nodeMatchCount', 'remoteOnlyNodeCount', 'journalOnlyNodeCount',
+            'nodeContentMismatchCount', 'remoteRevisionConflictCount', 'profileMismatchCount',
+            'dryRunSuccessCount', 'dryRunDuplicateCount', 'dryRunMissingCount', 'dryRunConflictCount',
+            'dryRunInconsistencyCount', 'dryRunNodeCount'];
+          return { ...Object.fromEntries(fields.map((field) => [field, count(p[field])])),
+            localCopyMatches: p.localCopyMatches === true,
+            dryRunMatchesJournal: p.dryRunMatchesJournal === true,
+            remoteSnapshotAtomic: p.remoteSnapshotAtomic === true,
+            decision: p.decision === 'blocked' || p.decision === 'review-required' ? p.decision : 'invalid' };
+        })() : null,
         batchEvents: array(saved.batchEvents).slice(0, 512).map((item) => {
           const event = object(item);
           return {

@@ -86,6 +86,8 @@ export type SyncAcknowledgement = {
 
 export interface SyncAdapter {
   connect(): Promise<void>;
+  /** Server-only snapshot for observation. Never starts a listener or writes. */
+  readRecoverySnapshot?(): Promise<{ nodes: VersionedNode[]; pinnedNote?: VersionedPinnedNote; features?: VersionedFeatures; receiptDocumentCount: number }>;
   /** Read-only receipt check. A failure must prevent recovery and uploading. */
   auditOutbox?(operations: SyncOperation[]): Promise<{ received: number; missing: number }>;
   upload(operation: SyncOperation): Promise<SyncAcknowledgement>;

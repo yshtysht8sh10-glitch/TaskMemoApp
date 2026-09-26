@@ -45,7 +45,7 @@ describe("journal recovery receipt barrier", () => {
     const clearJournal = vi.spyOn(persistence, "clearJournal");
     const progress = vi.fn();
     const adapter = { connect: vi.fn(async () => undefined), auditOutbox: vi.fn(async () => ({ received: 900, missing: 124 })) } as unknown as SyncAdapter;
-    expect(await observePendingJournalReceipts(persistence, adapter, progress)).toBe(true);
+    expect(await observePendingJournalReceipts(persistence, adapter, progress)).toEqual({ hadJournal: true, auditResult: { received: 900, missing: 124 } });
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({ recoveryPhase: "firebase-connect-start", receiptComparisonTotal: 1024 }));
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({ recoveryPhase: "receipt-comparison-complete", receiptComparisonCompleted: 1024 }));
     expect(writeCommitted).not.toHaveBeenCalled();

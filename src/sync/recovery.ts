@@ -30,6 +30,7 @@ async function auditPendingJournal(
   onProgress?: (update: Partial<RecoveryObservation>) => void,
 ) {
   const pendingJournal = await persistence.loadJournal();
+  let auditResult: { received: number; missing: number } | null = null;
   if (pendingJournal) {
     const envelope = JSON.parse(pendingJournal) as { version?: number; deviceId?: unknown; domain?: unknown; history?: { past?: unknown; future?: unknown }; sync?: { outbox?: SyncOperation[] } };
     if (envelope.version !== 2 || typeof envelope.deviceId !== "string" || !envelope.deviceId ||
@@ -42,11 +43,13 @@ async function auditPendingJournal(
     catch (error) { onProgress?.({ firebaseConnectionState: "error" }); throw error; }
     onProgress?.({ recoveryPhase: "firebase-connect-complete", firebaseConnectionState: "connected" });
     const result = await adapter.auditOutbox(envelope.sync.outbox);
+    auditResult = result;
     if (!Number.isInteger(result.received) || !Number.isInteger(result.missing) ||
         result.received < 0 || result.missing < 0 || result.received + result.missing !== envelope.sync.outbox.length)
       throw new Error("Firebase受領照合の件数がjournalと一致しません。復旧を停止しました。");
     onProgress?.({ recoveryPhase: "receipt-comparison-complete", receiptComparisonCompleted: envelope.sync.outbox.length,
-      lastCompletedOperationIndex: envelope.sync.outbox.length - 1 });
+      lastCompletedOperationIndex: envelope.sync.outbox.length - 1, receiptReceivedCount: result.received,
+      receiptMissingCount: result.missing });
   }
-  return Boolean(pendingJournal);
+  return { hadJournal: Boolean(pendingJournal), auditResult };
 }
