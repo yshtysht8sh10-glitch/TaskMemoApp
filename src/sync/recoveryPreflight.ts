@@ -58,6 +58,16 @@ export type RecoveryPreflight = {
     other: number;
     noUserContentDifference: number;
   };
+  /** Fixed, allowlisted field names only. Each count is the number of differing Nodes. */
+  dryRunOtherFieldCounts: Record<string, number>;
+  dryRunMetadataOnlyFieldCounts: Record<string, number>;
+  semanticNodeStateMatchesJournal: boolean;
+  semanticNodeStateReasons: {
+    nodeExistenceDifferenceCount: number;
+    meaningfulFieldDifferenceNodeCount: number;
+    unknownFieldDifferenceNodeCount: number;
+    internalOnlyDifferenceNodeCount: number;
+  };
   dryRunMatchesJournal: boolean;
   remoteSnapshotAtomic: false;
   decision: "blocked" | "review-required";
@@ -70,6 +80,33 @@ const canonical = (value: unknown): string => JSON.stringify(value, (_key, item)
 const operationTypes = ["create", "update", "complete", "uncomplete", "softDelete", "restore", "purge", "undo", "redo", "import"] as const;
 const userContentFields = new Set(["type", "parentId", "title", "body", "memoType", "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "repeatRule", "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt", "deletionBatchId", "purgedAt"]);
 const timestampFields = new Set(["createdAt", "updatedAt"]);
+// createdAt and updatedAt can affect routine anchors and completion-history presentation.
+const knownValueFields = new Set(["id", "sortKey", ...userContentFields, ...timestampFields]);
+const internalRecordFields = new Set(["revision", "lastOpId", "lastDeviceId", "lastLocalSeq", "operationType"]);
+export const RECOVERY_NODE_DIFFERENCE_FIELDS = [
+  ...[...knownValueFields].map((field) => `value.${field}`),
+  ...internalRecordFields, "value.unknownField", "record.unknownField",
+] as const;
+
+/** Unknown keys are counted without exposing their possibly private names. */
+function differingFieldNames(actual: VersionedNode, expected: VersionedNode): string[] {
+  const names = new Set<string>();
+  for (const field of new Set([...Object.keys(actual.value), ...Object.keys(expected.value)])) {
+    if (canonical(actual.value[field]) === canonical(expected.value[field])) continue;
+    names.add(knownValueFields.has(field) ? `value.${field}` : "value.unknownField");
+  }
+  const actualRecord = actual as unknown as Record<string, unknown>;
+  const expectedRecord = expected as unknown as Record<string, unknown>;
+  for (const field of new Set([...Object.keys(actualRecord), ...Object.keys(expectedRecord)])) {
+    if (field === "value" || canonical(actualRecord[field]) === canonical(expectedRecord[field])) continue;
+    names.add(internalRecordFields.has(field) ? field : "record.unknownField");
+  }
+  return [...names];
+}
+
+function emptyFieldCounts(): Record<string, number> {
+  return Object.fromEntries(RECOVERY_NODE_DIFFERENCE_FIELDS.map((field) => [field, 0]));
+}
 
 /** Mutually exclusive differences; unknown fields are never silently treated as metadata. */
 function classifyNodeDifference(actual: VersionedNode, expected: VersionedNode) {
@@ -209,18 +246,45 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     exactRecord: 0, dryRunOnly: 0, journalOnly: 0, revisionOnly: 0, sortKeyOnly: 0,
     metadataOnly: 0, userContent: 0, other: 0, noUserContentDifference: 0,
   };
+  const dryRunOtherFieldCounts = emptyFieldCounts();
+  const dryRunMetadataOnlyFieldCounts = emptyFieldCounts();
+  const semanticNodeStateReasons: RecoveryPreflight["semanticNodeStateReasons"] = {
+    nodeExistenceDifferenceCount: 0, meaningfulFieldDifferenceNodeCount: 0,
+    unknownFieldDifferenceNodeCount: 0, internalOnlyDifferenceNodeCount: 0,
+  };
   for (const [id, record] of records) {
     const expected = journal.domain[id];
-    if (!expected) { dryRunJournalNodeDifference.dryRunOnly++; continue; }
+    if (!expected) {
+      dryRunJournalNodeDifference.dryRunOnly++;
+      semanticNodeStateReasons.nodeExistenceDifferenceCount++;
+      continue;
+    }
     const category = classifyNodeDifference(record, expected);
     dryRunJournalNodeDifference[category]++;
+    const changedFields = differingFieldNames(record, expected);
+    const fieldCounts = category === "other" ? dryRunOtherFieldCounts :
+      category === "metadataOnly" ? dryRunMetadataOnlyFieldCounts : null;
+    if (fieldCounts) for (const field of changedFields) fieldCounts[field]++;
+    const meaningful = changedFields.some((field) => field.startsWith("value.") &&
+      field !== "value.unknownField");
+    const unknown = changedFields.includes("value.unknownField") || changedFields.includes("record.unknownField");
+    if (meaningful) semanticNodeStateReasons.meaningfulFieldDifferenceNodeCount++;
+    if (unknown) semanticNodeStateReasons.unknownFieldDifferenceNodeCount++;
+    if (changedFields.length > 0 && !meaningful && !unknown)
+      semanticNodeStateReasons.internalOnlyDifferenceNodeCount++;
     const fields = new Set([...Object.keys(record.value), ...Object.keys(expected.value)]);
     if ([...fields].every((field) => canonical(record.value[field]) === canonical(expected.value[field]) ||
         field === "sortKey" || timestampFields.has(field)))
       dryRunJournalNodeDifference.noUserContentDifference++;
   }
   for (const id of Object.keys(journal.domain))
-    if (!records.has(id)) dryRunJournalNodeDifference.journalOnly++;
+    if (!records.has(id)) {
+      dryRunJournalNodeDifference.journalOnly++;
+      semanticNodeStateReasons.nodeExistenceDifferenceCount++;
+    }
+  const semanticNodeStateMatchesJournal = semanticNodeStateReasons.nodeExistenceDifferenceCount === 0 &&
+    semanticNodeStateReasons.meaningfulFieldDifferenceNodeCount === 0 &&
+    semanticNodeStateReasons.unknownFieldDifferenceNodeCount === 0;
   const dryRunMatchesJournal = records.size === Object.keys(journal.domain).length &&
     [...records].every(([id, record]) => canonical(record) === canonical(journal.domain[id])) &&
     canonical(simulatedPinned ?? null) === canonical(pinned?.synced ?? null) &&
@@ -245,6 +309,8 @@ export function compareRecoveryState(application: Envelope, journal: Envelope,
     dryRunConflictMaxPerNode: Math.max(0, ...conflictByNode.values()), dryRunConflictNodeFrequency,
     dryRunConflictCountsPerNodeDescending: [...conflictByNode.values()].sort((a, b) => b - a),
     dryRunInconsistencyCount, dryRunNodeCount: records.size, dryRunJournalNodeDifference,
+    dryRunOtherFieldCounts, dryRunMetadataOnlyFieldCounts,
+    semanticNodeStateMatchesJournal, semanticNodeStateReasons,
     dryRunMatchesJournal, remoteSnapshotAtomic: false, decision: blocked ? "blocked" : "review-required",
   };
 }

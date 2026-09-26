@@ -59,6 +59,14 @@
             'nodeContentMismatchCount', 'remoteRevisionConflictCount', 'profileMismatchCount',
             'dryRunSuccessCount', 'dryRunDuplicateCount', 'dryRunMissingCount', 'dryRunConflictCount',
             'dryRunInconsistencyCount', 'dryRunNodeCount'];
+          const differenceFields = ['value.id', 'value.sortKey', 'value.type', 'value.parentId', 'value.title',
+            'value.body', 'value.memoType', 'value.deadlineSortKey', 'value.dueAt', 'value.duePreset',
+            'value.status', 'value.completedAt', 'value.routineHistory', 'value.repeatRule',
+            'value.categoryKind', 'value.routineWeekday', 'value.routineDayOfMonth', 'value.routineMonth',
+            'value.deletedAt', 'value.deletionBatchId', 'value.purgedAt', 'value.createdAt',
+            'value.updatedAt', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq',
+            'operationType', 'value.unknownField', 'record.unknownField'];
+          const fieldCounts = (value) => Object.fromEntries(differenceFields.map((field) => [field, count(object(value)[field])]));
           return { ...Object.fromEntries(fields.map((field) => [field, count(p[field])])),
             dryRunConflictByType: Object.fromEntries([...operationTypes].map((type) => [type, count(object(p.dryRunConflictByType)[type])])),
             dryRunConflictByReason: Object.fromEntries(['staleBaseRevision', 'futureBaseRevision', 'createTargetExists', 'candidateSuperseded']
@@ -71,6 +79,12 @@
             dryRunJournalNodeDifference: Object.fromEntries(['exactRecord', 'dryRunOnly', 'journalOnly', 'revisionOnly', 'sortKeyOnly',
               'metadataOnly', 'userContent', 'other', 'noUserContentDifference']
               .map((category) => [category, count(object(p.dryRunJournalNodeDifference)[category])])),
+            dryRunOtherFieldCounts: fieldCounts(p.dryRunOtherFieldCounts),
+            dryRunMetadataOnlyFieldCounts: fieldCounts(p.dryRunMetadataOnlyFieldCounts),
+            semanticNodeStateMatchesJournal: p.semanticNodeStateMatchesJournal === true,
+            semanticNodeStateReasons: Object.fromEntries(['nodeExistenceDifferenceCount', 'meaningfulFieldDifferenceNodeCount',
+              'unknownFieldDifferenceNodeCount', 'internalOnlyDifferenceNodeCount']
+              .map((reason) => [reason, count(object(p.semanticNodeStateReasons)[reason])])),
             localCopyMatches: p.localCopyMatches === true,
             dryRunMatchesJournal: p.dryRunMatchesJournal === true,
             remoteSnapshotAtomic: p.remoteSnapshotAtomic === true,

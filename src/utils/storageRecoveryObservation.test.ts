@@ -21,6 +21,10 @@ it("exports only validated recovery metadata, never injected IDs or private stri
       dryRunConflictByReason: { staleBaseRevision: 664, opId: "SECRET_OP" },
       dryRunConflictCountsPerNodeDescending: [19, 17],
       dryRunJournalNodeDifference: { userContent: 0, revisionOnly: 3, title: "SECRET_TITLE" },
+      dryRunOtherFieldCounts: { revision: 58, lastOpId: 58, 'private@example.com': 2 },
+      dryRunMetadataOnlyFieldCounts: { 'value.updatedAt': 1, 'private@example.com': 1 },
+      semanticNodeStateMatchesJournal: true,
+      semanticNodeStateReasons: { internalOnlyDifferenceNodeCount: 58, 'private@example.com': 1 },
       decision: "review-required", opId: "SECRET_OP", title: "SECRET_TITLE" },
     batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }],
     lookupEvents: [{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
@@ -52,6 +56,12 @@ it("exports only validated recovery metadata, never injected IDs or private stri
     dryRunSuccessCount: 1024, decision: "review-required",
     dryRunConflictByType: { update: 664 }, dryRunConflictByReason: { staleBaseRevision: 664 },
     dryRunConflictCountsPerNodeDescending: [19, 17], dryRunJournalNodeDifference: { userContent: 0, revisionOnly: 3 } });
+  expect(output.recoveryObservation.preflight).toMatchObject({
+    dryRunOtherFieldCounts: { revision: 58, lastOpId: 58 },
+    dryRunMetadataOnlyFieldCounts: { 'value.updatedAt': 1 },
+    semanticNodeStateMatchesJournal: true,
+    semanticNodeStateReasons: { internalOnlyDifferenceNodeCount: 58 },
+  });
   expect(output.recoveryObservation.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
   expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
     startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001, timeoutDelayMs: 10000 }]);

@@ -90,6 +90,39 @@ describe("read-only recovery preflight", () => {
     expect(report.dryRunJournalNodeDifference).toEqual({ exactRecord: 1, dryRunOnly: 1, journalOnly: 1,
       revisionOnly: 1, sortKeyOnly: 1, metadataOnly: 1, userContent: 1, other: 1,
       noUserContentDifference: 4 });
+    expect(report.dryRunOtherFieldCounts["value.unknownField"]).toBe(1);
+    expect(report.dryRunMetadataOnlyFieldCounts["value.updatedAt"]).toBe(1);
+    expect(report.semanticNodeStateMatchesJournal).toBe(false);
+    expect(report.semanticNodeStateReasons).toEqual({ nodeExistenceDifferenceCount: 2,
+      meaningfulFieldDifferenceNodeCount: 3, unknownFieldDifferenceNodeCount: 1,
+      internalOnlyDifferenceNodeCount: 1 });
+    expect(JSON.stringify(report)).not.toMatch(/"unknownField"|"remote-only"|"journal-only"/);
+  });
+
+  it("identifies sync-control-only divergence as semantically equal but still blocks recovery", () => {
+    const local = record("private-node");
+    const actual = { ...local, revision: 4, lastOpId: "private-operation" };
+    const report = compareRecoveryState(envelope([local]), envelope([local]),
+      { nodes: [actual], receiptDocumentCount: 0 }, true);
+    expect(report.dryRunJournalNodeDifference.other).toBe(1);
+    expect(report.dryRunOtherFieldCounts.revision).toBe(1);
+    expect(report.dryRunOtherFieldCounts.lastOpId).toBe(1);
+    expect(report.semanticNodeStateMatchesJournal).toBe(true);
+    expect(report.semanticNodeStateReasons).toMatchObject({ meaningfulFieldDifferenceNodeCount: 0,
+      unknownFieldDifferenceNodeCount: 0, internalOnlyDifferenceNodeCount: 1 });
+    expect(report.decision).toBe("blocked");
+    expect(JSON.stringify(report)).not.toMatch(/private-node|private-operation/);
+  });
+
+  it("does not call createdAt or updatedAt semantically equal because app behavior uses them", () => {
+    const local = { ...record("private-node"), value: { id: "private-node", createdAt: "old", updatedAt: "old" } };
+    const actual = { ...local, value: { ...local.value, createdAt: "new", updatedAt: "new" } };
+    const report = compareRecoveryState(envelope([local]), envelope([local]),
+      { nodes: [actual], receiptDocumentCount: 0 }, true);
+    expect(report.dryRunJournalNodeDifference.metadataOnly).toBe(1);
+    expect(report.dryRunMetadataOnlyFieldCounts["value.createdAt"]).toBe(1);
+    expect(report.dryRunMetadataOnlyFieldCounts["value.updatedAt"]).toBe(1);
+    expect(report.semanticNodeStateMatchesJournal).toBe(false);
   });
 
   it("never writes committed, journal, outbox or Firebase when a local copy disagrees", async () => {
