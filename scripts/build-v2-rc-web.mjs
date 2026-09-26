@@ -6,7 +6,7 @@ if (!/EXPO_PUBLIC_TASKMEMO_ENV\s*=\s*["']?development/.test(envFile) || !/EXPO_P
   throw new Error("V2 RC export requires .env.local development/taskmemoapp-dev.");
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const env = { ...process.env, EXPO_PUBLIC_BUILD_SHA: commit, EXPO_PUBLIC_TASKMEMO_ENV: "development", EXPO_PUBLIC_SYNC_V2_ENABLED: "true", EXPO_PUBLIC_RELEASE_CHANNEL: "v2-rc-20260919" };
-for (const [command, args] of [["node", ["scripts/verify-firebase-environment.js"]], ["npx", ["expo", "export", "--platform", "web", "--clear"]], ["node", ["scripts/verify-firebase-web-export.js"]]]) {
+for (const [command, args] of [["node", ["scripts/verify-firebase-environment.js"]], ["npx", ["expo", "export", "--platform", "web", "--clear"]], ["node", ["scripts/stamp-storage-diagnostics.mjs", commit]], ["node", ["scripts/verify-firebase-web-export.js"]]]) {
   const result = spawnSync(command, args, { env, stdio: "inherit", shell: process.platform === "win32" });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }

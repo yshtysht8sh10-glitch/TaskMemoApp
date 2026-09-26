@@ -13,6 +13,7 @@ const env = { ...process.env, ...parsed, TASKMEMO_ENV_FILE: environmentFile, EXP
 execFileSync(process.execPath, ["scripts/verify-firebase-environment.js"], { stdio: "inherit", env });
 const exported = spawnSync("npx", ["expo", "export", "--platform", "web", "--clear"], { stdio: "inherit", env, shell: process.platform === "win32" });
 if (exported.status !== 0) process.exit(exported.status ?? 1);
+execFileSync(process.execPath, ["scripts/stamp-storage-diagnostics.mjs", commit], { stdio: "inherit", env });
 execFileSync(process.execPath, ["scripts/verify-firebase-web-export.js"], { stdio: "inherit", env });
 const files = directory => readdirSync(directory).flatMap(name => { const path = join(directory, name); return statSync(path).isDirectory() ? files(path) : [path]; }).filter(path => !path.endsWith("taskmemo-build-manifest.json")).sort();
 const artifactHash = createHash("sha256");

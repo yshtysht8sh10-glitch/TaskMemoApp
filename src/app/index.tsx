@@ -106,6 +106,7 @@ import { canStartSheetDismiss, sheetDismissRelease } from "@/utils/sheetDismissG
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
+import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
   clearRoutineCompletion,
@@ -1291,6 +1292,14 @@ export default function HomeScreen() {
             <SettingsButton label="データを読み込む" onPress={importData} />
           </View>
         </SettingsSection>
+        {Platform.OS === "web" && (
+          <SettingsSection title="診断">
+            <SettingsLink
+              label="ストレージ診断"
+              onPress={() => navigateToStorageDiagnostics(window.location)}
+            />
+          </SettingsSection>
+        )}
         {sync.legacyPinnedNoteCandidates.length > 0 && (
           <SettingsSection title="常設メモの回復候補">
             <Text style={styles.settingHelp}>旧端末にだけ残っていた内容です。現在の常設メモと比較し、採用または明示的に破棄してください。候補は自動削除されません。</Text>
