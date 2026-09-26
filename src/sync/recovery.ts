@@ -12,8 +12,11 @@ export async function recoverV2ApplicationAfterAudit(
 ) {
   const pendingJournal = await persistence.loadJournal();
   if (pendingJournal) {
-    const envelope = JSON.parse(pendingJournal) as { version?: number; sync?: { outbox?: SyncOperation[] } };
-    if (envelope.version !== 2 || !Array.isArray(envelope.sync?.outbox) || !adapter.auditOutbox)
+    const envelope = JSON.parse(pendingJournal) as { version?: number; deviceId?: unknown; domain?: unknown; history?: { past?: unknown; future?: unknown }; sync?: { outbox?: SyncOperation[] } };
+    if (envelope.version !== 2 || typeof envelope.deviceId !== "string" || !envelope.deviceId ||
+        !envelope.domain || typeof envelope.domain !== "object" || Array.isArray(envelope.domain) ||
+        !Array.isArray(envelope.history?.past) || !Array.isArray(envelope.history?.future) ||
+        !Array.isArray(envelope.sync?.outbox) || !adapter.auditOutbox)
       throw new Error("journalとFirebase受領記録を照合できません。復旧を停止しました。");
     await adapter.connect();
     const result = await adapter.auditOutbox(envelope.sync.outbox);

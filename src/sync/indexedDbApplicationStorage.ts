@@ -77,6 +77,10 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
             (existing.committed !== null && typeof existing.committed !== "string") ||
             (existing.journal !== null && typeof existing.journal !== "string"))
           throw new Error("IndexedDBの既存V2データを検証できません。自動復旧を停止しました。");
+        const existingCommitted = validateEnvelope(existing.committed);
+        const existingJournal = validateEnvelope(existing.journal);
+        if (existingCommitted && existingJournal && existingCommitted.deviceId !== existingJournal.deviceId)
+          throw new Error("IndexedDBのapplicationとjournalの端末識別が一致しません。自動復旧を停止しました。");
         if (existing.legacyFingerprint !== legacyFingerprint)
           throw new Error("移行後に旧localStorageが変更されています。自動復旧を停止しました。");
         return adapter;

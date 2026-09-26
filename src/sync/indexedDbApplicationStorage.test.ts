@@ -1,4 +1,4 @@
-import { IDBFactory } from "fake-indexeddb";
+import { IDBDatabase as FakeIDBDatabase, IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
@@ -89,5 +89,24 @@ describe("IndexedDB V2 migration", () => {
     await recovered.redo();
     expect(recovered.nodes.find((node) => node.id === "memo")?.title).toBe("after");
     expect(storage).toEqual(preserved);
+  });
+
+  it("rejects a local edit when IndexedDB persistence fails, without presenting it as committed", async () => {
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    const at = new Date("2026-09-26T00:00:00.000Z");
+    const memo: MemoNode = { id: "memo", type: "memo", parentId: null, sortKey: "a0", title: "before", body: "", dueAt: null,
+      duePreset: "none", status: "active", completedAt: null, createdAt: at, updatedAt: at, deletedAt: null };
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [memo], { deviceId: "device-a" });
+    const original = FakeIDBDatabase.prototype.transaction;
+    const failure = vi.spyOn(FakeIDBDatabase.prototype, "transaction").mockImplementation(function (this: IDBDatabase, names, mode, options) {
+      if (mode === "readwrite") throw new DOMException("quota", "QuotaExceededError");
+      return original.call(this, names, mode, options);
+    });
+    try {
+      await expect(store.command("edit", "update", (nodes) => nodes.map((node) => node.id === "memo" ? { ...node, title: "after" } : node))).rejects.toThrow("quota");
+      expect(store.nodes.find((node) => node.id === "memo")?.title).toBe("before");
+      expect(store.outbox).toHaveLength(0);
+      expect(storage.size).toBe(0);
+    } finally { failure.mockRestore(); }
   });
 });
