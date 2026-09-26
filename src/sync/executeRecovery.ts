@@ -3,6 +3,7 @@ import { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStora
 import { prepareRecoveryPreflight } from "./recoveryPreflight";
 import { recoveryFailureDetails } from "./recoveryFailure";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
+import { planRecoverySortKeyOperations } from "./recoverySortKeyRepair";
 import type { RecoveryExecutionObservation, RecoveryExecutionPhase } from "./recoveryObservation";
 import type { SyncAdapter, SyncAcknowledgement, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
@@ -11,7 +12,8 @@ const canonical = (value: unknown): string => JSON.stringify(value, (_key, item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 
 type Snapshot = Awaited<ReturnType<NonNullable<SyncAdapter["readRecoverySnapshot"]>>>;
-type Pending = { sync: { outbox: SyncOperation[] }; domain: Record<string, VersionedNode>;
+type Pending = { deviceId: string; nextLocalSeq: number;
+  sync: { outbox: SyncOperation[]; seenOpIds?: string[] }; domain: Record<string, VersionedNode>;
   profile?: { pinnedNote?: { synced: VersionedPinnedNote | null }; features?: { synced: VersionedFeatures | null } } };
 
 function sameSnapshot(left: Snapshot, right: Snapshot) {
@@ -19,6 +21,11 @@ function sameSnapshot(left: Snapshot, right: Snapshot) {
   return canonical(nodes(left)) === canonical(nodes(right)) &&
     canonical(left.pinnedNote ?? null) === canonical(right.pinnedNote ?? null) &&
     canonical(left.features ?? null) === canonical(right.features ?? null);
+}
+
+function sameExceptSortKey(left: VersionedNode, right: VersionedNode) {
+  return canonical({ ...left, value: { ...left.value, sortKey: null } }) ===
+    canonical({ ...right, value: { ...right.value, sortKey: null } });
 }
 
 function expectedExecution(operations: SyncOperation[], remote: Snapshot) {
@@ -79,14 +86,26 @@ export async function executeJournalRecovery(
         !report.finalPreflight.authorizesRecovery) stop("recovery-preflight-blocked");
     if (!isCurrent()) stop("recovery-cancelled");
     const pending = JSON.parse(journalRaw) as Pending;
-    operations = pending.sync.outbox;
+    const outbox = pending.sync.outbox;
+    const originalPlan = expectedExecution(outbox, remote);
+    const originalNodes = new Map(originalPlan.final.nodes.map((record) => [record.value.id, record]));
+    if (originalNodes.size !== Object.keys(pending.domain).length ||
+        [...originalNodes].some(([id, record]) => !pending.domain[id] ||
+          !sameExceptSortKey(record, pending.domain[id])) ||
+        canonical(originalPlan.final.pinnedNote ?? null) !== canonical(pending.profile?.pinnedNote?.synced ?? null) ||
+        canonical(originalPlan.final.features ?? null) !== canonical(pending.profile?.features?.synced ?? null))
+      stop("recovery-candidate-mismatch");
+    const repair = planRecoverySortKeyOperations(originalNodes, pending.deviceId,
+      pending.nextLocalSeq, outbox.at(-1)?.createdAt ?? "",
+      new Set([...outbox.map((operation) => operation.opId), ...(pending.sync.seenOpIds ?? [])]));
+    if (repair.operations.length !== report.finalPreflight.sortKeyRepairPreview.plannedOperationCount ||
+        !report.finalPreflight.sortKeyRepairPreview.planValid) stop("recovery-sortkey-plan-changed");
+    operations = [...outbox, ...repair.operations];
     progress({ totalOperations: operations.length });
     const plan = expectedExecution(operations, remote);
     if (canonical(plan.final.nodes.sort((a, b) => a.value.id.localeCompare(b.value.id))) !==
-        canonical(Object.values(pending.domain).sort((a, b) => a.value.id.localeCompare(b.value.id))) ||
-        canonical(plan.final.pinnedNote ?? null) !== canonical(pending.profile?.pinnedNote?.synced ?? null) ||
-        canonical(plan.final.features ?? null) !== canonical(pending.profile?.features?.synced ?? null))
-      stop("recovery-candidate-mismatch");
+        canonical([...repair.final.values()].sort((a, b) => a.value.id.localeCompare(b.value.id))))
+      stop("recovery-sortkey-plan-changed");
     if (!sameSnapshot(remote, await readSnapshot())) stop("recovery-remote-changed");
     enter("pre-execution-receipt-audit");
     const freshReceipts = await auditOutbox(operations);
@@ -128,11 +147,13 @@ export async function executeJournalRecovery(
     enter("local-state-finalization");
     if ((await legacy.loadCommitted()) !== committedRaw || (await legacy.loadJournal()) !== journalRaw)
       stop("recovery-legacy-changed");
-    const recovered = JSON.stringify({ ...pending, sync: { ...pending.sync, outbox: [] } });
-    await persistence.finalizeRecovery(committedRaw, journalRaw, recovered);
+    const recovered = JSON.stringify({ ...pending, nextLocalSeq: pending.nextLocalSeq + repair.operations.length,
+      domain: Object.fromEntries(plan.final.nodes.map((record) => [record.value.id, record])),
+      sync: { ...pending.sync, outbox: [] } });
+    await persistence.finalizeRecovery(committedRaw, journalRaw, recovered, repair.operations, originalNodes);
     enter("completed");
     progress({ status: "succeeded", endedAt: new Date().toISOString() });
-    return { uploaded: operations.length, applied: report.finalPreflight.replay.applied,
+    return { uploaded: operations.length, applied: report.finalPreflight.replay.applied + repair.operations.length,
       superseded: report.finalPreflight.replay.superseded };
   } catch (reason) {
     const failurePhase = phaseState.current;

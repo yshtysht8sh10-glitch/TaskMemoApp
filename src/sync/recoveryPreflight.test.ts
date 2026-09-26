@@ -33,7 +33,13 @@ describe("read-only recovery preflight", () => {
       { nodes: [remoteA, remoteB], receiptDocumentCount: 0 }, true);
     expect(report.structureChecks.remote.valid).toBe(true);
     expect(report.structureChecks.journal.valid).toBe(true);
-    expect(report.finalPreflight.candidateStructure.duplicateActiveSortKeyGroupCount).toBe(1);
+    expect(report.finalPreflight.sortKeyRepairPreview.structureBefore.duplicateActiveSortKeyGroupCount).toBe(1);
+    expect(report.finalPreflight.candidateStructure.duplicateActiveSortKeyGroupCount).toBe(0);
+    expect(report.finalPreflight.sortKeyRepairPreview).toMatchObject({ changedNodeCount: 1,
+      structureAfter: { valid: true, duplicateActiveSortKeyNodeCount: 0,
+        duplicateActiveSortKeyGroupCount: 0 },
+      nonSortKeyValueDifferenceNodeCount: 0, requiresAdditionalOperations: true,
+      planValid: false }); // Minimal fixture has no persistent device sequence.
     expect(report.finalPreflight.authorizesRecovery).toBe(false);
     expect(report.candidateSortKeyCollisionTrace).toMatchObject([{
       sortKey: "a1", nodes: [

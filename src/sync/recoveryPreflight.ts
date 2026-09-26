@@ -2,12 +2,15 @@ import type { ApplicationJournalPersistence } from "./applicationStore";
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation, candidateForOperation } from "./revisionModel";
 import { isValidSortKey } from "../domain/sortKeys";
+import { planRecoverySortKeyOperations, planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
 import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 
 type Envelope = {
   version: number;
+  deviceId?: string;
+  nextLocalSeq?: number;
   domain: Record<string, VersionedNode>;
-  sync: { outbox: SyncOperation[] };
+  sync: { outbox: SyncOperation[]; seenOpIds?: string[] };
   profile?: {
     pinnedNote?: { synced: VersionedPinnedNote | null; localBody: string; dirtySince: string | null; migrationPending: boolean };
     features?: { synced: VersionedFeatures | null; localIdeasEnabled: boolean; migrationPending: boolean };
@@ -46,6 +49,24 @@ type FinalPreflight = {
     physicalDelete: number; logicalDelete: number; semanticUpdate: number; syncMetadataOnlyUpdate: number;
     sortKeyOnlyUpdate: number; otherUpdate: number };
   candidateStructure: StructureCheck;
+  /** Read-only projection; never authorizes upload or changes an existing operation. */
+  sortKeyRepairPreview: {
+    changedNodeCount: number;
+    plannedOperationCount: number;
+    planValid: boolean;
+    structureBefore: StructureCheck;
+    structureAfter: StructureCheck;
+    journalStructure: StructureCheck;
+    journalOnlyNodeCount: number;
+    candidateOnlyNodeCount: number;
+    nonSortKeyValueDifferenceNodeCount: number;
+    nonSortKeyExactDifferenceNodeCount: number;
+    syncMetadataDifferenceNodeCount: number;
+    unknownFieldDifferenceNodeCount: number;
+    receiptAuditBlockCount: number;
+    otherSafetyBlockCount: number;
+    requiresAdditionalOperations: boolean;
+  };
   candidateJournal: PairComparison & { profileMatches: boolean };
   candidateApplication: PairComparison & { differingFieldCounts: Record<string, number>;
     userVisibleChangeNodeCount: number; syncMetadataOnlyNodeCount: number };
@@ -69,6 +90,9 @@ type FinalPreflight = {
     invalidOperation: number; strictDryRunInconsistency: number; duplicateOperation: number;
     replayInconsistency: number; unexplainedSuperseded: number;
     candidateStructureInvalid: number; candidateSemanticMismatch: number;
+    journalStructureInvalid: number;
+    unapprovedSortKeyDefect: number;
+    sortKeyRepairPlanInvalid: number;
     candidateSyncMetadataMismatch: number; candidateExactMismatch: number;
     candidateProfileMismatch: number; localProfileUnsynced: number; invalidRemoteReceiptCount: number;
     unknownFieldDifference: number; journalOnlyMissingFromCandidate: number;
@@ -600,7 +624,38 @@ function buildFinalPreflight(application: Envelope, journal: Envelope, remote: N
     candidateReplayDependsOnReceipt: false,
     actualUploadChecksReceiptInTransaction: true, requiresTransactionalReceiptRecheck: true,
   };
-  const candidateStructure = checkStructure(candidate);
+  const candidateStructureBeforeRepair = checkStructure(candidate);
+  const repair = planRecoverySortKeyRepair(candidate);
+  const candidateStructure = checkStructure(repair.repaired);
+  const journalStructure = checkStructure(journalMap);
+  let plannedOperationCount = 0;
+  let repairPlanValid = true;
+  if (repair.changedNodeCount > 0) {
+    try {
+      const plan = planRecoverySortKeyOperations(candidate, journal.deviceId ?? "",
+        journal.nextLocalSeq ?? -1, journal.sync.outbox.at(-1)?.createdAt ?? "",
+        new Set([...journal.sync.outbox.map((operation) => operation.opId),
+          ...(journal.sync.seenOpIds ?? [])]));
+      plannedOperationCount = plan.operations.length;
+      repairPlanValid = plannedOperationCount === repair.changedNodeCount &&
+        checkStructure(plan.final).valid;
+    } catch { repairPlanValid = false; }
+  }
+  let nonSortKeyValueDifferenceNodeCount = 0;
+  let nonSortKeyExactDifferenceNodeCount = 0;
+  let syncMetadataDifferenceNodeCount = 0;
+  let unknownFieldDifferenceNodeCount = 0;
+  for (const [id, record] of repair.repaired) {
+    const expected = journalMap.get(id);
+    if (!expected) continue;
+    const fields = differingFieldNames(record, expected);
+    if (fields.some((field) => field !== "value.sortKey")) nonSortKeyExactDifferenceNodeCount++;
+    if (fields.some((field) => field.startsWith("value.") && field !== "value.sortKey"))
+      nonSortKeyValueDifferenceNodeCount++;
+    if (fields.some((field) => internalRecordFields.has(field))) syncMetadataDifferenceNodeCount++;
+    if (fields.includes("value.unknownField") || fields.includes("record.unknownField"))
+      unknownFieldDifferenceNodeCount++;
+  }
   const blockReasons: FinalPreflight["blockReasons"] = {
     localCopyMismatch: Number(!localCopyMatches),
     applicationJournalDivergence: applicationNodeNotInJournalCount + applicationOutboxNotInJournalCount,
@@ -613,9 +668,20 @@ function buildFinalPreflight(application: Envelope, journal: Envelope, remote: N
       replay.result.invalid + replay.result.duplicate !== journal.sync.outbox.length),
     unexplainedSuperseded: replay.superseded.unclassified,
     candidateStructureInvalid: Number(!candidateStructure.valid),
-    candidateSemanticMismatch: candidateJournal.semanticDifferent + candidateJournal.leftOnly + candidateJournal.rightOnly,
-    candidateSyncMetadataMismatch: candidateJournal.syncMetadataDifferent,
-    candidateExactMismatch: candidateJournal.exactDifferent,
+    journalStructureInvalid: Number(!journalStructure.valid),
+    unapprovedSortKeyDefect: Number(candidateStructureBeforeRepair.invalidActiveSortKeyCount > 0 ||
+      (repair.changedNodeCount > 0 && candidateStructureBeforeRepair.duplicateActiveSortKeyGroupCount === 0)),
+    sortKeyRepairPlanInvalid: Number(!repairPlanValid),
+    // The user explicitly permits sortKey order drift for this Recovery only.
+    // Every other value/metadata field and Node identity must still match journal.
+    candidateSemanticMismatch: repair.changedNodeCount > 0
+      ? nonSortKeyValueDifferenceNodeCount + candidateJournal.leftOnly + candidateJournal.rightOnly
+      : candidateJournal.semanticDifferent + candidateJournal.leftOnly + candidateJournal.rightOnly,
+    candidateSyncMetadataMismatch: repair.changedNodeCount > 0
+      ? syncMetadataDifferenceNodeCount : candidateJournal.syncMetadataDifferent,
+    candidateExactMismatch: repair.changedNodeCount > 0
+      ? nonSortKeyExactDifferenceNodeCount + candidateJournal.leftOnly + candidateJournal.rightOnly
+      : candidateJournal.exactDifferent + candidateJournal.leftOnly + candidateJournal.rightOnly,
     candidateProfileMismatch: Number(!candidateJournal.profileMatches),
     localProfileUnsynced: Number(!!journal.profile?.pinnedNote?.dirtySince ||
       !!journal.profile?.pinnedNote?.migrationPending || !!journal.profile?.features?.migrationPending ||
@@ -628,6 +694,11 @@ function buildFinalPreflight(application: Envelope, journal: Envelope, remote: N
     unrecognizedOperationType,
   };
   const finalRecoverySafetyDecision = Object.values(blockReasons).some((count) => count > 0) ? "blocked" : "safe";
+  const otherSafetyBlockCount = Object.entries(blockReasons)
+    .filter(([reason]) => reason !== "candidateStructureInvalid" && reason !== "candidateSemanticMismatch" &&
+      reason !== "candidateSyncMetadataMismatch" && reason !== "candidateExactMismatch" &&
+      reason !== "receiptAuditIncompleteOrReceived")
+    .reduce((total, [, count]) => total + count, 0);
   return {
     remoteBeforeNodeCount: remote.size, candidateNodeCount: candidate.size,
     replay: { total: journal.sync.outbox.length, applied: replay.result.applied,
@@ -635,7 +706,23 @@ function buildFinalPreflight(application: Envelope, journal: Envelope, remote: N
       duplicate: replay.result.duplicate, inconsistency: Number(
         replay.result.applied + replay.result.superseded + replay.result.invalid + replay.result.duplicate !==
         journal.sync.outbox.length), unclassified: replay.superseded.unclassified },
-    remoteToCandidate, candidateStructure, candidateJournal,
+    remoteToCandidate, candidateStructure,
+    sortKeyRepairPreview: {
+      changedNodeCount: repair.changedNodeCount,
+      plannedOperationCount, planValid: repairPlanValid,
+      structureBefore: candidateStructureBeforeRepair,
+      structureAfter: candidateStructure,
+      journalStructure,
+      journalOnlyNodeCount: [...journalMap.keys()].filter((id) => !repair.repaired.has(id)).length,
+      candidateOnlyNodeCount: [...repair.repaired.keys()].filter((id) => !journalMap.has(id)).length,
+      nonSortKeyValueDifferenceNodeCount, nonSortKeyExactDifferenceNodeCount,
+      syncMetadataDifferenceNodeCount,
+      unknownFieldDifferenceNodeCount,
+      receiptAuditBlockCount: blockReasons.receiptAuditIncompleteOrReceived,
+      otherSafetyBlockCount,
+      requiresAdditionalOperations: repair.changedNodeCount > 0,
+    },
+    candidateJournal,
     candidateApplication: { ...candidateApplicationBase, differingFieldCounts,
       userVisibleChangeNodeCount, syncMetadataOnlyNodeCount },
     journalOnlyFromApplication, superseded: replay.superseded, receiptSafety,

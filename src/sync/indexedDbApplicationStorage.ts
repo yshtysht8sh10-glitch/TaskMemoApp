@@ -1,8 +1,14 @@
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
+import { planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
+import { applyRevisionOperation } from "./revisionModel";
+import type { SyncOperation, VersionedNode } from "./types";
 
 const DATABASE_NAME = "taskmemo-v2-local-application";
 const STORE_NAME = "scopes";
+const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) =>
+  item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 
 type StoredScope = {
   scope: string;
@@ -136,12 +142,49 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
   async loadJournal() { return (await this.read())?.journal ?? null; }
   async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }
   /** One IndexedDB transaction: old WAL survives every failed precondition or failed write. */
-  async finalizeRecovery(expectedCommitted: string, expectedJournal: string, recoveredCommitted: string) {
+  async finalizeRecovery(expectedCommitted: string, expectedJournal: string, recoveredCommitted: string,
+    repairOperations: SyncOperation[] = [], candidateBeforeRepair?: Map<string, VersionedNode>) {
     const pending = validateEnvelope(expectedJournal)!;
     validateEnvelope(recoveredCommitted);
-    if (recoveredCommitted !== JSON.stringify({ ...pending, sync: {
-      ...(pending.sync as Record<string, unknown>), outbox: [],
-    } })) throw new Error("復旧確定データがjournalと一致しません。");
+    const sync = pending.sync as { outbox: SyncOperation[]; seenOpIds: string[] };
+    let expected: Record<string, unknown> = { ...pending, sync: { ...sync, outbox: [] } };
+    if (repairOperations.length) {
+      const deviceId = pending.deviceId;
+      const nextLocalSeq = pending.nextLocalSeq;
+      if (typeof deviceId !== "string" || !Number.isSafeInteger(nextLocalSeq) ||
+          typeof nextLocalSeq !== "number") throw new Error("復旧修復operationの識別情報が不正です。");
+      const journalDomain = pending.domain as Record<string, VersionedNode>;
+      if (!candidateBeforeRepair || candidateBeforeRepair.size !== Object.keys(journalDomain).length ||
+          [...candidateBeforeRepair].some(([id, record]) => !journalDomain[id] ||
+            canonical({ ...record, value: { ...record.value, sortKey: null } }) !==
+            canonical({ ...journalDomain[id], value: { ...journalDomain[id].value, sortKey: null } })))
+        throw new Error("復旧修復前candidateがjournalのsortKey以外と一致しません。");
+      const domain = Object.fromEntries(candidateBeforeRepair);
+      const outboxIds = new Set([...sync.outbox.map((operation) => operation.opId), ...sync.seenOpIds]);
+      const seenRepairIds = new Set<string>();
+      const withoutSortKey = (record: VersionedNode["value"]) => canonical({ ...record, sortKey: null });
+      for (const [index, operation] of repairOperations.entries()) {
+        const current = domain[operation.targetNodeId];
+        if (!current || operation.type !== "update" || operation.deviceId !== deviceId ||
+            operation.localSeq !== nextLocalSeq + index || operation.opId !== `${deviceId}:${operation.localSeq}` ||
+            outboxIds.has(operation.opId) || seenRepairIds.has(operation.opId) ||
+            operation.baseRevision !== current.revision ||
+            (operation.payload.node as VersionedNode["value"] | undefined)?.id !== operation.targetNodeId ||
+            withoutSortKey(operation.payload.node as VersionedNode["value"]) !== withoutSortKey(current.value))
+          throw new Error("復旧修復operationがjournalのsortKey以外を変更します。");
+        seenRepairIds.add(operation.opId);
+        const acknowledgement = applyRevisionOperation(current, operation);
+        if (acknowledgement.result !== "applied" || !acknowledgement.record)
+          throw new Error("復旧修復operationのrevisionが不正です。");
+        domain[operation.targetNodeId] = acknowledgement.record;
+      }
+      if (planRecoverySortKeyRepair(new Map(Object.entries(domain))).changedNodeCount !== 0)
+        throw new Error("復旧修復後のsortKeyが一意ではありません。");
+      expected = { ...pending, nextLocalSeq: nextLocalSeq + repairOperations.length,
+        domain, sync: { ...sync, outbox: [] } };
+    }
+    if (recoveredCommitted !== JSON.stringify(expected))
+      throw new Error("復旧確定データがjournalと一致しません。");
     const transaction = this.database.transaction(STORE_NAME, "readwrite");
     const done = transactionDone(transaction);
     const objectStore = transaction.objectStore(STORE_NAME);

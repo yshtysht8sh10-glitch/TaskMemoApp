@@ -71,6 +71,73 @@ describe("guarded recovery execution", () => {
     return { state, update: (patch: Partial<RecoveryExecutionObservation>) => Object.assign(state, patch) };
   };
 
+  it("repairs a candidate-only sibling collision with a separate receipted operation", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const a = node("a", "a0");
+    const b = { ...node("b", "a1"), revision: 3 };
+    const moveA = { ...operation(1, node("a", "a1")), type: "update" as const };
+    const moveB = { ...operation(2, node("b", "a2")), type: "update" as const };
+    const journalA = applyRevisionOperation(a, moveA).record!;
+    const journalB = { ...b, value: { ...b.value, sortKey: "a2" } };
+    const committed = envelope([a, b], []);
+    const journal = envelope([journalA, journalB], [moveA, moveB]);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const factory = new IDBFactory();
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    const remote = new Map([["a", a], ["b", b]]);
+    const receipts = new Set<string>();
+    const adapter: SyncAdapter = {
+      connect: vi.fn(async () => undefined),
+      readRecoverySnapshot: vi.fn(async () => ({ nodes: [...remote.values()], receiptDocumentCount: receipts.size })),
+      auditOutbox: vi.fn(async (ops: SyncOperation[]) => ({ received: ops.filter((op) => receipts.has(op.opId)).length,
+        missing: ops.filter((op) => !receipts.has(op.opId)).length })),
+      upload: vi.fn(async (op, expected) => {
+        const actual = applyRevisionOperation(remote.get(op.targetNodeId), op);
+        expect(actual).toEqual(expected);
+        remote.set(op.targetNodeId, actual.record!);
+        receipts.add(op.opId);
+        return actual;
+      }),
+    };
+    const preflight = await prepareRecoveryPreflight(persistence, adapter, "account",
+      { received: 0, missing: 2 }, legacy);
+    expect(preflight.report.finalPreflight.sortKeyRepairPreview.structureBefore.duplicateActiveSortKeyGroupCount).toBe(1);
+    expect(preflight.report.finalPreflight.candidateStructure.duplicateActiveSortKeyGroupCount).toBe(0);
+    expect(preflight.report.finalPreflight.sortKeyRepairPreview).toMatchObject({
+      changedNodeCount: 1, plannedOperationCount: 1, planValid: true,
+      structureAfter: { duplicateActiveSortKeyGroupCount: 0, valid: true },
+    });
+    expect(preflight.report.finalPreflight.finalRecoverySafetyDecision).toBe("safe");
+    const forged = { ...moveB, opId: "device:3", localSeq: 3, baseRevision: 3,
+      payload: { node: { ...journalB.value, title: "forged-content" } } };
+    const forgedRecord = applyRevisionOperation(journalB, forged).record!;
+    const forgedEnvelope = { ...JSON.parse(journal), nextLocalSeq: 4,
+      domain: { a: journalA, b: forgedRecord }, sync: { outbox: [], seenOpIds: [] } };
+    await expect(persistence.finalizeRecovery(committed, journal, JSON.stringify(forgedEnvelope), [forged],
+      new Map([["a", journalA], ["b", journalB]])))
+      .rejects.toThrow("sortKey以外");
+    expect(await persistence.loadJournal()).toBe(journal);
+    receipts.add("device:3");
+    await expect(executeJournalRecovery(persistence, adapter, "account",
+      { received: 0, missing: 2 }, undefined, legacy))
+      .rejects.toMatchObject({ code: "recovery-receipt-changed" });
+    expect(adapter.upload).not.toHaveBeenCalled();
+    receipts.delete("device:3");
+    const oldLegacy = new Map(storage);
+    const result = await executeJournalRecovery(persistence, adapter, "account",
+      { received: 0, missing: 2 }, undefined, legacy);
+    expect(result).toMatchObject({ uploaded: 3, applied: 2, superseded: 1 });
+    expect([...remote.values()].map((record) => record.value.sortKey)).toEqual(["a1", "a2"]);
+    expect(receipts.size).toBe(3);
+    const recovered = JSON.parse((await persistence.loadCommitted())!);
+    expect(recovered.sync.outbox).toEqual([]);
+    expect(recovered.nextLocalSeq).toBe(4);
+    expect(recovered.domain.b.revision).toBe(4);
+    expect(recovered.domain.b.value.sortKey).toBe("a2");
+    expect(await persistence.loadJournal()).toBeNull();
+    expect(storage).toEqual(oldLegacy);
+  });
+
   it("commits the exact 151st-node equivalent only after all receipts and remote records match", async () => {
     const fixture = await setup();
     const observed = progress();
