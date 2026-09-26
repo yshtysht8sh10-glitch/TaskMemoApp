@@ -29,37 +29,46 @@
       const saved = object(JSON.parse(raw));
       const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
       const index = (value) => Number.isSafeInteger(value) && value >= -1 ? value : null;
+      const timestamp = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ? value : null;
+      const elapsed = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e9 ? value : null;
       return {
         recoveryPhase: recoveryPhases.has(saved.recoveryPhase) ? saved.recoveryPhase : 'invalid',
         receiptComparisonTotal: count(saved.receiptComparisonTotal),
         receiptComparisonCompleted: count(saved.receiptComparisonCompleted),
         currentBatch: count(saved.currentBatch),
         lastCompletedOperationIndex: index(saved.lastCompletedOperationIndex),
-        lastProgressAt: typeof saved.lastProgressAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(saved.lastProgressAt) ? saved.lastProgressAt : null,
+        lastProgressAt: timestamp(saved.lastProgressAt),
         firebaseConnectionState: ['not-started', 'connecting', 'connected', 'error'].includes(saved.firebaseConnectionState) ? saved.firebaseConnectionState : 'invalid',
         lastRecoveryError: typeof saved.lastRecoveryError === 'string' && /^[a-z0-9/_-]{1,80}$/i.test(saved.lastRecoveryError) ? saved.lastRecoveryError : null,
-          receiptReadMode: saved.receiptReadMode === 'serial' || saved.receiptReadMode === 'parallel' ? saved.receiptReadMode : 'invalid',
-          receiptLookupTimeoutMs: count(saved.receiptLookupTimeoutMs),
+        receiptReadMode: saved.receiptReadMode === 'serial' || saved.receiptReadMode === 'parallel' ? saved.receiptReadMode : 'invalid',
+        receiptLookupTimeoutMs: count(saved.receiptLookupTimeoutMs),
+        receiptLookupIntervalMs: count(saved.receiptLookupIntervalMs),
         batchEvents: array(saved.batchEvents).slice(0, 512).map((item) => {
           const event = object(item);
           return {
             batch: count(event.batch),
             phase: event.phase === 'start' || event.phase === 'complete' ? event.phase : 'invalid',
             completed: count(event.completed),
-            at: typeof event.at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(event.at) ? event.at : null,
+            at: timestamp(event.at),
           };
         }),
-          lookupEvents: array(saved.lookupEvents).slice(-32).map((item) => {
-            const event = object(item);
-            return {
-              batch: count(event.batch),
-              slot: Number.isSafeInteger(event.slot) && event.slot >= 0 && event.slot < 8 ? event.slot : null,
-              operationIndex: count(event.operationIndex),
-              phase: ['start', 'found', 'not-found', 'error', 'timeout'].includes(event.phase) ? event.phase : 'invalid',
-              durationMs: count(event.durationMs),
-              at: typeof event.at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(event.at) ? event.at : null,
-            };
-          }),
+        lookupEvents: array(saved.lookupEvents).slice(-32).map((item) => {
+          const event = object(item);
+          return {
+            batch: count(event.batch),
+            slot: Number.isSafeInteger(event.slot) && event.slot >= 0 && event.slot < 8 ? event.slot : null,
+            operationIndex: count(event.operationIndex),
+            phase: ['start', 'found', 'not-found', 'error', 'timeout', 'late-resolve', 'late-reject'].includes(event.phase) ? event.phase : 'invalid',
+            startedAt: timestamp(event.startedAt),
+            durationMs: count(event.durationMs),
+            performanceElapsedMs: elapsed(event.performanceElapsedMs),
+            timeoutTimerSetAt: timestamp(event.timeoutTimerSetAt),
+            timeoutScheduledAt: timestamp(event.timeoutScheduledAt),
+            timeoutFiredAt: timestamp(event.timeoutFiredAt),
+            timeoutDelayMs: count(event.timeoutDelayMs),
+            at: timestamp(event.at),
+          };
+        }),
       };
     } catch { return { recoveryPhase: 'unavailable' }; }
   }

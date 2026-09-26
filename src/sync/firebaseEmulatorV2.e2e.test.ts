@@ -131,6 +131,13 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
         expect.objectContaining({ slot: 1, phase: "not-found" }),
       ]));
     }
+    const intervalStarts: number[] = [];
+    const paced = createFirebaseSyncAdapter(db, uid, "test", { emulator: true, receiptReadMode: "serial",
+      receiptLookupIntervalMs: 100, receiptLookupTimeoutMs: 10_000,
+      onReceiptLookup: (event) => { if (event.phase === "start") intervalStarts.push(Date.now()); } });
+    expect(await paced.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+    expect(intervalStarts).toHaveLength(2);
+    expect(intervalStarts[1] - intervalStarts[0]).toBeGreaterThanOrEqual(100);
     await expect(adapter.auditOutbox?.([operation, operation])).rejects.toMatchObject({ kind: "permanent" });
     await expect(adapter.auditOutbox?.([{ ...operation, payload: { node: { id: "node-a", title: "wrong" } } }])).rejects.toMatchObject({ kind: "permanent" });
   });

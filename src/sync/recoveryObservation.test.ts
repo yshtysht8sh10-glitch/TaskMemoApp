@@ -16,8 +16,12 @@ describe("session-only recovery metadata", () => {
     expect(saved).toMatchObject({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
       receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7, firebaseConnectionState: "connected" });
     expect(saved.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
-    recordReceiptLookup({ batch: 2, slot: 0, operationIndex: 8, phase: "timeout", durationMs: 20000 });
+    recordRecoveryObservation({ receiptReadMode: "serial", receiptLookupIntervalMs: 100, receiptLookupTimeoutMs: 10000 });
+    recordReceiptLookup({ batch: 2, slot: 0, operationIndex: 8, phase: "timeout", startedAt: "2026-09-26T07:00:00.000Z",
+      durationMs: 20000, performanceElapsedMs: 20001, timeoutTimerSetAt: "2026-09-26T07:00:00.000Z",
+      timeoutScheduledAt: "2026-09-26T07:00:10.000Z", timeoutFiredAt: "2026-09-26T07:00:20.000Z", timeoutDelayMs: 10000 });
     expect(JSON.parse(session.get(RECOVERY_OBSERVATION_KEY)!).lookupEvents).toMatchObject([{ batch: 2, slot: 0, operationIndex: 8, phase: "timeout", durationMs: 20000 }]);
+    expect(JSON.parse(session.get(RECOVERY_OBSERVATION_KEY)!)).toMatchObject({ receiptReadMode: "serial", receiptLookupIntervalMs: 100, receiptLookupTimeoutMs: 10000 });
     expect(localWrite).not.toHaveBeenCalled();
     expect(session.size).toBe(1);
   });

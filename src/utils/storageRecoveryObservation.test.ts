@@ -10,11 +10,14 @@ it("exports only validated recovery metadata, never injected IDs or private stri
   const status = { textContent: "" };
   const stored = JSON.stringify({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7,
-    receiptReadMode: "serial", receiptLookupTimeoutMs: 10000,
+    receiptReadMode: "serial", receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs: 100,
     lastProgressAt: "2026-09-26T07:00:00.000Z", firebaseConnectionState: "connected",
     lastRecoveryError: "private@example.com", opId: "SECRET_OP", title: "SECRET_TITLE",
     batchEvents: [{ batch: 2, phase: "start", completed: 8, at: "2026-09-26T07:00:00.000Z", opId: "SECRET_OP" }],
     lookupEvents: [{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
+      startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001,
+      timeoutTimerSetAt: "2026-09-26T07:00:00.000Z", timeoutScheduledAt: "2026-09-26T07:00:10.000Z",
+      timeoutFiredAt: "2026-09-26T07:00:20.000Z", timeoutDelayMs: 10000,
       at: "2026-09-26T07:00:20.000Z", opId: "SECRET_OP", title: "SECRET_TITLE" }] });
   runInNewContext(script, {
     document: {
@@ -29,9 +32,10 @@ it("exports only validated recovery metadata, never injected IDs or private stri
   const output = JSON.parse(result.value);
   expect(output.recoveryObservation).toMatchObject({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7, lastRecoveryError: null,
-    receiptReadMode: "serial", receiptLookupTimeoutMs: 10000 });
+    receiptReadMode: "serial", receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs: 100 });
   expect(output.recoveryObservation.batchEvents).toMatchObject([{ batch: 2, phase: "start", completed: 8 }]);
-  expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000 }]);
+  expect(output.recoveryObservation.lookupEvents).toMatchObject([{ batch: 84, slot: 0, operationIndex: 664, phase: "timeout", durationMs: 20000,
+    startedAt: "2026-09-26T07:00:00.000Z", performanceElapsedMs: 20001, timeoutDelayMs: 10000 }]);
   expect(result.value).not.toMatch(/SECRET_OP|SECRET_TITLE|private@example.com/);
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
 });

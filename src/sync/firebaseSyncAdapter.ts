@@ -8,10 +8,29 @@ import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures
 type AdapterOptions = {
   emulator?: boolean;
   onReceiptBatch?: (event: { phase: "start" | "complete"; batch: number; completed: number; total: number; lastCompletedOperationIndex: number }) => void;
-  onReceiptLookup?: (event: { batch: number; slot: number; operationIndex: number; phase: "start" | "found" | "not-found" | "error" | "timeout"; durationMs: number }) => void;
+  onReceiptLookup?: (event: ReceiptLookupEvent) => void;
   receiptLookupTimeoutMs?: number;
   receiptReadMode?: "parallel" | "serial";
+  /** Diagnostic experiment only: pause after each completed serial receipt lookup. */
+  receiptLookupIntervalMs?: number;
 };
+
+export type ReceiptLookupEvent = {
+  batch: number;
+  slot: number;
+  operationIndex: number;
+  phase: "start" | "found" | "not-found" | "error" | "timeout" | "late-resolve" | "late-reject";
+  startedAt: string;
+  durationMs: number;
+  performanceElapsedMs: number;
+  timeoutTimerSetAt: string | null;
+  timeoutScheduledAt: string | null;
+  timeoutFiredAt: string | null;
+  timeoutDelayMs: number | null;
+};
+
+const monotonicNow = () => typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+const diagnosticPause = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 const stableValue = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -62,17 +81,42 @@ export function createFirebaseSyncAdapter(
         options.onReceiptBatch?.({ phase: "start", batch: batchNumber, completed: offset, total: operations.length, lastCompletedOperationIndex: offset - 1 });
         const lookup = async (operation: SyncOperation, slot: number) => {
           const started = Date.now();
-          const event = (phase: "start" | "found" | "not-found" | "error" | "timeout") =>
-            options.onReceiptLookup?.({ batch: batchNumber, slot, operationIndex: offset + slot, phase, durationMs: Math.max(0, Date.now() - started) });
-          event("start");
+          const startedAt = new Date(started).toISOString();
+          const startedPerformance = monotonicNow();
+          let timeoutTimerSetAt: string | null = null;
+          let timeoutScheduledAt: string | null = null;
+          let timeoutFiredAt: string | null = null;
+          let timeoutDelayMs: number | null = null;
+          let timedOut = false;
+          const event = (phase: ReceiptLookupEvent["phase"]) => {
+            try {
+              options.onReceiptLookup?.({ batch: batchNumber, slot, operationIndex: offset + slot, phase, startedAt,
+                durationMs: Math.max(0, Date.now() - started), performanceElapsedMs: Math.max(0, monotonicNow() - startedPerformance),
+                timeoutTimerSetAt, timeoutScheduledAt, timeoutFiredAt, timeoutDelayMs });
+            } catch { /* Diagnostic callbacks must not affect recovery. */ }
+          };
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
-            const serverRead = getDocFromServer(doc(db, "users", uid, "syncOperationsV2", operation.opId));
             const timeoutMs = options.receiptLookupTimeoutMs;
-            const snapshot = timeoutMs && timeoutMs > 0
-              ? await Promise.race([serverRead, new Promise<never>((_, reject) => {
-                timer = setTimeout(() => reject({ kind: "temporary", code: "receipt-timeout", message: "Firebase receipt lookup timed out; recovery stopped." }), timeoutMs);
-              })])
+            const timeoutPromise = timeoutMs && timeoutMs > 0 ? new Promise<never>((_, reject) => {
+              const setAt = Date.now();
+              const scheduledAt = setAt + timeoutMs;
+              timeoutTimerSetAt = new Date(setAt).toISOString();
+              timeoutScheduledAt = new Date(scheduledAt).toISOString();
+              timer = setTimeout(() => {
+                const firedAt = Date.now();
+                timeoutFiredAt = new Date(firedAt).toISOString();
+                timeoutDelayMs = Math.max(0, firedAt - scheduledAt);
+                timedOut = true;
+                reject({ kind: "temporary", code: "receipt-timeout", message: "Firebase receipt lookup timed out; recovery stopped." });
+              }, timeoutMs);
+            }) : null;
+            event("start");
+            const serverRead = getDocFromServer(doc(db, "users", uid, "syncOperationsV2", operation.opId));
+            // Observe late SDK settlement without classifying or applying it after timeout.
+            void serverRead.then(() => { if (timedOut) event("late-resolve"); }, () => { if (timedOut) event("late-reject"); });
+            const snapshot = timeoutPromise
+              ? await Promise.race([serverRead, timeoutPromise])
               : await serverRead;
             if (!snapshot.exists()) { event("not-found"); return false; }
             const data = snapshot.data();
@@ -92,7 +136,12 @@ export function createFirebaseSyncAdapter(
         };
         const results: boolean[] = [];
         if (options.receiptReadMode === "serial") {
-          for (let slot = 0; slot < batch.length; slot++) results.push(await lookup(batch[slot], slot));
+          for (let slot = 0; slot < batch.length; slot++) {
+            results.push(await lookup(batch[slot], slot));
+            // Deliberate diagnostic interval, including across batch boundaries; never pause after the final receipt.
+            if (options.receiptLookupIntervalMs && options.receiptLookupIntervalMs > 0 && offset + slot < operations.length - 1)
+              await diagnosticPause(options.receiptLookupIntervalMs);
+          }
         } else {
           results.push(...await Promise.all(batch.map(lookup)));
         }

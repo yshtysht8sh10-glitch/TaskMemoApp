@@ -73,7 +73,12 @@ describe("read-only Firebase receipt audit", () => {
       expect(lookups.filter((event) => event.batch === 2 && event.phase === "start")).toHaveLength(8);
       expect(lookups).not.toContainEqual(expect.objectContaining({ operationIndex: 8, phase: "not-found" }));
       expect(lookups.every((event) => event.durationMs >= 0)).toBe(true);
+      expect(lookups).toContainEqual(expect.objectContaining({ operationIndex: 8, phase: "timeout",
+        startedAt: expect.any(String), timeoutTimerSetAt: expect.any(String), timeoutScheduledAt: expect.any(String),
+        timeoutFiredAt: expect.any(String), timeoutDelayMs: expect.any(Number), performanceElapsedMs: expect.any(Number) }));
       expect(state.writes).toBe(0);
+      state.release?.();
+      await vi.waitFor(() => expect(lookups).toContainEqual(expect.objectContaining({ operationIndex: 8, phase: "late-resolve" })));
     } finally { state.release?.(); state.blockedPath = null; state.release = null; }
   });
 
@@ -92,6 +97,26 @@ describe("read-only Firebase receipt audit", () => {
     } finally { state.release?.(); state.blockedPath = null; state.release = null; }
   });
 
+  it("records wall-clock timer delay separately from monotonic elapsed time", async () => {
+    state.documents.clear(); state.writes = 0; state.blockedPath = path(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-26T11:19:29.612Z"));
+    const lookups: { phase: string; durationMs: number; performanceElapsedMs: number; timeoutDelayMs: number | null }[] = [];
+    try {
+      const audit = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
+        receiptReadMode: "serial", receiptLookupTimeoutMs: 10_000,
+        onReceiptLookup: (event) => lookups.push(event),
+      }).auditOutbox!([operation(1)]);
+      vi.setSystemTime(new Date("2026-09-26T11:19:50.847Z"));
+      const rejection = expect(audit).rejects.toMatchObject({ code: "receipt-timeout" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejection;
+      expect(lookups).toContainEqual(expect.objectContaining({ phase: "timeout", durationMs: 31_235, timeoutDelayMs: 21_235 }));
+      expect(lookups.at(-1)!.performanceElapsedMs).toBeGreaterThanOrEqual(10_000);
+      expect(state.writes).toBe(0);
+    } finally { state.release?.(); state.blockedPath = null; state.release = null; vi.useRealTimers(); }
+  });
+
   it("serial and parallel reads classify the same server receipts", async () => {
     state.documents.clear(); state.writes = 0;
     state.documents.set(path(1), receipt(operation(1)));
@@ -102,5 +127,33 @@ describe("read-only Firebase receipt audit", () => {
     expect(await create("serial")).toEqual({ received: 1, missing: 1 });
     expect(await create("parallel")).toEqual({ received: 1, missing: 1 });
     expect(state.writes).toBe(0);
+  });
+
+  it("in diagnostic serial mode waits 100ms between every completed lookup including batch boundaries", async () => {
+    state.documents.clear(); state.writes = 0; state.blockedPath = null;
+    vi.useFakeTimers();
+    try {
+      const events: { operationIndex: number; phase: string }[] = [];
+      const audit = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
+        receiptReadMode: "serial", receiptLookupIntervalMs: 100,
+        onReceiptLookup: ({ operationIndex, phase }) => events.push({ operationIndex, phase }),
+      }).auditOutbox!(Array.from({ length: 9 }, (_, index) => operation(index + 1)));
+      await vi.advanceTimersByTimeAsync(0);
+      for (let index = 0; index < 8; index++) {
+        expect(events.filter((event) => event.phase === "start").map((event) => event.operationIndex)).toEqual(
+          Array.from({ length: index + 1 }, (_, number) => number),
+        );
+        expect(events).toContainEqual({ operationIndex: index, phase: "not-found" });
+        await vi.advanceTimersByTimeAsync(99);
+        expect(events.filter((event) => event.phase === "start")).toHaveLength(index + 1);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(await audit).toEqual({ received: 0, missing: 9 });
+      expect(events.filter((event) => event.phase === "start")).toHaveLength(9);
+      for (let index = 1; index < events.length; index++) {
+        if (events[index].phase === "start") expect(events[index - 1].phase).toBe("not-found");
+      }
+      expect(state.writes).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });
