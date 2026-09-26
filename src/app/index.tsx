@@ -1296,7 +1296,7 @@ export default function HomeScreen() {
           <SettingsSection title="診断">
             <SettingsLink
               label="ストレージ診断"
-              onPress={() => navigateToStorageDiagnostics(window.location)}
+              onPress={() => navigateToStorageDiagnostics(window.location, appBuildInfo.fullCommit)}
             />
           </SettingsSection>
         )}

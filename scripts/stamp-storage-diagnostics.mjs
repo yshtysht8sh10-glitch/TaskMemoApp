@@ -10,6 +10,6 @@ for (const [token, value] of [
   ['__TASKMEMO_DIAGNOSTIC_COMMIT__', commit],
 ]) {
   if (!html.includes(token)) throw new Error(`Missing diagnostic build placeholder: ${token}`);
-  html = html.replace(token, value);
+  html = html.replaceAll(token, value);
 }
 writeFileSync(path, html);

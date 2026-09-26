@@ -29,7 +29,7 @@ function launch(values: Record<string, string>) {
 }
 
 it('is a separate static page with only its diagnostic script', () => {
-  expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script defer src="/storage-diagnostics.js">']);
+  expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script defer src="/storage-diagnostics.js?build=__TASKMEMO_DIAGNOSTIC_COMMIT__">']);
   expect(html).not.toMatch(/expo-router|index\.js|firebase|service-worker\.js/i);
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
   expect(script).not.toMatch(/(?:fetch|importScripts|register)\s*\(/);

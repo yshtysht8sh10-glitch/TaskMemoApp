@@ -10,6 +10,11 @@
     "site": "taskmemoapp-eabc3",
     "public": "dist",
     "ignore": ["firebase.cutover.json", "**/.*", "**/node_modules/**"],
+    "headers": [
+      { "source": "/storage-diagnostics", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
+      { "source": "/storage-diagnostics.html", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] },
+      { "source": "/storage-diagnostics.js", "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }] }
+    ],
     "cleanUrls": true,
     "rewrites": [{ "source": "**", "destination": "/index.html" }]
   }
