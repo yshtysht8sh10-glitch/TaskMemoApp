@@ -44,11 +44,13 @@ function fixture(local: VersionedNode[], remote: VersionedNode[]) {
       canonicalSyncValue(receipts.get(op.opId)) === canonicalSyncValue(op)).length,
       missing: operations.filter((op) => !receipts.has(op.opId)).length }),
     convergeRecoveryTarget: async (request: RecoveryConvergenceRequest) => {
+      if (request.diagnosticOnly && request.targetType !== "node") return {};
       if (request.targetType !== "node") throw new Error("unexpected profile change");
       const current = server.get(request.targetNodeId);
       if (canonicalSyncValue(current?.value) === canonicalSyncValue(request.desired)) return {};
       if (canonicalSyncValue(current?.value ?? null) !== canonicalSyncValue(request.observed?.value ?? null))
         throw new Error("concurrent-user-change");
+      if (request.diagnosticOnly) return {};
       if (writes === failAfter) throw new Error("interrupted");
       const { deviceId, localSeq, createdAt } = request.identity;
       const operation: SyncOperation = { opId: `${deviceId}:${localSeq}`, deviceId, localSeq,
@@ -66,6 +68,32 @@ function fixture(local: VersionedNode[], remote: VersionedNode[]) {
 }
 
 describe("sync self repair", () => {
+  it("diagnostic-only leaves Firebase, receipts, committed local state and isolation unchanged", async () => {
+    const state = fixture([record("a", "local")], [record("a", "remote")]);
+    await runSyncSelfRepair(state.persistence, state.adapter, undefined, undefined, true);
+    expect(state.writes).toBe(0);
+    expect(state.receipts.size).toBe(0);
+    expect(state.active).toBe(state.source);
+    expect(state.mode).toBe(true);
+    expect(state.server.get("a")?.value.title).toBe("remote");
+  });
+  it("investigation: canonical comparison ignores object key order but retains semantic and representation differences", () => {
+    expect(canonicalSyncValue({ title: "a", body: "b" })).toBe(canonicalSyncValue({ body: "b", title: "a" }));
+    expect(canonicalSyncValue({ dueAt: undefined })).toBe(canonicalSyncValue({}));
+    expect(canonicalSyncValue({ dueAt: null })).not.toBe(canonicalSyncValue({}));
+    expect(canonicalSyncValue(["a", "b"])).not.toBe(canonicalSyncValue(["b", "a"]));
+    expect(canonicalSyncValue({ updatedAt: new Date(0) })).toBe(canonicalSyncValue({ updatedAt: new Date(0).toISOString() }));
+    expect(canonicalSyncValue({ memoType: "task" })).not.toBe(canonicalSyncValue({}));
+  });
+  it("investigation: planning does not mutate the remote baseline and targets each Node once", () => {
+    const local = [record("a", "local"), record("b", "local b")];
+    const remote = [record("a", "server"), record("c", "remote only")];
+    local[1].value.sortKey = local[0].value.sortKey;
+    const saved = structuredClone(remote);
+    const plan = planSyncSelfRepair(local, remote);
+    expect(remote).toEqual(saved);
+    expect(new Set(plan.changedIds).size).toBe(plan.changedIds.length);
+  });
   it("replans from the current remote and keeps the current local user value", () => {
     const local = [record("a", "local", 20), record("b", "local only")];
     const remote = [record("a", "old", 24), record("c", "remote only")];

@@ -5,6 +5,7 @@ import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperatio
 import { validateCompatibilityGate } from "./compatibilityGate";
 import type { RecoveryConvergenceRequest, SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import { canonicalSyncValue } from "./syncSelfRepair";
+import { recordActorReceipt, recordRepairComparison, recordRepairSnapshot, recordSyncActivity, selfRepairDiagnosticsActive } from "./selfRepairDiagnostics";
 
 type AdapterOptions = {
   emulator?: boolean;
@@ -109,6 +110,7 @@ export function createFirebaseSyncAdapter(
           ? doc(db, "users", uid, "nodesV2", targetNodeId)
           : doc(db, "users", uid, "profileV2", targetNodeId);
         return await runTransaction(db, async (transaction) => {
+          recordSyncActivity("repairTransactionAttempt", { operationId: opId, deviceId });
           const receipt = await transaction.get(receiptRef);
           if (receipt.exists()) {
             const data = receipt.data();
@@ -133,10 +135,31 @@ export function createFirebaseSyncAdapter(
           const current = data?.record as VersionedNode | VersionedPinnedNote | VersionedFeatures | undefined;
           if (current && (!Number.isSafeInteger(current.revision) || current.revision < 0))
             throw { code: "invalid-argument", message: "Firebase revisionが不正です。" };
-          if (canonicalSyncValue(current?.value) === canonicalSyncValue(request.desired)) return {};
-          if (canonicalSyncValue(current?.value ?? null) !== canonicalSyncValue(request.observed?.value ?? null))
+          const alreadyDesired = canonicalSyncValue(current?.value) === canonicalSyncValue(request.desired);
+          const baselineMismatch = canonicalSyncValue(current?.value ?? null) !== canonicalSyncValue(request.observed?.value ?? null);
+          await recordRepairComparison(`${request.targetType}:${targetNodeId}`, request.observed, current ?? null,
+            alreadyDesired ? "already-desired" : baselineMismatch ? "conflict" : "baseline-match", {
+              fromCache: snapshot.metadata?.fromCache, hasPendingWrites: snapshot.metadata?.hasPendingWrites });
+          if (alreadyDesired) return {};
+          if (baselineMismatch) {
+            if (selfRepairDiagnosticsActive() && current?.lastOpId && !current.lastOpId.includes("/")) {
+              try {
+                const actor = await transaction.get(doc(db, "users", uid, "syncOperationsV2", current.lastOpId));
+                const actorData = actor.exists() ? actor.data() : null;
+                const actorOp = actorData?.operation as SyncOperation | undefined;
+                const actorAck = actorData?.acknowledgement as SyncAcknowledgement | undefined;
+                recordActorReceipt({ status: actor.exists() ? "found" : "missing",
+                  operationId: actorOp?.opId, deviceId: actorOp?.deviceId, localSeq: actorOp?.localSeq,
+                  baseRevision: actorOp?.baseRevision, operationType: actorOp?.type,
+                  producerType: typeof actorData?.producerType === "string" ? actorData.producerType : undefined,
+                  acknowledgedValueMatchesCurrent: actorAck ? canonicalSyncValue(
+                    (actorAck.record ?? actorAck.pinnedNoteRecord ?? actorAck.featuresRecord)?.value) === canonicalSyncValue(current.value) : undefined });
+              } catch { recordActorReceipt({ status: "read-failed" }); }
+            }
             throw { code: "aborted", recoveryReason: "concurrent-user-change",
-              message: "自己修復中に他端末のユーザーデータ変更を検出しました。再試行してください。" };
+              message: "事前読込とtransaction内のデータが一致しません。変更元は未特定です。診断情報を確認してください。" };
+          }
+          if (request.diagnosticOnly) return {};
           if (request.targetType === "node" && (current as VersionedNode | undefined)?.value.purgedAt &&
               !request.desired.purgedAt)
             throw { code: "invalid-argument", message: "完全削除済みNodeは復活できません。" };
@@ -177,6 +200,10 @@ export function createFirebaseSyncAdapter(
             !snapshot.data().record || !Number.isSafeInteger(snapshot.data().record.revision)))
           throw { code: "preflight-invalid-remote", kind: "permanent" };
       }
+      for (const snapshot of nodes.docs) await recordRepairSnapshot(`node:${snapshot.id}`,
+        snapshot.data().record, snapshot.metadata ?? {});
+      await recordRepairSnapshot("pinnedNote:pinnedNote", pinnedNote.exists() ? pinnedNote.data().record : null, pinnedNote.metadata ?? {});
+      await recordRepairSnapshot("features:features", features.exists() ? features.data().record : null, features.metadata ?? {});
       return {
         nodes: nodes.docs.map((snapshot) => {
           const data = snapshot.data();
@@ -362,6 +389,7 @@ export function createFirebaseSyncAdapter(
 
     async upload(operation: SyncOperation, expected?: SyncAcknowledgement,
       expectedCurrent?: VersionedNode | null) {
+      recordSyncActivity("normalUploadAttempt", { operationId: operation.opId, deviceId: operation.deviceId });
       const emit = (event: RecoveryTransactionEvent) => {
         if (expected) try { options.onRecoveryTransaction?.(event); }
         catch { /* Diagnostics must never affect transaction behavior. */ }
@@ -408,6 +436,7 @@ export function createFirebaseSyncAdapter(
           return acknowledgement;
         });
         emit(outcome);
+        recordSyncActivity("normalUploadSucceeded", { operationId: operation.opId, deviceId: operation.deviceId });
         return acknowledgement;
       } catch (reason) {
         emit({ phase: "failure", receipt: null, nodeWrite: false, serverWinnerNoWrite: false });
@@ -429,6 +458,7 @@ export function createFirebaseSyncAdapter(
         for (const change of snapshot.docChanges()) {
           if (change.type === "removed") continue;
           const record = change.doc.data().record as VersionedNode | undefined;
+          recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
           if (record) void Promise.resolve(onRecord(record)).catch(onError);
         }
       }, onError);
@@ -436,12 +466,14 @@ export function createFirebaseSyncAdapter(
     subscribePinnedNote(onRecord, onError) {
       return onSnapshot(doc(db, "users", uid, "profileV2", "pinnedNote"), { includeMetadataChanges: true }, (snapshot) => {
         const record = snapshot.data()?.record;
+        recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
         if (record) void Promise.resolve(onRecord(record)).catch(onError);
       }, onError);
     },
     subscribeFeatures(onRecord, onError) {
       return onSnapshot(doc(db, "users", uid, "profileV2", "features"), { includeMetadataChanges: true }, (snapshot) => {
         const record = snapshot.data()?.record as VersionedFeatures | undefined;
+        recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
         if (record) void Promise.resolve(onRecord(record)).catch(onError);
       }, onError);
     },

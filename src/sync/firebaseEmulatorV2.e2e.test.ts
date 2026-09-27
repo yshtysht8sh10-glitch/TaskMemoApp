@@ -1,5 +1,5 @@
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, type Firestore } from "firebase/firestore";
+import { doc, getDoc, setDoc, Timestamp, type Firestore } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
@@ -10,6 +10,9 @@ import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
 import { runSyncSelfRepair } from "./syncSelfRepair";
 import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
+import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, getSelfRepairDiagnostics } from "./selfRepairDiagnostics";
+import { applyRevisionOperation } from "./revisionModel";
+import type { SyncOperation } from "./types";
 
 const enabled = process.env.TASKMEMO_EMULATOR_E2E === "1";
 const waitFor = async (predicate: () => boolean, timeout = 5_000) => {
@@ -34,6 +37,35 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it("reads Timestamp and nullable legacy fields identically through server query and diagnostic transaction, with zero writes", async () => {
+    const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });
+    const prior = { value: { id: "timestamp-node", type: "memo", parentId: null, title: "private title",
+      sortKey: "a0", deletedAt: null, updatedAt: Timestamp.fromMillis(123456),
+      dueAt: null, routineHistory: { "2026-09-27": ["a", "b"] } },
+      revision: 5, lastOpId: "prior:5", lastDeviceId: "prior", lastLocalSeq: 5, operationType: "update" as const };
+    await setDoc(doc(db, "users/owner/nodesV2/timestamp-node"), { ownerUid: "owner", schemaVersion: 2, record: prior });
+    beginSelfRepairDiagnostics("local", true);
+    const initial = await adapter.readRecoverySnapshot!();
+    await adapter.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "timestamp-node",
+      observed: initial.nodes[0], desired: { ...initial.nodes[0].value, title: "local desired" }, diagnosticOnly: true,
+      identity: { deviceId: "sync-self-repair-diagnostic", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } });
+    expect(getSelfRepairDiagnostics()?.lastComparison?.outcome).toBe("baseline-match");
+    const final = await adapter.readRecoverySnapshot!();
+    expect(final.nodes).toEqual(initial.nodes);
+    expect(final.receiptDocumentCount).toBe(initial.receiptDocumentCount);
+    finishSelfRepairDiagnostics("diagnosed");
+    // The old recovery persists its baseline as JSON. Timestamp.toJSON adds `type`,
+    // whereas its stableValue comparator enumerates only the SDK instance's fields.
+    const savedBaseline = JSON.parse(JSON.stringify(initial.nodes[0]));
+    const oldOperation: SyncOperation = { opId: "old-recovery:1", deviceId: "old-recovery", localSeq: 1,
+      targetNodeId: "timestamp-node", type: "update", baseRevision: 5, payload: { node: { ...prior.value, title: "desired" } },
+      createdAt: "2026-09-27T00:00:00.000Z", status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
+    await expect(adapter.upload(oldOperation, applyRevisionOperation(initial.nodes[0], oldOperation), savedBaseline))
+      .rejects.toMatchObject({ recoveryReason: "predicted-base-mismatch" });
+    expect((await adapter.readRecoverySnapshot!()).nodes).toEqual(initial.nodes);
+  });
 
   it("converges a live Node revision and verifies its immutable Receipt", async () => {
     const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;

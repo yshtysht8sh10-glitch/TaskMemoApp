@@ -2,6 +2,7 @@ import { planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
 import { isValidSortKey } from "../domain/sortKeys";
 import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
+import { recordSyncActivity } from "./selfRepairDiagnostics";
 
 export const canonicalSyncValue = (value: unknown): string => JSON.stringify(value, (_key, item) =>
   item && typeof item === "object" && !Array.isArray(item)
@@ -77,7 +78,7 @@ export type SyncSelfRepairProgress = { phase: "reading" | "writing" | "verifying
 /** No saved operation list is replayed. Every invocation starts from current local + server state. */
 export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicationJournal, adapter: SyncAdapter,
   onProgress: (progress: SyncSelfRepairProgress) => void = () => undefined,
-  assertActive: () => void = () => undefined) {
+  assertActive: () => void = () => undefined, diagnosticOnly = false) {
   assertActive();
   if (!await persistence.isLocalRecoveryMode()) throw new Error("ローカル復旧モードではありません。");
   const sourceRaw = await persistence.loadCommitted();
@@ -101,12 +102,12 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
   const initial = await adapter.readRecoverySnapshot();
   const plan = planSyncSelfRepair(Object.values(source.domain), initial.nodes);
   const targets: ({ kind: "node"; id: string } | { kind: "pinnedNote" } | { kind: "features" })[] =
-    plan.changedIds.map((id) => ({ kind: "node", id }));
+    (diagnosticOnly ? [...plan.desired.keys()].sort() : plan.changedIds).map((id) => ({ kind: "node", id }));
   const pinnedDesired = { body: source.profile.pinnedNote.localBody };
   const featuresDesired = { ideasEnabled: source.profile.features.localIdeasEnabled };
-  if (canonicalSyncValue(initial.pinnedNote?.value ?? { body: "" }) !== canonicalSyncValue(pinnedDesired))
+  if (diagnosticOnly || canonicalSyncValue(initial.pinnedNote?.value ?? { body: "" }) !== canonicalSyncValue(pinnedDesired))
     targets.push({ kind: "pinnedNote" });
-  if (canonicalSyncValue(initial.features?.value ?? { ideasEnabled: false }) !== canonicalSyncValue(featuresDesired))
+  if (diagnosticOnly || canonicalSyncValue(initial.features?.value ?? { ideasEnabled: false }) !== canonicalSyncValue(featuresDesired))
     targets.push({ kind: "features" });
   const repairDeviceId = `sync-self-repair-${globalThis.crypto.randomUUID()}`;
   const operations: SyncOperation[] = [];
@@ -118,21 +119,24 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
       createdAt: new Date().toISOString() };
     const result = target.kind === "pinnedNote"
       ? await adapter.convergeRecoveryTarget({ targetType: "pinnedNote", desired: pinnedDesired,
-          observed: initial.pinnedNote ?? null, identity })
+          observed: initial.pinnedNote ?? null, identity, diagnosticOnly })
       : target.kind === "features"
         ? await adapter.convergeRecoveryTarget({ targetType: "features", desired: featuresDesired,
-            observed: initial.features ?? null, identity })
+            observed: initial.features ?? null, identity, diagnosticOnly })
         : await adapter.convergeRecoveryTarget({ targetType: "node", targetNodeId: target.id,
             desired: plan.desired.get(target.id)!.value,
-            observed: initial.nodes.find((record) => record.value.id === target.id) ?? null, identity });
+            observed: initial.nodes.find((record) => record.value.id === target.id) ?? null, identity, diagnosticOnly });
     if (result.operation) {
       if (result.acknowledgement?.result !== "applied" ||
           result.acknowledgement.opId !== result.operation.opId)
         throw new Error("自己修復operationの適用結果が不正です。");
       operations.push(result.operation);
+      recordSyncActivity("repairCommitted", { operationId: result.operation.opId, deviceId: repairDeviceId });
     }
     completed++;
   }
+  if (diagnosticOnly) return { nodeCount: initial.nodes.length, operationCount: 0,
+    receiptCount: 0, remoteOnlyCount: plan.remoteOnlyCount, archivedOldOutboxCount: evidence.archivedOutboxCount };
   onProgress({ phase: "verifying", completed, total: targets.length });
   assertActive();
   const receipts = await adapter.auditOutbox(operations);

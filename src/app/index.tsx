@@ -633,6 +633,12 @@ export default function HomeScreen() {
               : "ローカル復旧モード：クラウド同期停止中"}
           </Text>
           {sync.status === "local-recovery" && (
+            <Pressable onPress={() => { void sync.repairSync(true); }} accessibilityRole="button"
+              style={{ paddingHorizontal: 8, paddingVertical: 5 }}>
+              <Text style={{ color: "#9a5b00", fontSize: 12 }}>読取専用診断</Text>
+            </Pressable>
+          )}
+          {sync.status === "local-recovery" && (
             <Pressable onPress={() => { void sync.repairSync(); }} accessibilityRole="button"
               style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, backgroundColor: "#9a5b00" }}>
               <Text style={{ color: "white", fontSize: 12, fontWeight: "700" }}>同期自己修復</Text>

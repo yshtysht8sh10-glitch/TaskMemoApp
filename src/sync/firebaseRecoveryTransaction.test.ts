@@ -4,6 +4,7 @@ import { createFirebaseSyncAdapter, type RecoveryTransactionEvent } from "./fire
 import { applyRevisionOperation } from "./revisionModel";
 import { recoveryFailureDetails } from "./recoveryFailure";
 import type { SyncOperation } from "./types";
+import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, getSelfRepairDiagnostics } from "./selfRepairDiagnostics";
 
 const state = vi.hoisted(() => ({ documents: new Map<string, unknown>(), sdkFailure: null as unknown,
   writes: 0 }));
@@ -151,5 +152,32 @@ describe("recovery transaction diagnostics", () => {
       identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } }))
       .rejects.toMatchObject({ recoveryReason: "concurrent-user-change" });
     expect(state.writes).toBe(0);
+  });
+  it("diagnostic-only compares a changed desired target without writing Node or Receipt", async () => {
+    const current = applyRevisionOperation(undefined, operation).record!;
+    state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2, record: current });
+    beginSelfRepairDiagnostics("local", true);
+    await adapter([]).convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
+      desired: { ...current.value, title: "local" }, observed: current, diagnosticOnly: true,
+      identity: { deviceId: "sync-self-repair-diagnostic", localSeq: 1, createdAt: operation.createdAt } });
+    expect(state.writes).toBe(0);
+    expect(getSelfRepairDiagnostics()?.lastComparison?.outcome).toBe("baseline-match");
+    finishSelfRepairDiagnostics("diagnosed");
+  });
+  it("identifies updatedAt-only mismatch even with unchanged actor and revision, without claiming another device", async () => {
+    const before = { ...applyRevisionOperation(undefined, operation).record!,
+      value: { id: "node-1", title: "private", updatedAt: "2026-09-26" } };
+    state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2,
+      record: { ...before, value: { ...before.value, updatedAt: "2026-09-27" } } });
+    beginSelfRepairDiagnostics("local", true);
+    const error = await adapter([]).convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
+      desired: { ...before.value, title: "local" }, observed: before, diagnosticOnly: true,
+      identity: { deviceId: "sync-self-repair-diagnostic", localSeq: 1, createdAt: operation.createdAt } }).catch(e => e);
+    expect(error.recoveryReason).toBe("concurrent-user-change");
+    expect(error.message).not.toContain("他端末");
+    expect(getSelfRepairDiagnostics()?.conflict).toMatchObject({ differentFields: ["updatedAt"],
+      beforeMetadata: { revision: 1, lastDeviceId: "device" }, afterMetadata: { revision: 1, lastDeviceId: "device" } });
+    expect(state.writes).toBe(0);
+    finishSelfRepairDiagnostics("failed");
   });
 });

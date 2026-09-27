@@ -1,4 +1,5 @@
 import type { NodeHistory } from "../domain/nodeHistory";
+import { recordSyncActivity } from "./selfRepairDiagnostics";
 import type { Node } from "../models/node";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
@@ -65,6 +66,7 @@ export class TaskMemoV2ApplicationStore {
   private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date) {}
 
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
+    recordSyncActivity("hydrate");
     const journal = await persistence.loadJournal();
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
@@ -131,6 +133,7 @@ export class TaskMemoV2ApplicationStore {
   versionedNode(id: string) { return this.envelope.domain[id]; }
   /** Wait for edits already accepted by the UI before taking a recovery snapshot. */
   whenIdle() { return this.serialize(async () => undefined); }
+  get deviceId() { return this.envelope.deviceId; }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
     return this.serialize(() => this.commandSerialized(label, type, transform, options));
@@ -257,10 +260,12 @@ export class TaskMemoV2ApplicationStore {
       const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
       const winner = selfEcho ? current.synced : chooseVersionedFeatures(current.synced ?? undefined, incoming);
       const features = winner ? { localIdeasEnabled: winner.value.ideasEnabled, synced: winner, migrationPending: false } : current;
+      const localMutation = !same(features, current);
       await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, features }, sync: {
         outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
         seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
       } });
+      if (localMutation) recordSyncActivity("listenerLocalMutation", { operationId: incoming.lastOpId, deviceId: incoming.lastDeviceId });
       return selfEcho ? "self-echo" as const : "remote" as const;
     });
   }
@@ -319,10 +324,12 @@ export class TaskMemoV2ApplicationStore {
       const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
       const winner = selfEcho ? current.synced : chooseVersionedPinnedNote(current.synced ?? undefined, incoming);
       const pinnedNote = { ...current, synced: winner ?? current.synced, localBody: current.dirtySince ? current.localBody : (winner?.value.body ?? current.localBody) };
+      const localMutation = !same(pinnedNote, current);
       await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, pinnedNote }, sync: {
         outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
         seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
       } });
+      if (localMutation) recordSyncActivity("listenerLocalMutation", { operationId: incoming.lastOpId, deviceId: incoming.lastDeviceId });
       return selfEcho ? "self-echo" as const : "remote" as const;
     });
   }
@@ -341,7 +348,9 @@ export class TaskMemoV2ApplicationStore {
       },
     };
     next = this.repairSortKeys(next, this.now());
+    const localMutation = !same(next.domain, this.envelope.domain);
     await this.commit(next);
+    if (localMutation) recordSyncActivity("listenerLocalMutation", { operationId: incoming.lastOpId, deviceId: incoming.lastDeviceId });
     return selfEcho ? "self-echo" as const : "remote" as const;
   }
 
@@ -507,6 +516,7 @@ export class TaskMemoV2ApplicationStore {
   }
 
   private repairSortKeys(source: Envelope, commandTime: Date) {
+    recordSyncActivity("sortKeyRepair");
     const nodes = Object.values(source.domain).map((record) => nodeFromV2Value(record.value));
     const normalized = normalizeNodeSortKeys(nodes);
     if (same(encodeNodes(nodes), encodeNodes(normalized))) return source;
@@ -528,10 +538,14 @@ export class TaskMemoV2ApplicationStore {
   }
 
   private async commit(next: Envelope) {
+    const previousIds = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
+    const generated = next.sync.outbox.filter(operation => !previousIds.has(operation.opId));
     const value = JSON.stringify(next);
     await this.persistence.writeJournal(value);
     await this.persistence.writeCommitted(value);
     this.envelope = next;
+    recordSyncActivity("localCommit", { deviceId: next.deviceId });
+    for (const operation of generated) recordSyncActivity("outboxGenerated", { operationId: operation.opId, deviceId: operation.deviceId });
     await this.persistence.clearJournal();
   }
 }

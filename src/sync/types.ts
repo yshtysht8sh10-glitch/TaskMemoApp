@@ -86,6 +86,8 @@ export type SyncAcknowledgement = {
 
 export type RecoveryConvergenceRequest = {
   identity: { deviceId: string; localSeq: number; createdAt: string };
+  /** Diagnostic transaction reads only: never write a Node or Receipt. */
+  diagnosticOnly?: boolean;
 } & (
   | { targetType: "node"; targetNodeId: string; desired: SyncNodeValue; observed: VersionedNode | null }
   | { targetType: "pinnedNote"; desired: PinnedNoteValue; observed: VersionedPinnedNote | null }

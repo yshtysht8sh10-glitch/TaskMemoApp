@@ -25,6 +25,24 @@ const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sort
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it("investigation: stop does not cancel an already running normal upload loop", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
+    await store.command("create", "create", () => [{ ...memo(), sortKey: "a0" }, { ...memo(), id: "memo-b", sortKey: "a1" }]);
+    const adapter = new ListenerAdapter();
+    let release!: () => void;
+    adapter.auditOutbox = async operations => ({ received: 0, missing: operations.length });
+    const original = adapter.upload.bind(adapter);
+    adapter.upload = async (operation) => {
+      if (operation.targetNodeId === "memo-a") await new Promise<void>(resolve => { release = resolve; });
+      return original(operation);
+    };
+    const controller = new TaskMemoV2SyncController(store, adapter);
+    const flushing = controller.start();
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    controller.stop(); release(); await flushing;
+    // Characterization of the existing cancellation gap; not a desired invariant.
+    expect(adapter.uploads.map(op => op.targetNodeId)).toEqual(["memo-a", "memo-b"]);
+  });
   it("keeps local-only edits durable without connecting, listening, auditing, or uploading after restart", async () => {
     const persistence = new MemoryPersistence();
     let store = await TaskMemoV2ApplicationStore.open(persistence, [memo()], { deviceId: "local-generation" });

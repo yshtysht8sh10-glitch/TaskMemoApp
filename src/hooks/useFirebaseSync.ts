@@ -3,6 +3,7 @@ import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndP
 import { collection, doc, getDocs, onSnapshot, writeBatch } from 'firebase/firestore';
 
 import type { Node } from '@/models/node';
+import { recordSyncActivity } from '@/sync/selfRepairDiagnostics';
 import { getFirebaseClient } from '@/services/firebaseClient';
 import { firebaseConfiguration } from '@/services/firebaseConfig';
 import { applyRemoteDeletionsAsTombstones, mergeNodesByUpdatedAt, nodeFromFirestore, nodeSyncFingerprint, nodeToFirestore, withRemoteTombstones } from '@/services/firebaseNodeCodec';
@@ -44,6 +45,7 @@ export function useFirebaseSync(localNodes: Node[], localReady: boolean, onCloud
       const next = new Map(synchronized.map((node) => [node.id, nodeSyncFingerprint(node)]));
       const changed = synchronized.filter((node) => remoteFingerprints.current.get(node.id) !== next.get(node.id));
       if (changed.length) {
+        recordSyncActivity("legacyUploadAttempt", {}, changed.length);
         const batch = writeBatch(db);
         for (const node of changed) batch.set(doc(db, 'users', uid, 'nodes', node.id), nodeToFirestore(node));
         await batch.commit();

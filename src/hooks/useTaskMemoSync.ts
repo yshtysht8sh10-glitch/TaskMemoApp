@@ -18,6 +18,7 @@ import { preflightJournalAuthoritativeRecovery,
   JOURNAL_AUTHORITATIVE_APPROVAL_KEY } from "../sync/executeJournalAuthoritativeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import { runSyncSelfRepair, type SyncSelfRepairProgress } from "../sync/syncSelfRepair";
+import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, recordSyncActivity } from "../sync/selfRepairDiagnostics";
 import type { SyncAdapter, SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
 import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
@@ -118,6 +119,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     const repairGeneration = repairGenerationRef;
     let generation = 0;
     const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+      recordSyncActivity("authChanged");
       const currentGeneration = ++generation;
       repairGeneration.current++;
       controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
@@ -287,7 +289,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
-    if (repairRunningRef.current) return true;
+    if (repairRunningRef.current) { recordSyncActivity("blockedCommand"); return true; }
     const controller = controllerRef.current;
     if (!controller) {
       if (enabled) setError("V2同期へのログイン・初期化が完了するまで編集できません。");
@@ -302,10 +304,11 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     });
     return true;
   };
-  const repairSync = async () => {
+  const repairSync = async (diagnosticOnly = false) => {
     const persistence = persistenceRef.current, adapter = adapterRef.current, store = storeRef.current;
     if (repairRunningRef.current || !localRecoveryModeRef.current || !persistence || !adapter || !store) return;
     repairRunningRef.current = true;
+    beginSelfRepairDiagnostics(store.deviceId, diagnosticOnly);
     const generation = repairGenerationRef.current;
     setStatus("self-repairing"); setError(null); setSelfRepairProgress({ phase: "reading", completed: 0, total: 0 });
     controllerRef.current?.stop();
@@ -313,7 +316,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       await store.whenIdle();
       const result = await runSyncSelfRepair(persistence, adapter, setSelfRepairProgress, () => {
         if (generation !== repairGenerationRef.current) throw new Error("認証状態が変化したため自己修復を停止しました。");
-      });
+      }, diagnosticOnly);
+      if (diagnosticOnly) {
+        finishSelfRepairDiagnostics("diagnosed");
+        repairRunningRef.current = false; setSelfRepairProgress(null); setStatus("local-recovery");
+        appAlert("読み取り専用診断が完了しました", "Node・Receiptへの書き込みは行っていません。診断ページのJSONに比較結果を保存しました。同期は停止したままです。");
+        return;
+      }
+      finishSelfRepairDiagnostics("completed");
       localRecoveryModeRef.current = false;
       const nextStore = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "self-repair-complete" });
       const controller = new TaskMemoV2SyncController(nextStore, adapter, publish);
@@ -325,12 +335,13 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       else
         appAlert("データの自己修復は完了しました", "Firebaseとの一致を確認しました。通常同期の再接続を待っています。データは端末に保存されています。");
     } catch (reason) {
+      finishSelfRepairDiagnostics("failed");
       repairRunningRef.current = false; setSelfRepairProgress(null);
       const stillLocal = await persistence.isLocalRecoveryMode().catch(() => true);
       localRecoveryModeRef.current = stillLocal;
       setStatus(stillLocal ? "local-recovery" : "error"); setError(message(reason));
       appAlert("同期自己修復を停止しました", `${stillLocal
-        ? "元データと旧Outboxは保持しています。同じボタンから最新状態を再取得して再試行できます。"
+        ? "元データと旧Outboxは保持しています。診断ページの比較結果を確認してください。"
         : "Firebaseとの収束は確定済みです。端末上の元データは保持されています。"}\n${message(reason)}`);
     }
   };

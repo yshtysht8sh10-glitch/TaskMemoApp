@@ -1,4 +1,5 @@
 import { initialSyncState, transitionSyncState } from "./stateMachine";
+import { recordSyncActivity } from "./selfRepairDiagnostics";
 import type { SyncAdapter, SyncFailureKind, SyncOperationType, SyncState } from "./types";
 import type { LegacyPinnedNoteCandidate, TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import type { Node } from "../models/node";
@@ -27,6 +28,7 @@ export class TaskMemoV2SyncController {
   }
 
   async start() {
+    recordSyncActivity(this.options.localOnly ? "localOnlyStart" : "normalStart", { deviceId: this.store.deviceId });
     this.stop();
     if (this.options.localOnly) {
       this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null };
@@ -96,7 +98,7 @@ export class TaskMemoV2SyncController {
     await this.start();
   }
 
-  stop() { this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; }
+  stop() { recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; }
 
   async updatePinnedNote(body: string, debounceMs = 500) {
     await this.store.setPinnedNoteDraft(body);
@@ -167,6 +169,7 @@ export class TaskMemoV2SyncController {
 
   async flush() {
     if (this.options.localOnly) return;
+    recordSyncActivity("normalFlush", { deviceId: this.store.deviceId });
     if (this.adapter.auditOutbox && !this.receiptsAudited) return;
     if (this.paused) {
       this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, kind: "offline", message: "Development offline simulation" });

@@ -6,7 +6,7 @@ const html = readFileSync('public/storage-diagnostics.html', 'utf8');
 const script = readFileSync('public/storage-diagnostics.js', 'utf8');
 const syncHook = readFileSync('src/hooks/useTaskMemoSync.ts', 'utf8');
 
-function launch(values: Record<string, string>) {
+function launch(values: Record<string, string>, session: Record<string, string> = {}) {
   const handlers = new Map<string, () => void>();
   const result = { value: '', focus: vi.fn(), select: vi.fn() };
   const status = { textContent: '' };
@@ -27,9 +27,23 @@ function launch(values: Record<string, string>) {
     querySelector: (selector: string) => ({ content: selector.includes('version') ? '1.0.0' : 'abcdef1234567890' }),
   };
   const assign = vi.fn();
-  runInNewContext(script, { document, window: { localStorage: storage }, navigator: { standalone: true, clipboard: { writeText } }, location: { origin: 'https://taskmemoapp-eabc3.web.app', assign } });
+  runInNewContext(script, { document, window: { localStorage: storage, sessionStorage: { getItem: (key: string) => session[key] ?? null } }, navigator: { standalone: true, clipboard: { writeText } }, location: { origin: 'https://taskmemoapp-eabc3.web.app', assign } });
   return { handlers, result, status, writes, writeText, assign };
 }
+
+it('exports self-repair comparison hashes and counters without raw user fields', () => {
+  const fixture = launch({}, { '@taskmemo/self-repair-diagnostics/v1': JSON.stringify({ version: 1, status: 'failed',
+    localDeviceId: 'local', counters: { normalUploadAttempt: 0 }, conflict: { target: 'node:n',
+      beforeUserData: { type: 'object', hash: 'a'.repeat(64), title: 'PRIVATE TITLE' },
+      beforeFields: { title: { type: 'string', hash: 'b'.repeat(64), raw: 'PRIVATE BODY' } },
+      afterMetadata: { lastOpId: 'writer:3', revision: 3 }, differentFields: ['title'], raw: 'PRIVATE BODY' } }) });
+  fixture.handlers.get('measure')!();
+  const report = JSON.parse(fixture.result.value).selfRepairDiagnostics;
+  expect(report.conflict.afterMetadata).toMatchObject({ revision: 3, lastOpId: 'writer:3' });
+  expect(report.counters.normalUploadAttempt).toBe(0);
+  expect(fixture.result.value).not.toContain('PRIVATE');
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
 
 it('is a separate static page with only its diagnostic script', () => {
   expect(html).toContain('ローカルデータを復旧して使用を再開');

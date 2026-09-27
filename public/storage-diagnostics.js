@@ -53,6 +53,41 @@
     'Firestore returned an error during recovery.',
     'Recovery stopped after an unclassified error.',
   ]);
+  function selfRepairDiagnostics(storage) {
+    try {
+      const raw = storage && storage.getItem('@taskmemo/self-repair-diagnostics/v1');
+      if (!raw || raw.length > 100000) return null;
+      const saved = object(JSON.parse(raw));
+      const text = value => typeof value === 'string' ? value.slice(0, 256) : null;
+      const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+      const meta = value => { const m = object(value); return { revision: count(m.revision),
+        lastOpId: text(m.lastOpId), lastDeviceId: text(m.lastDeviceId), lastLocalSeq: count(m.lastLocalSeq), operationType: text(m.operationType) }; };
+      const fields = value => Object.fromEntries(Object.entries(object(value)).slice(0, 64).map(([key, item]) => {
+        const d = object(item); return [key, { type: text(d.type), hash: typeof d.hash === 'string' && /^[a-f0-9]{64}$/.test(d.hash) ? d.hash : null }];
+      }));
+      const read = value => { const m = object(value); return { fromCache: typeof m.fromCache === 'boolean' ? m.fromCache : null,
+        hasPendingWrites: typeof m.hasPendingWrites === 'boolean' ? m.hasPendingWrites : null }; };
+      const comparison = value => { if (!value) return null; const c = object(value); return {
+        target: text(c.target), conflictNodeId: text(c.conflictNodeId), detectedAt: text(c.detectedAt), outcome: text(c.outcome),
+        differentFields: array(c.differentFields).slice(0, 64).map(text), beforeFields: fields(c.beforeFields), afterFields: fields(c.afterFields),
+        beforeUserData: fields({ value: c.beforeUserData }).value, afterUserData: fields({ value: c.afterUserData }).value,
+        beforeMetadata: meta(c.beforeMetadata), afterMetadata: meta(c.afterMetadata),
+        baselineMutatedInMemory: typeof c.baselineMutatedInMemory === 'boolean' ? c.baselineMutatedInMemory : null,
+        initialRead: read(c.initialRead), transactionRead: read(c.transactionRead),
+        lastSuccessfulRepairOperationId: text(c.lastSuccessfulRepairOperationId) }; };
+      const actor = object(saved.actorReceipt);
+      return { version: saved.version, build: text(saved.build), startedAt: text(saved.startedAt), endedAt: text(saved.endedAt),
+        actorReceipt: saved.actorReceipt ? { status: text(actor.status), operationId: text(actor.operationId), deviceId: text(actor.deviceId),
+          localSeq: count(actor.localSeq), baseRevision: count(actor.baseRevision), operationType: text(actor.operationType),
+          producerType: text(actor.producerType), acknowledgedValueMatchesCurrent: typeof actor.acknowledgedValueMatchesCurrent === 'boolean' ? actor.acknowledgedValueMatchesCurrent : null } : null,
+        status: text(saved.status), readOnly: saved.readOnly === true, localDeviceId: text(saved.localDeviceId), coverage: text(saved.coverage),
+        counters: Object.fromEntries(Object.entries(object(saved.counters)).slice(0, 32).map(([key, value]) => [key, count(value)])),
+        events: array(saved.events).slice(-40).map(event => ({ at: text(event.at), kind: text(event.kind), operationId: text(event.operationId), deviceId: text(event.deviceId) })),
+        lastSuccessfulRepairOperationId: text(saved.lastSuccessfulRepairOperationId), comparisons: count(saved.comparisons),
+        conflict: comparison(saved.conflict), differences: array(saved.differences).slice(-8).map(comparison),
+        lastComparison: comparison(saved.lastComparison), persistenceError: saved.persistenceError === true };
+    } catch { return { status: 'unreadable' }; }
+  }
   function recoveryObservation(storage) {
     try {
       const raw = storage && storage.getItem('@taskmemo/recovery-observation/v1');
@@ -543,6 +578,7 @@
       displayMode: metadata.displayMode,
       firebaseReceiptComparison: 'not-performed',
       recoveryObservation: metadata.recoveryObservation,
+      selfRepairDiagnostics: metadata.selfRepairDiagnostics,
       sizeUnit: 'estimated UTF-16 bytes; not physical disk usage',
       taskMemoTotalUtf16Bytes,
       otherTotalUtf16Bytes,
@@ -568,6 +604,7 @@
         origin: location.origin,
         displayMode: navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser-or-unknown',
         recoveryObservation: recoveryObservation(window.sessionStorage),
+        selfRepairDiagnostics: selfRepairDiagnostics(window.sessionStorage),
       };
       result.value = collect(window.localStorage, metadata);
       status.textContent = metadata.displayMode === 'standalone'
