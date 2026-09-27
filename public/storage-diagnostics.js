@@ -558,6 +558,7 @@
   const status = document.getElementById('status');
   const execute = document.getElementById('execute-recovery');
   const resume = document.getElementById('resume-recovery');
+  const currentBuild = () => document.querySelector('meta[name="taskmemo-commit"]').content;
   const approvedPreview = () => {
     const approval = window.sessionStorage && window.sessionStorage.getItem('@taskmemo/journal-authoritative-preflight-approval/v1');
     const report = recoveryObservation(window.sessionStorage).journalAuthoritativePreflight;
@@ -571,14 +572,14 @@
   if (execute) execute.addEventListener('click', function () {
     if (!approvedPreview()) { status.textContent = '直近の安全なpreflight結果がありません。再実行してください。'; return; }
     if (!window.confirm || !window.confirm('Firebaseへ新規64 operationを書き込みます。元のjournalと旧Outboxは保全します。開始しますか？')) return;
-    location.assign('/?journalAuthoritativeExecute=1');
+    location.assign('/?journalAuthoritativeExecute=1&build=' + encodeURIComponent(currentBuild()));
   });
   if (resume) resume.addEventListener('click', function () {
     const progress = recoveryObservation(window.sessionStorage).execution;
     if (!progress || progress.status !== 'failed' || progress.totalOperations !== 64 ||
         progress.uploadAttemptedCount < 1) return;
     if (!window.confirm || !window.confirm('保存済み計画とReceiptを再検証してRecoveryを再開しますか？')) return;
-    location.assign('/?journalAuthoritativeExecute=1');
+    location.assign('/?journalAuthoritativeExecute=1&build=' + encodeURIComponent(currentBuild()));
   });
   document.getElementById('measure').addEventListener('click', function () {
     try {

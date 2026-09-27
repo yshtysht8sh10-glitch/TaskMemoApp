@@ -30,7 +30,7 @@ function launch(values: Record<string, string>) {
 }
 
 it('is a separate static page with only its diagnostic script', () => {
-  expect(html).toContain('/?journalAuthoritativePreflight=1');
+  expect(html).toContain('/?journalAuthoritativePreflight=1&amp;build=__TASKMEMO_DIAGNOSTIC_COMMIT__');
   expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script defer src="/storage-diagnostics.js?build=__TASKMEMO_DIAGNOSTIC_COMMIT__">']);
   expect(html).not.toMatch(/expo-router|index\.js|firebase|service-worker\.js/i);
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
@@ -42,6 +42,7 @@ it('does not automatically execute recovery when the guarded journal exists', ()
   expect(syncHook).toContain('preflightJournalAuthoritativeRecovery(persistence, adapter, scope)');
   expect(syncHook).not.toContain('executeJournalRecovery(');
   expect(syncHook).toContain('if (manualAuthoritativeExecution) {');
+  expect(syncHook).toContain('&& !manualBuildMatches');
   expect(syncHook).toContain('if (!manualAuthoritativePreflight && !manualAuthoritativeExecution) {');
   expect(syncHook).not.toContain('adapter.upload(');
 });

@@ -38,6 +38,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     new URL(window.location.href).searchParams.get("journalAuthoritativePreflight") === "1";
   const manualAuthoritativeExecution = guardedRecovery && typeof window !== "undefined" &&
     new URL(window.location.href).searchParams.get("journalAuthoritativeExecute") === "1";
+  const manualBuildMatches = guardedRecovery && typeof window !== "undefined" && typeof window.location?.href === "string" &&
+    new URL(window.location.href).searchParams.get("build") === process.env.EXPO_PUBLIC_BUILD_SHA;
   const receiptModeParameter = guardedRecovery && typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("receiptMode") : null;
   const receiptReadMode = receiptModeParameter === "serial" || receiptModeParameter === "serial-interval-100" ? "serial"
     : receiptModeParameter === "parallel" ? "parallel" : "chunked";
@@ -145,6 +147,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
         if (guardedRecovery && await persistence.loadJournal()) {
+          if ((manualAuthoritativePreflight || manualAuthoritativeExecution) && !manualBuildMatches)
+            throw new Error("最新のRecovery版を確認できません。書き込みは開始しません。");
           // A Hosting deploy must never resume the old executable recovery automatically.
           // This release exposes only an explicit, read-only candidate projection.
           if (!manualAuthoritativePreflight && !manualAuthoritativeExecution) {
@@ -249,7 +253,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       removeOnlineListener();
     };
   }, [configured, ready, firebase.environment, guardedRecovery, manualAuthoritativePreflight,
-    manualAuthoritativeExecution, receiptReadMode, receiptLookupIntervalMs]);
+    manualAuthoritativeExecution, manualBuildMatches, receiptReadMode, receiptLookupIntervalMs]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
