@@ -25,7 +25,8 @@
   const executionPhases = new Set(['final-safety-check', 'pre-execution-receipt-audit', 'upload',
     'post-execution-receipt-audit', 'local-state-finalization', 'completed']);
   const failureReasons = new Set(['receipt-payload-mismatch', 'receipt-acknowledgement-mismatch',
-    'predicted-winner-mismatch', 'permission-denied', 'unauthenticated', 'firestore-sdk-error', 'unknown']);
+    'predicted-winner-mismatch', 'predicted-base-mismatch', 'permission-denied',
+    'unauthenticated', 'firestore-sdk-error', 'unknown']);
   const safeErrorCodes = new Set(['invalid-argument', 'permission-denied', 'unauthenticated',
     'firestore/invalid-argument', 'firestore/permission-denied', 'firestore/unauthenticated',
     'unavailable', 'deadline-exceeded', 'failed-precondition', 'aborted', 'resource-exhausted',
@@ -63,7 +64,38 @@
       const elapsed = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e9 ? value : null;
       const safeCode = (value) => safeErrorCodes.has(value) ? value : null;
       const execution = object(saved.execution);
+      const authoritative = object(saved.journalAuthoritativePreflight);
+      const safeBlockReasons = new Set([
+        'local-copy-mismatch', 'remote-snapshot-unstable', 'receipt-audit-incomplete',
+        'receipt-identity-unavailable', 'profile-mismatch', 'outbox-target-invalid',
+        'candidate-validation-failed', 'source-unavailable', 'firebase-read-failed',
+        'fresh-operation-receipt-exists', 'deleted-node-conflict',
+        'unknown-field-conflict', 'candidate-parent-invalid',
+        'candidate-sortkey-invalid', 'candidate-user-data-mismatch', 'unknown',
+      ]);
       return {
+        journalAuthoritativePreflight: saved.journalAuthoritativePreflight ? {
+          status: ['not-started', 'running', 'safe', 'blocked'].includes(authoritative.status)
+            ? authoritative.status : 'blocked',
+          journalNodeCount: count(authoritative.journalNodeCount),
+          remoteNodeCount: count(authoritative.remoteNodeCount),
+          candidateNodeCount: count(authoritative.candidateNodeCount),
+          journalOnlyNodeCount: count(authoritative.journalOnlyNodeCount),
+          remoteOnlyNodeCount: count(authoritative.remoteOnlyNodeCount),
+          markedNodeCount: count(authoritative.markedNodeCount),
+          commonNodeCount: count(authoritative.commonNodeCount),
+          nonSortKeyJournalDifferenceNodeCount: count(authoritative.nonSortKeyJournalDifferenceNodeCount),
+          journalMetadataDifferenceNodeCount: count(authoritative.journalMetadataDifferenceNodeCount),
+          duplicateActiveSortKeyGroupCount: count(authoritative.duplicateActiveSortKeyGroupCount),
+          originalOutboxCount: count(authoritative.originalOutboxCount),
+          originalReceiptReceivedCount: count(authoritative.originalReceiptReceivedCount),
+          originalReceiptMissingCount: count(authoritative.originalReceiptMissingCount),
+          freshOperationReceiptCount: count(authoritative.freshOperationReceiptCount),
+          oldOutboxWillBeResent: false,
+          plannedOperationCount: count(authoritative.plannedOperationCount),
+          metadataRebuildNodeCount: count(authoritative.metadataRebuildNodeCount),
+          blockReasons: array(authoritative.blockReasons).filter((reason) => safeBlockReasons.has(reason)),
+        } : null,
         recoveryPhase: recoveryPhases.has(saved.recoveryPhase) ? saved.recoveryPhase : 'invalid',
         receiptComparisonTotal: count(saved.receiptComparisonTotal),
         receiptComparisonCompleted: count(saved.receiptComparisonCompleted),

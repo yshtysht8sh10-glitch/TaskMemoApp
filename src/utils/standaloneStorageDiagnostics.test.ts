@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest';
 
 const html = readFileSync('public/storage-diagnostics.html', 'utf8');
 const script = readFileSync('public/storage-diagnostics.js', 'utf8');
+const syncHook = readFileSync('src/hooks/useTaskMemoSync.ts', 'utf8');
 
 function launch(values: Record<string, string>) {
   const handlers = new Map<string, () => void>();
@@ -29,10 +30,19 @@ function launch(values: Record<string, string>) {
 }
 
 it('is a separate static page with only its diagnostic script', () => {
+  expect(html).toContain('/?journalAuthoritativePreflight=1');
   expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script defer src="/storage-diagnostics.js?build=__TASKMEMO_DIAGNOSTIC_COMMIT__">']);
   expect(html).not.toMatch(/expo-router|index\.js|firebase|service-worker\.js/i);
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
   expect(script).not.toMatch(/(?:fetch|importScripts|register)\s*\(/);
+});
+
+it('does not automatically execute recovery when the guarded journal exists', () => {
+  expect(syncHook).toContain('journalAuthoritativePreflight');
+  expect(syncHook).toContain('preflightJournalAuthoritativeRecovery(persistence, adapter, scope)');
+  expect(syncHook).not.toContain('executeJournalRecovery(');
+  expect(syncHook).not.toContain('executeJournalAuthoritativeRecovery(');
+  expect(syncHook).not.toContain('adapter.upload(');
 });
 
 it('measures all localStorage while exposing only whitelisted names and aggregate metadata', async () => {

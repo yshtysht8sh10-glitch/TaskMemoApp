@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { executeJournalRecovery } from "./executeRecovery";
+import { executeJournalAuthoritativeRecovery, preflightJournalAuthoritativeRecovery } from "./executeJournalAuthoritativeRecovery";
 import { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
 import { prepareRecoveryPreflight } from "./recoveryPreflight";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
@@ -52,7 +53,8 @@ async function setup(count = 1) {
     connect: vi.fn(async () => undefined),
     readRecoverySnapshot: vi.fn(async () => ({ nodes: [...remote.values()], receiptDocumentCount: receipts.size })),
     auditOutbox: vi.fn(async (ops: SyncOperation[]) => ({ received: ops.filter((op) => receipts.has(op.opId)).length,
-      missing: ops.filter((op) => !receipts.has(op.opId)).length })),
+      missing: ops.filter((op) => !receipts.has(op.opId)).length,
+      receivedOperationIndexes: ops.flatMap((op, index) => receipts.has(op.opId) ? [index] : []) })),
     upload: vi.fn(async (op) => {
       const acknowledgement = applyRevisionOperation(remote.get(op.targetNodeId), op);
       if (acknowledgement.record) remote.set(op.targetNodeId, acknowledgement.record);
@@ -70,6 +72,73 @@ describe("guarded recovery execution", () => {
     const state: Partial<RecoveryExecutionObservation> = {};
     return { state, update: (patch: Partial<RecoveryExecutionObservation>) => Object.assign(state, patch) };
   };
+
+  it("plans journal-authoritative recovery without writes, then resumes partial uploads without replaying original Outbox", async () => {
+    const fixture = await setup();
+    const originalOperation = fixture.operations[0];
+    const journalNode = JSON.parse(fixture.journal).domain.n0 as VersionedNode;
+    fixture.remote.set("n0", { ...journalNode, revision: 8,
+      value: { ...journalNode.value, title: "remote-title" }, lastOpId: "remote:8" });
+    fixture.remote.set("extra", node("extra", "a1"));
+    fixture.receipts.add(originalOperation.opId);
+    const remoteBeforePreflight = JSON.stringify([...fixture.remote]);
+    const diagnostic = await preflightJournalAuthoritativeRecovery(fixture.persistence,
+      fixture.adapter, "account", fixture.legacy);
+    expect(diagnostic.summary).toMatchObject({ journalNodeCount: 1, remoteNodeCount: 2,
+      candidateNodeCount: 2, remoteOnlyNodeCount: 1, markedNodeCount: 1,
+      nonSortKeyJournalDifferenceNodeCount: 0, duplicateActiveSortKeyGroupCount: 0,
+      plannedOperationCount: 2 });
+    expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).toBeNull();
+    expect(JSON.stringify([...fixture.remote])).toBe(remoteBeforePreflight);
+    const acknowledgements = new Map<string, ReturnType<typeof applyRevisionOperation>>();
+    let failOnce = true;
+    const uploaded: string[] = [];
+    fixture.adapter.upload = vi.fn(async (op, expected) => {
+      uploaded.push(op.opId);
+      expect(op.opId).not.toBe(originalOperation.opId);
+      if (op.targetNodeId === "n0" && failOnce) { failOnce = false; throw new Error("interrupted"); }
+      const previous = acknowledgements.get(op.opId);
+      if (previous) return previous;
+      const acknowledgement = applyRevisionOperation(fixture.remote.get(op.targetNodeId), op);
+      expect(acknowledgement).toEqual(expected);
+      fixture.remote.set(op.targetNodeId, acknowledgement.record!);
+      fixture.receipts.add(op.opId);
+      acknowledgements.set(op.opId, acknowledgement);
+      return acknowledgement;
+    });
+    await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy)).rejects.toThrow("interrupted");
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+    expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).not.toBeNull();
+    const result = await executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy);
+    expect(result).toMatchObject({ receiptReceivedCount: 1, receiptSkippedOriginalCount: 1,
+      originalOutboxClearedCount: 1, candidateNodeCount: 2 });
+    expect(uploaded).toHaveLength(4);
+    expect(fixture.remote.get("n0")?.value.title).toBe(journalNode.value.title);
+    expect(fixture.remote.get("n0")?.revision).toBe(9);
+    expect(fixture.remote.get("extra")?.value.title).toBe("⭐⭐⭐private-extra");
+    expect(await fixture.persistence.loadJournal()).toBeNull();
+    expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).toBeNull();
+    expect(JSON.parse((await fixture.persistence.loadCommitted())!).sync.outbox).toEqual([]);
+    expect(await fixture.legacy.loadJournal()).toBe(fixture.journal);
+  });
+
+  it("refuses a changed original Receipt identity even when the received count stays the same", async () => {
+    const fixture = await setup(2);
+    const pending = JSON.parse(fixture.journal);
+    fixture.remote.set("n0", pending.domain.n0);
+    fixture.receipts.add(fixture.operations[0].opId);
+    fixture.adapter.upload = vi.fn(async () => { throw new Error("interrupted"); });
+    await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy)).rejects.toThrow("interrupted");
+    fixture.receipts.delete(fixture.operations[0].opId);
+    fixture.receipts.add(fixture.operations[1].opId);
+    await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy)).rejects.toThrow("Original Outbox receipts changed");
+    expect(fixture.adapter.upload).toHaveBeenCalledTimes(1);
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+  });
 
   it("repairs a candidate-only sibling collision with a separate receipted operation", async () => {
     const legacy = new TaskMemoV2ApplicationJournal("account");

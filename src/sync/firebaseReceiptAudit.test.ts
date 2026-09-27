@@ -48,7 +48,8 @@ describe("read-only Firebase receipt audit", () => {
     const chunked = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
       onReceiptRead: (event) => events.push(event),
     });
-    expect(await chunked.auditOutbox?.(operations)).toEqual({ received: 3, missing: 42 });
+    expect(await chunked.auditOutbox?.(operations)).toEqual({ received: 3, missing: 42,
+      receivedOperationIndexes: [0, 19, 44] });
     expect(state.queryReads).toBe(3);
     expect(events.filter((event) => event.phase === "start").map((event) => event.operationCount)).toEqual([20, 20, 5]);
     expect(events.filter((event) => event.phase === "success").map((event) => event.returnedDocumentCount)).toEqual([2, 0, 1]);
@@ -66,7 +67,7 @@ describe("read-only Firebase receipt audit", () => {
       onReceiptRead: (event) => events.push(event),
     });
     const operations = Array.from({ length: 1024 }, (_, index) => operation(index + 1));
-    expect(await chunked.auditOutbox?.(operations)).toEqual({ received: 0, missing: 1024 });
+    expect(await chunked.auditOutbox?.(operations)).toEqual({ received: 0, missing: 1024, receivedOperationIndexes: [] });
     expect(state.queryReads).toBe(52);
     expect(events.filter((event) => event.phase === "start")).toHaveLength(52);
     expect(events.filter((event) => event.phase === "start").at(-1)?.operationCount).toBe(4);
@@ -79,7 +80,7 @@ describe("read-only Firebase receipt audit", () => {
     const chunked = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
       onReceiptRead: (event) => events.push(event),
     });
-    expect(await chunked.auditOutbox?.([operation(1)])).toEqual({ received: 0, missing: 1 });
+    expect(await chunked.auditOutbox?.([operation(1)])).toEqual({ received: 0, missing: 1, receivedOperationIndexes: [] });
     expect(state.queryReads).toBe(2);
     expect(events).toContainEqual(expect.objectContaining({ phase: "retry", attempt: 1, retryDelayMs: 500 }));
     expect(events).toContainEqual(expect.objectContaining({ phase: "retry-success", attempt: 2 }));
@@ -96,7 +97,7 @@ describe("read-only Firebase receipt audit", () => {
       });
       const audit = chunked.auditOutbox!([operation(1)]);
       await vi.advanceTimersByTimeAsync(510);
-      expect(await audit).toEqual({ received: 0, missing: 1 });
+      expect(await audit).toEqual({ received: 0, missing: 1, receivedOperationIndexes: [] });
       expect(state.queryReads).toBe(2);
       expect(events).toContainEqual(expect.objectContaining({ phase: "timeout", attempt: 1 }));
       expect(events).toContainEqual(expect.objectContaining({ phase: "retry-success", attempt: 2 }));
@@ -133,7 +134,8 @@ describe("read-only Firebase receipt audit", () => {
   it("counts received and missing operations without any writes", async () => {
     state.documents.clear(); state.writes = 0;
     state.documents.set(path(1), receipt(operation(1)));
-    expect(await adapter().auditOutbox?.([operation(1), operation(2)])).toEqual({ received: 1, missing: 1 });
+    expect(await adapter().auditOutbox?.([operation(1), operation(2)])).toEqual({ received: 1, missing: 1,
+      receivedOperationIndexes: [0] });
     expect(state.writes).toBe(0);
   });
 
@@ -156,7 +158,7 @@ describe("read-only Firebase receipt audit", () => {
     await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ phase: "start", batch: 2, completed: 8, lastCompletedOperationIndex: 7 }));
     expect(state.writes).toBe(0);
     state.release?.();
-    expect(await audit).toEqual({ received: 0, missing: 9 });
+    expect(await audit).toEqual({ received: 0, missing: 9, receivedOperationIndexes: [] });
     expect(events.at(-1)).toMatchObject({ phase: "complete", batch: 2, completed: 9, lastCompletedOperationIndex: 8 });
     state.blockedPath = null; state.release = null;
   });
@@ -232,8 +234,8 @@ describe("read-only Firebase receipt audit", () => {
     const create = (receiptReadMode: "serial" | "parallel") => createFirebaseSyncAdapter(
       { app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", { receiptReadMode },
     ).auditOutbox!(operations);
-    expect(await create("serial")).toEqual({ received: 1, missing: 1 });
-    expect(await create("parallel")).toEqual({ received: 1, missing: 1 });
+    expect(await create("serial")).toEqual({ received: 1, missing: 1, receivedOperationIndexes: [0] });
+    expect(await create("parallel")).toEqual({ received: 1, missing: 1, receivedOperationIndexes: [0] });
     expect(state.writes).toBe(0);
   });
 
@@ -256,7 +258,7 @@ describe("read-only Firebase receipt audit", () => {
         expect(events.filter((event) => event.phase === "start")).toHaveLength(index + 1);
         await vi.advanceTimersByTimeAsync(1);
       }
-      expect(await audit).toEqual({ received: 0, missing: 9 });
+      expect(await audit).toEqual({ received: 0, missing: 9, receivedOperationIndexes: [] });
       expect(events.filter((event) => event.phase === "start")).toHaveLength(9);
       for (let index = 1; index < events.length; index++) {
         if (events[index].phase === "start") expect(events[index - 1].phase).toBe("not-found");

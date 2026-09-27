@@ -1,6 +1,7 @@
 /** Safe, content-free classifications for the shareable recovery diagnostic. */
 export const recoveryFailureReasons = [
   "receipt-payload-mismatch", "receipt-acknowledgement-mismatch", "predicted-winner-mismatch",
+  "predicted-base-mismatch",
   "permission-denied", "unauthenticated", "firestore-sdk-error", "unknown",
 ] as const;
 export type RecoveryFailureReason = typeof recoveryFailureReasons[number];
@@ -9,6 +10,7 @@ const internalMessages: Record<string, string> = {
   "receipt-payload-mismatch": "An existing receipt has a different operation payload.",
   "receipt-acknowledgement-mismatch": "An existing receipt differs from the preflight acknowledgement.",
   "predicted-winner-mismatch": "The transaction winner differs from the preflight prediction.",
+  "predicted-base-mismatch": "The target changed after the saved recovery preflight.",
 };
 
 export function recoveryFailureDetails(reason: unknown) {

@@ -10,11 +10,10 @@ import { TaskMemoV2ApplicationJournal } from "../sync/applicationStorage";
 import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicationStorage";
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
-import { observePendingJournalReceipts, recoverV2ApplicationAfterAudit } from "../sync/recovery";
+import { recoverV2ApplicationAfterAudit } from "../sync/recovery";
 import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation,
-  recordRecoveryExecution, recordRecoveryTransaction, recoveryErrorCode } from "../sync/recoveryObservation";
-import { runRecoveryPreflight } from "../sync/recoveryPreflight";
-import { executeJournalRecovery } from "../sync/executeRecovery";
+  recordRecoveryTransaction, recoveryErrorCode } from "../sync/recoveryObservation";
+import { preflightJournalAuthoritativeRecovery } from "../sync/executeJournalAuthoritativeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
@@ -34,6 +33,8 @@ const message = (reason: unknown) => reason instanceof Error ? reason.message :
 function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, enabled: boolean, initialPinnedNote: PinnedNote, onPinnedNote: (body: string) => void, initialIdeasEnabled: boolean, onIdeasEnabled: (value: boolean) => void) {
   const firebase = firebaseConfiguration();
   const guardedRecovery = Platform.OS === "web" && firebase.environment === "production" && process.env.EXPO_PUBLIC_GUARDED_RECOVERY_ENABLED === "true";
+  const manualAuthoritativePreflight = guardedRecovery && typeof window !== "undefined" &&
+    new URL(window.location.href).searchParams.get("journalAuthoritativePreflight") === "1";
   const receiptModeParameter = guardedRecovery && typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("receiptMode") : null;
   const receiptReadMode = receiptModeParameter === "serial" || receiptModeParameter === "serial-interval-100" ? "serial"
     : receiptModeParameter === "parallel" ? "parallel" : "chunked";
@@ -141,25 +142,60 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
         if (guardedRecovery && await persistence.loadJournal()) {
-          const observation = await observePendingJournalReceipts(persistence, adapter, recordRecoveryObservation);
-          if (currentGeneration !== generation) return;
-          recordRecoveryObservation({ recoveryPhase: "preflight-start" });
-          if (!observation.auditResult) throw { code: "preflight-audit-missing" };
-          const preflight = await runRecoveryPreflight(persistence, adapter, scope, observation.auditResult);
-          if (currentGeneration !== generation) return;
-          recordRecoveryObservation({ recoveryPhase: "preflight-complete", preflight });
-          if (preflight.finalPreflight.finalRecoverySafetyDecision !== "safe" ||
-              !preflight.finalPreflight.authorizesRecovery) {
+          // A Hosting deploy must never resume the old executable recovery automatically.
+          // This release exposes only an explicit, read-only candidate projection.
+          if (!manualAuthoritativePreflight) {
             recordRecoveryObservation({ recoveryPhase: "observation-paused" });
             setStatus("diagnostic");
-            setError("最終復旧確認がblockedのため安全停止中です。journalの確定・再送は行っていません。");
+            setError("復旧は手動preflight待機中です。journalとOutboxは変更していません。");
             return;
           }
           if (!(persistence instanceof IndexedDbTaskMemoApplicationJournal))
-            throw new Error("IndexedDB以外の保存先では実復旧を開始しません。");
-          await executeJournalRecovery(persistence, adapter, scope, observation.auditResult,
-            () => currentGeneration === generation, undefined, recordRecoveryExecution);
-          if (currentGeneration !== generation) return;
+            throw new Error("IndexedDB以外ではpreflightを実行しません。");
+          recordRecoveryObservation({ recoveryPhase: "preflight-start",
+            journalAuthoritativePreflight: { status: "running", journalNodeCount: null, remoteNodeCount: null,
+              candidateNodeCount: null, journalOnlyNodeCount: null, remoteOnlyNodeCount: null,
+              markedNodeCount: null, commonNodeCount: null, nonSortKeyJournalDifferenceNodeCount: null,
+              journalMetadataDifferenceNodeCount: null, duplicateActiveSortKeyGroupCount: null,
+              originalOutboxCount: null, originalReceiptReceivedCount: null,
+              originalReceiptMissingCount: null, freshOperationReceiptCount: null,
+              oldOutboxWillBeResent: false, plannedOperationCount: null,
+              metadataRebuildNodeCount: null, blockReasons: [] } });
+          try {
+            const { plan, summary } = await preflightJournalAuthoritativeRecovery(persistence, adapter, scope);
+            if (currentGeneration !== generation) return;
+            recordRecoveryObservation({ recoveryPhase: "observation-paused",
+              journalAuthoritativePreflight: { status: "safe", ...summary,
+                originalOutboxCount: plan.originalReceiptReceivedCount + plan.originalReceiptMissingCount,
+                originalReceiptReceivedCount: plan.originalReceiptReceivedCount,
+                originalReceiptMissingCount: plan.originalReceiptMissingCount,
+                freshOperationReceiptCount: 0, oldOutboxWillBeResent: false, blockReasons: [] } });
+            setStatus("diagnostic");
+            setError("読み取り専用preflightが完了しました。Recovery実行は無効です。");
+          } catch (reason) {
+            if (currentGeneration !== generation) return;
+            recordRecoveryObservation({ recoveryPhase: "observation-paused",
+              journalAuthoritativePreflight: { status: "blocked", journalNodeCount: null,
+                remoteNodeCount: null, candidateNodeCount: null, journalOnlyNodeCount: null,
+                remoteOnlyNodeCount: null, markedNodeCount: null, commonNodeCount: null,
+                nonSortKeyJournalDifferenceNodeCount: null, journalMetadataDifferenceNodeCount: null,
+                duplicateActiveSortKeyGroupCount: null, originalOutboxCount: null,
+                originalReceiptReceivedCount: null, originalReceiptMissingCount: null,
+                freshOperationReceiptCount: null, oldOutboxWillBeResent: false,
+                plannedOperationCount: null, metadataRebuildNodeCount: null, blockReasons: [(() => {
+                  const code = reason && typeof reason === "object" && "code" in reason ? reason.code : null;
+                  return typeof code === "string" && ["local-copy-mismatch", "remote-snapshot-unstable",
+                    "receipt-audit-incomplete", "receipt-identity-unavailable", "profile-mismatch",
+                    "outbox-target-invalid", "candidate-validation-failed", "source-unavailable",
+                    "fresh-operation-receipt-exists", "deleted-node-conflict",
+                    "unknown-field-conflict", "candidate-parent-invalid",
+                    "candidate-sortkey-invalid", "candidate-user-data-mismatch"].includes(code)
+                    ? code : "firebase-read-failed";
+                })()] } });
+            setStatus("diagnostic");
+            setError("読み取り専用preflightがblockedです。診断JSONを確認してください。");
+          }
+          return;
         }
         if (guardedRecovery && legacyJournal && !(persistence instanceof IndexedDbTaskMemoApplicationJournal &&
             await persistence.isRecoveryCompleted()))
@@ -186,7 +222,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       removeOnlineListener();
     };
-  }, [configured, ready, firebase.environment, guardedRecovery, receiptReadMode, receiptLookupIntervalMs]);
+  }, [configured, ready, firebase.environment, guardedRecovery, manualAuthoritativePreflight, receiptReadMode, receiptLookupIntervalMs]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {

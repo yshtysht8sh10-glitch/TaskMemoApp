@@ -89,9 +89,13 @@ export interface SyncAdapter {
   /** Server-only snapshot for observation. Never starts a listener or writes. */
   readRecoverySnapshot?(): Promise<{ nodes: VersionedNode[]; pinnedNote?: VersionedPinnedNote; features?: VersionedFeatures; receiptDocumentCount: number }>;
   /** Read-only receipt check. A failure must prevent recovery and uploading. */
-  auditOutbox?(operations: SyncOperation[]): Promise<{ received: number; missing: number }>;
+  auditOutbox?(operations: SyncOperation[]): Promise<{ received: number; missing: number;
+    /** Internal recovery identity audit; never emitted to diagnostic JSON. */
+    receivedOperationIndexes?: number[] }>;
   /** Recovery may provide the exact preflight winner; a mismatch aborts before transaction writes. */
-  upload(operation: SyncOperation, expected?: SyncAcknowledgement): Promise<SyncAcknowledgement>;
+  upload(operation: SyncOperation, expected?: SyncAcknowledgement,
+    /** Recovery-only optimistic precondition. null means the target must still be absent. */
+    expectedCurrent?: VersionedNode | null): Promise<SyncAcknowledgement>;
   subscribe?(
     onRecord: (record: VersionedNode) => void | Promise<void>,
     onError: (reason: unknown) => void,

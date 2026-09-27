@@ -43,6 +43,20 @@ const initialExecution = (): RecoveryExecutionObservation => ({
 });
 
 export type RecoveryObservation = {
+  journalAuthoritativePreflight: {
+    status: "not-started" | "running" | "safe" | "blocked";
+    journalNodeCount: number | null; remoteNodeCount: number | null;
+    candidateNodeCount: number | null; journalOnlyNodeCount: number | null;
+    remoteOnlyNodeCount: number | null; markedNodeCount: number | null;
+    commonNodeCount: number | null; nonSortKeyJournalDifferenceNodeCount: number | null;
+    journalMetadataDifferenceNodeCount: number | null;
+    duplicateActiveSortKeyGroupCount: number | null;
+    originalOutboxCount: number | null; originalReceiptReceivedCount: number | null;
+    originalReceiptMissingCount: number | null; freshOperationReceiptCount: number | null;
+    oldOutboxWillBeResent: false; plannedOperationCount: number | null;
+    metadataRebuildNodeCount: number | null;
+    blockReasons: string[];
+  } | null;
   recoveryPhase: string;
   receiptComparisonTotal: number;
   receiptComparisonCompleted: number;
@@ -69,6 +83,7 @@ export type RecoveryObservation = {
 };
 
 const initial = (): RecoveryObservation => ({
+  journalAuthoritativePreflight: null,
   recoveryPhase: "starting",
   receiptComparisonTotal: 0,
   receiptComparisonCompleted: 0,

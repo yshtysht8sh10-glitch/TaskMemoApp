@@ -130,6 +130,7 @@ export function createFirebaseSyncAdapter(
       }
       let received = 0;
       let missing = 0;
+      const receivedOperationIndexes: number[] = [];
       // Keep server reads bounded; never upload until every receipt is classified.
       const chunked = options.receiptReadMode !== "parallel" && options.receiptReadMode !== "serial";
       const batchSize = chunked ? RECEIPT_CHUNK_SIZE : 8;
@@ -193,7 +194,7 @@ export function createFirebaseSyncAdapter(
             }
           }
           if (!documents) throw { kind: "temporary", message: "Firebase receipt read did not complete." };
-          for (const operation of batch) {
+          for (const [slot, operation] of batch.entries()) {
             const data = documents.get(operation.opId);
             if (!data) { missing++; continue; }
             const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
@@ -201,6 +202,7 @@ export function createFirebaseSyncAdapter(
                 (acknowledgement.result !== "applied" && acknowledgement.result !== "superseded"))
               throw { kind: "permanent", message: "Firebaseのoperation受領記録がローカルoutboxと矛盾します。復旧を停止しました。" };
             received++;
+            receivedOperationIndexes.push(offset + slot);
           }
           options.onReceiptBatch?.({ phase: "complete", batch: batchNumber, completed: offset + batch.length, total: operations.length, lastCompletedOperationIndex: offset + batch.length - 1 });
           continue;
@@ -273,9 +275,10 @@ export function createFirebaseSyncAdapter(
         }
         received += results.filter(Boolean).length;
         missing += results.filter((value) => !value).length;
+        results.forEach((found, slot) => { if (found) receivedOperationIndexes.push(offset + slot); });
         options.onReceiptBatch?.({ phase: "complete", batch: batchNumber, completed: offset + batch.length, total: operations.length, lastCompletedOperationIndex: offset + batch.length - 1 });
       }
-      return { received, missing };
+      return { received, missing, receivedOperationIndexes };
     },
     async connect() {
       try {
@@ -290,7 +293,8 @@ export function createFirebaseSyncAdapter(
       }
     },
 
-    async upload(operation: SyncOperation, expected?: SyncAcknowledgement) {
+    async upload(operation: SyncOperation, expected?: SyncAcknowledgement,
+      expectedCurrent?: VersionedNode | null) {
       const emit = (event: RecoveryTransactionEvent) => {
         if (expected) try { options.onRecoveryTransaction?.(event); }
         catch { /* Diagnostics must never affect transaction behavior. */ }
@@ -319,6 +323,10 @@ export function createFirebaseSyncAdapter(
             return data.acknowledgement as SyncAcknowledgement;
           }
           const targetSnapshot = await transaction.get(targetRef);
+          if (expectedCurrent !== undefined &&
+              !sameOperation(targetSnapshot.exists() ? targetSnapshot.data().record : null, expectedCurrent))
+            throw { code: "invalid-argument", recoveryReason: "predicted-base-mismatch",
+              message: "recovery target changed after the saved preflight" };
           const acknowledgement = pinnedNote
             ? applyPinnedNoteOperation(targetSnapshot.exists() ? targetSnapshot.data().record : undefined, operation)
             : features

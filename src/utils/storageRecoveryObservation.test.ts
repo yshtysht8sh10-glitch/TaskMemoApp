@@ -9,6 +9,14 @@ it("exports allowlisted collision provenance but never titles, bodies, or unrela
   const result = { value: "", focus() {}, select() {} };
   const status = { textContent: "" };
   const stored = JSON.stringify({ recoveryPhase: "receipt-batch-start", receiptComparisonTotal: 1024,
+    journalAuthoritativePreflight: { status: 'safe', journalNodeCount: 151, remoteNodeCount: 151,
+      candidateNodeCount: 152, journalOnlyNodeCount: 1, remoteOnlyNodeCount: 1,
+      markedNodeCount: 1, commonNodeCount: 150, nonSortKeyJournalDifferenceNodeCount: 0,
+      journalMetadataDifferenceNodeCount: 38, duplicateActiveSortKeyGroupCount: 0,
+      originalOutboxCount: 1024, originalReceiptReceivedCount: 13,
+      originalReceiptMissingCount: 1011, freshOperationReceiptCount: 0,
+      oldOutboxWillBeResent: false, plannedOperationCount: 40,
+      metadataRebuildNodeCount: 40, blockReasons: [], title: 'SECRET_TITLE' },
     receiptComparisonCompleted: 8, currentBatch: 2, lastCompletedOperationIndex: 7,
     receiptReadMode: "serial", receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs: 100,
     receiptChunkSize: 20, receiptMaxAttempts: 3, receiptServerReadCalls: 2,
@@ -108,6 +116,11 @@ it("exports allowlisted collision provenance but never titles, bodies, or unrela
     receiptReadMode: "serial", receiptLookupTimeoutMs: 10000, receiptLookupIntervalMs: 100 });
   expect(output.recoveryObservation).toMatchObject({ receiptChunkSize: 20, receiptMaxAttempts: 3,
     receiptServerReadCalls: 2, receiptServerDocumentsReturned: 4, receiptRetryCount: 1 });
+  expect(output.recoveryObservation.journalAuthoritativePreflight).toMatchObject({
+    status: 'safe', candidateNodeCount: 152, markedNodeCount: 1,
+    originalReceiptReceivedCount: 13, oldOutboxWillBeResent: false,
+    metadataRebuildNodeCount: 40, blockReasons: [],
+  });
   expect(output.recoveryObservation.execution).toMatchObject({ status: 'failed', totalOperations: 1024,
     uploadAttemptedCount: 465, uploadSucceededCount: 464, uploadFailedCount: 1,
     lastSuccessfulOperationIndex: 463, failedOperationIndex: 464,

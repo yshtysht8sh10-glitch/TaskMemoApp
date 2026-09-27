@@ -16,6 +16,8 @@ type StoredScope = {
   journal: string | null;
   legacyFingerprint: string;
   recoveryCompleted?: boolean;
+  /** Crash-safe, immutable execution plan. The original journal remains untouched. */
+  authoritativeRecoveryPlan?: string;
 };
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -132,15 +134,64 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
     const transaction = this.database.transaction(STORE_NAME, "readwrite");
     const done = transactionDone(transaction);
     const objectStore = transaction.objectStore(STORE_NAME);
-    const current = await requestResult(objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>);
-    if (!current) { transaction.abort(); await done.catch(() => undefined); throw new Error("IndexedDBのV2データが見つかりません。"); }
-    objectStore.put(transform(current));
-    await done;
+    try {
+      const current = await requestResult(objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>);
+      if (!current) throw new Error("IndexedDBのV2データが見つかりません。");
+      objectStore.put(transform(current));
+      await done;
+    } catch (reason) {
+      try { transaction.abort(); } catch { /* Transaction may have settled. */ }
+      await done.catch(() => undefined);
+      throw reason;
+    }
   }
 
   async loadCommitted() { return (await this.read())?.committed ?? null; }
   async loadJournal() { return (await this.read())?.journal ?? null; }
   async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }
+  async loadAuthoritativeRecoveryPlan() { return (await this.read())?.authoritativeRecoveryPlan ?? null; }
+  async saveAuthoritativeRecoveryPlan(expectedCommitted: string, expectedJournal: string, planRaw: string) {
+    JSON.parse(planRaw);
+    await this.update((current) => {
+      if (current.committed !== expectedCommitted || current.journal !== expectedJournal || current.recoveryCompleted ||
+          (current.authoritativeRecoveryPlan && current.authoritativeRecoveryPlan !== planRaw))
+        throw new Error("復旧計画の保存前にローカル状態が変化しました。");
+      return { ...current, authoritativeRecoveryPlan: planRaw };
+    });
+    if (await this.loadAuthoritativeRecoveryPlan() !== planRaw)
+      throw new Error("復旧計画の再読み取り検証に失敗しました。");
+  }
+  async finalizeAuthoritativeRecovery(expectedCommitted: string, expectedJournal: string,
+    expectedPlanRaw: string, recoveredCommitted: string) {
+    const pending = validateEnvelope(expectedJournal)!;
+    const recovered = validateEnvelope(recoveredCommitted)!;
+    const plan = JSON.parse(expectedPlanRaw) as { operations: SyncOperation[]; finalNodes: VersionedNode[] };
+    const sync = pending.sync as { outbox: SyncOperation[]; seenOpIds: string[] };
+    const expected = { ...pending,
+      nextLocalSeq: Number(pending.nextLocalSeq) + plan.operations.length,
+      domain: Object.fromEntries(plan.finalNodes.map((record) => [record.value.id, record])),
+      sync: { ...sync, outbox: [], seenOpIds: [...new Set([...sync.seenOpIds,
+        ...plan.operations.map((operation) => operation.opId)])].slice(-500) },
+    };
+    if (canonical(recovered) !== canonical(expected) || recoveredCommitted !== JSON.stringify(expected))
+      throw new Error("復旧確定データが保全済み計画と一致しません。");
+    const transaction = this.database.transaction(STORE_NAME, "readwrite");
+    const done = transactionDone(transaction);
+    try {
+      const objectStore = transaction.objectStore(STORE_NAME);
+      const current = await requestResult(objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>);
+      if (!current || current.committed !== expectedCommitted || current.journal !== expectedJournal ||
+          current.authoritativeRecoveryPlan !== expectedPlanRaw || current.recoveryCompleted)
+        throw new Error("復旧確定前にローカル状態が変化しました。");
+      objectStore.put({ ...current, committed: recoveredCommitted, journal: null,
+        recoveryCompleted: true, authoritativeRecoveryPlan: undefined });
+      await done;
+    } catch (reason) {
+      try { transaction.abort(); } catch { /* Transaction may have settled. */ }
+      await done.catch(() => undefined);
+      throw reason;
+    }
+  }
   /** One IndexedDB transaction: old WAL survives every failed precondition or failed write. */
   async finalizeRecovery(expectedCommitted: string, expectedJournal: string, recoveredCommitted: string,
     repairOperations: SyncOperation[] = [], candidateBeforeRepair?: Map<string, VersionedNode>) {

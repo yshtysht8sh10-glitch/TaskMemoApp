@@ -49,6 +49,17 @@ describe("recovery transaction diagnostics", () => {
     expect(state.writes).toBe(0);
   });
 
+  it("rejects a changed target baseline even if the predicted acknowledgement would still match", async () => {
+    const expected = applyRevisionOperation(undefined, operation);
+    const intervening = { ...expected.record!, revision: 0, lastOpId: "intervening" };
+    state.documents.set(nodePath, { record: intervening });
+    await expect(adapter([]).upload(operation, expected, null)).rejects.toMatchObject({
+      kind: "permanent", code: "invalid-argument", recoveryReason: "predicted-base-mismatch",
+    });
+    expect(state.writes).toBe(0);
+    expect(state.documents.has(receiptPath)).toBe(false);
+  });
+
   it("distinguishes existing receipt payload and acknowledgement mismatches", async () => {
     const events: RecoveryTransactionEvent[] = [];
     const expected = applyRevisionOperation(undefined, operation);
