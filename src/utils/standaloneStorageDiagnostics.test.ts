@@ -58,7 +58,7 @@ it('does not automatically execute recovery when the guarded journal exists', ()
   expect(syncHook).toContain('if (!manualAuthoritativePreflight && !manualAuthoritativeExecution) {');
   expect(syncHook).not.toContain('adapter.upload(');
   expect(syncHook).not.toContain('executeJournalAuthoritativeRecovery(');
-  expect(syncHook).toContain('isLocalRecoveryMode() || manualLocalRecovery');
+  expect(syncHook).toContain('shouldEnterLocalRecovery(activeLocalMode, manualLocalRecovery');
   expect(syncHook).toContain('restoreJournalLocally(committed, journal');
 });
 

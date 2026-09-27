@@ -113,4 +113,43 @@ describe("recovery transaction diagnostics", () => {
     expect(recoveryFailureDetails(failure)).toMatchObject({ errorCode: "invalid-argument",
       failureReason: "firestore-sdk-error", errorMessage: "Firestore returned an error during recovery." });
   });
+
+  it("rebases self repair on live revision and confirms an existing receipt without a second write", async () => {
+    const observed = { ...applyRevisionOperation(undefined, operation).record!, revision: 4,
+      lastOpId: "older:4", value: { id: "node-1", title: "old" } };
+    state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2, record: { ...observed, revision: 8 } });
+    const request = { targetType: "node" as const, targetNodeId: "node-1",
+      desired: { id: "node-1", title: "local" }, observed,
+      identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } };
+    const first = await adapter([]).convergeRecoveryTarget!(request);
+    expect(first.operation?.baseRevision).toBe(8);
+    expect(first.acknowledgement?.record?.revision).toBe(9);
+    expect(state.writes).toBe(2);
+    const again = await adapter([]).convergeRecoveryTarget!(request);
+    expect(again.operation).toEqual(first.operation);
+    expect(state.writes).toBe(2);
+  });
+
+  it("does not write if Firebase already has the desired value", async () => {
+    const current = { ...applyRevisionOperation(undefined, operation).record!,
+      value: { id: "node-1", title: "local" } };
+    state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2, record: current });
+    const result = await adapter([]).convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
+      desired: current.value, observed: null,
+      identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } });
+    expect(result.operation).toBeUndefined();
+    expect(state.writes).toBe(0);
+  });
+
+  it("stops before writing when another device changes user data inside the transaction", async () => {
+    const observed = { ...applyRevisionOperation(undefined, operation).record!,
+      value: { id: "node-1", title: "old" } };
+    state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2,
+      record: { ...observed, revision: 3, value: { id: "node-1", title: "other device" } } });
+    await expect(adapter([]).convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
+      desired: { id: "node-1", title: "local" }, observed,
+      identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } }))
+      .rejects.toMatchObject({ recoveryReason: "concurrent-user-change" });
+    expect(state.writes).toBe(0);
+  });
 });

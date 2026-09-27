@@ -129,6 +129,8 @@ export class TaskMemoV2ApplicationStore {
   get ideasEnabled() { return this.envelope.profile.features.localIdeasEnabled; }
   get legacyPinnedNoteCandidates() { return [...this.envelope.profile.legacyPinnedNoteCandidates]; }
   versionedNode(id: string) { return this.envelope.domain[id]; }
+  /** Wait for edits already accepted by the UI before taking a recovery snapshot. */
+  whenIdle() { return this.serialize(async () => undefined); }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
     return this.serialize(() => this.commandSerialized(label, type, transform, options));

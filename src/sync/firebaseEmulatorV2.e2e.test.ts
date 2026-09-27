@@ -8,6 +8,8 @@ import type { ApplicationJournalPersistence } from "./applicationStore";
 import { createFirebaseSyncAdapter } from "./firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
+import { runSyncSelfRepair } from "./syncSelfRepair";
+import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
 
 const enabled = process.env.TASKMEMO_EMULATOR_E2E === "1";
 const waitFor = async (predicate: () => boolean, timeout = 5_000) => {
@@ -32,6 +34,68 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it("converges a live Node revision and verifies its immutable Receipt", async () => {
+    const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });
+    const prior = { value: { id: "self-repair-node", type: "memo", parentId: null,
+      title: "old", sortKey: "a0", deletedAt: null, purgedAt: null }, revision: 7,
+      lastOpId: "old:7", lastDeviceId: "old", lastLocalSeq: 7, operationType: "update" as const };
+    await setDoc(doc(db, "users/owner/nodesV2/self-repair-node"),
+      { ownerUid: "owner", schemaVersion: 2, record: prior });
+    const result = await adapter.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "self-repair-node",
+      desired: { ...prior.value, title: "local" }, observed: prior,
+      identity: { deviceId: "sync-self-repair-emulator", localSeq: 1,
+        createdAt: "2026-09-27T00:00:00.000Z" } });
+    expect(result.operation?.baseRevision).toBe(7);
+    expect(result.acknowledgement?.record?.revision).toBe(8);
+    expect(await adapter.auditOutbox!([result.operation!])).toMatchObject({ received: 1, missing: 0 });
+    const snapshot = await adapter.readRecoverySnapshot!();
+    expect(snapshot.nodes.find((record) => record.value.id === "self-repair-node")?.value.title).toBe("local");
+    const again = await adapter.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "self-repair-node",
+      desired: { ...prior.value, title: "local" }, observed: prior,
+      identity: { deviceId: "sync-self-repair-emulator", localSeq: 1,
+        createdAt: "2026-09-27T00:00:00.000Z" } });
+    expect(again.operation?.opId).toBe(result.operation?.opId);
+  });
+
+  it("rebuilds from current local state, retains remote-only, verifies receipts and normalizes Outbox", async () => {
+    const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });
+    const value = (id: string, title: string, sortKey: string) => ({ id, type: "memo", parentId: null,
+      title, sortKey, deletedAt: null, purgedAt: null });
+    const versioned = (id: string, title: string, sortKey: string, revision: number) => ({
+      value: value(id, title, sortKey), revision, lastOpId: `prior:${id}:${revision}`,
+      lastDeviceId: "prior", lastLocalSeq: revision, operationType: "update" as const });
+    const old = versioned("common", "old", "a0", 5);
+    const remoteOnly = versioned("remote-only", "cloud", "b0", 2);
+    for (const record of [old, remoteOnly])
+      await setDoc(doc(db, `users/owner/nodesV2/${record.value.id}`),
+        { ownerUid: "owner", schemaVersion: 2, record });
+    const local = versioned("common", "local current", "a0", 9);
+    const localOnly = versioned("local-only", "new memo", "c0", 1);
+    let raw = JSON.stringify({ version: 2, deviceId: "local-generation", nextLocalSeq: 4,
+      domain: { common: local, "local-only": localOnly }, history: { past: [], future: [] },
+      sync: { outbox: [{ opId: "local-generation:1" }], seenOpIds: [] },
+      profile: { pinnedNote: { localBody: "", synced: null, dirtySince: null, migrationPending: false },
+        features: { localIdeasEnabled: false, synced: null, migrationPending: false } } });
+    let mode = true;
+    const persistence = { isLocalRecoveryMode: async () => mode, loadCommitted: async () => raw,
+      loadJournal: async () => null,
+      loadLocalRecoveryEvidence: async () => ({ journal: "archived-journal", committed: "archived-application",
+        recoveredAt: "2026-09-27T00:00:00.000Z", archivedOutboxCount: 1024 }),
+      completeLocalSelfRepair: async (expected: string, next: string) => {
+        expect(raw).toBe(expected); raw = next; mode = false;
+      } } as unknown as IndexedDbTaskMemoApplicationJournal;
+    const result = await runSyncSelfRepair(persistence, adapter);
+    expect(result).toMatchObject({ nodeCount: 3, remoteOnlyCount: 1, operationCount: 3, receiptCount: 3 });
+    expect(mode).toBe(false);
+    expect(JSON.parse(raw).sync.outbox).toEqual([]);
+    const final = await adapter.readRecoverySnapshot!();
+    expect(final.nodes.find((record) => record.value.id === "common")?.value.title).toBe("local current");
+    expect(final.nodes.find((record) => record.value.id === "remote-only")?.value.title).toBe("⭐⭐⭐cloud");
+    expect(final.nodes.find((record) => record.value.id === "local-only")?.value.title).toBe("new memo");
+  });
 
   it("enforces owner isolation, ownerUid, required identity fields, and monotonic revision", async () => {
     const owner = environment.authenticatedContext("owner").firestore();
@@ -118,14 +182,14 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
       baseRevision: 0, payload: { node: { id: "node-a", title: "A" } }, createdAt: now(1).toISOString(),
       status: "pending" as const, attemptCount: 0, nextRetryAt: null, lastError: null };
     const missing = { ...operation, opId: "device-a:2", localSeq: 2, targetNodeId: "node-b", payload: { node: { id: "node-b", title: "B" } } };
-    expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 0, missing: 2 });
+    expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 0, missing: 2, receivedOperationIndexes: [] });
     await adapter.upload(operation);
-    expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+    expect(await adapter.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1, receivedOperationIndexes: [0] });
     for (const receiptReadMode of ["parallel", "serial"] as const) {
       const events: { slot: number; phase: string }[] = [];
       const diagnostic = createFirebaseSyncAdapter(db, uid, "test", { emulator: true, receiptReadMode,
         receiptLookupTimeoutMs: 10_000, onReceiptLookup: (event) => events.push(event) });
-      expect(await diagnostic.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+      expect(await diagnostic.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1, receivedOperationIndexes: [0] });
       expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({ slot: 0, phase: "found" }),
         expect.objectContaining({ slot: 1, phase: "not-found" }),
@@ -135,7 +199,7 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     const paced = createFirebaseSyncAdapter(db, uid, "test", { emulator: true, receiptReadMode: "serial",
       receiptLookupIntervalMs: 100, receiptLookupTimeoutMs: 10_000,
       onReceiptLookup: (event) => { if (event.phase === "start") intervalStarts.push(Date.now()); } });
-    expect(await paced.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1 });
+    expect(await paced.auditOutbox?.([operation, missing])).toEqual({ received: 1, missing: 1, receivedOperationIndexes: [0] });
     expect(intervalStarts).toHaveLength(2);
     expect(intervalStarts[1] - intervalStarts[0]).toBeGreaterThanOrEqual(100);
     await expect(adapter.auditOutbox?.([operation, operation])).rejects.toMatchObject({ kind: "permanent" });
@@ -188,7 +252,7 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     }));
     await adapter.upload(operations[0]);
     await adapter.upload(operations[20]);
-    expect(await adapter.auditOutbox?.(operations)).toEqual({ received: 2, missing: 19 });
+    expect(await adapter.auditOutbox?.(operations)).toEqual({ received: 2, missing: 19, receivedOperationIndexes: [0, 20] });
     expect(events.filter((event) => event.phase === "start").map((event) => event.operationCount)).toEqual([20, 1]);
   });
 

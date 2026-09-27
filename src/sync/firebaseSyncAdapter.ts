@@ -3,7 +3,8 @@ import { collection, doc, documentId, getCountFromServer, getDocFromServer, getD
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
 import { validateCompatibilityGate } from "./compatibilityGate";
-import type { SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode } from "./types";
+import type { RecoveryConvergenceRequest, SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
+import { canonicalSyncValue } from "./syncSelfRepair";
 
 type AdapterOptions = {
   emulator?: boolean;
@@ -96,6 +97,72 @@ export function createFirebaseSyncAdapter(
   }
 
   return {
+    async convergeRecoveryTarget(request: RecoveryConvergenceRequest) {
+      try {
+        const { deviceId, localSeq, createdAt } = request.identity;
+        if (!deviceId.startsWith("sync-self-repair-") || !Number.isSafeInteger(localSeq) || localSeq < 1)
+          throw { code: "invalid-argument", message: "自己修復operationの識別子が不正です。" };
+        const targetNodeId = request.targetType === "node" ? request.targetNodeId : request.targetType;
+        const opId = `${deviceId}:${localSeq}`;
+        const receiptRef = doc(db, "users", uid, "syncOperationsV2", opId);
+        const targetRef = request.targetType === "node"
+          ? doc(db, "users", uid, "nodesV2", targetNodeId)
+          : doc(db, "users", uid, "profileV2", targetNodeId);
+        return await runTransaction(db, async (transaction) => {
+          const receipt = await transaction.get(receiptRef);
+          if (receipt.exists()) {
+            const data = receipt.data();
+            const operation = data.operation as SyncOperation | undefined;
+            const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
+            if (data.ownerUid !== uid || data.schemaVersion !== 2 || operation?.opId !== opId ||
+                operation.deviceId !== deviceId || operation.localSeq !== localSeq ||
+                operation.createdAt !== createdAt ||
+                operation.targetNodeId !== targetNodeId ||
+                (operation.targetType ?? "node") !== request.targetType ||
+                canonicalSyncValue(operation.payload[request.targetType === "node" ? "node" : request.targetType]) !==
+                  canonicalSyncValue(request.desired) || acknowledgement?.opId !== opId ||
+                acknowledgement.result !== "applied")
+              throw { code: "invalid-argument", message: "既存Receiptが自己修復対象と矛盾します。" };
+            return { operation, acknowledgement };
+          }
+          const snapshot = await transaction.get(targetRef);
+          const data = snapshot.exists() ? snapshot.data() : null;
+          if (data && (data.ownerUid !== uid || data.schemaVersion !== 2 ||
+              (request.targetType === "node" && data.record?.value?.id !== targetNodeId)))
+            throw { code: "invalid-argument", message: "Firebaseの対象Nodeが不正です。" };
+          const current = data?.record as VersionedNode | VersionedPinnedNote | VersionedFeatures | undefined;
+          if (current && (!Number.isSafeInteger(current.revision) || current.revision < 0))
+            throw { code: "invalid-argument", message: "Firebase revisionが不正です。" };
+          if (canonicalSyncValue(current?.value) === canonicalSyncValue(request.desired)) return {};
+          if (canonicalSyncValue(current?.value ?? null) !== canonicalSyncValue(request.observed?.value ?? null))
+            throw { code: "aborted", recoveryReason: "concurrent-user-change",
+              message: "自己修復中に他端末のユーザーデータ変更を検出しました。再試行してください。" };
+          if (request.targetType === "node" && (current as VersionedNode | undefined)?.value.purgedAt &&
+              !request.desired.purgedAt)
+            throw { code: "invalid-argument", message: "完全削除済みNodeは復活できません。" };
+          const type = request.targetType !== "node" ? "update" : request.desired.purgedAt ? "purge"
+            : request.desired.deletedAt ? "softDelete"
+              : (current as VersionedNode | undefined)?.value.deletedAt ? "restore" : current ? "update" : "create";
+          const operation: SyncOperation = { opId, deviceId, localSeq, targetNodeId,
+            targetType: request.targetType, type, baseRevision: current?.revision ?? 0,
+            payload: { [request.targetType === "node" ? "node" : request.targetType]: request.desired },
+            createdAt, status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
+          const acknowledgement = request.targetType === "node"
+            ? applyRevisionOperation(current as VersionedNode | undefined, operation)
+            : request.targetType === "pinnedNote"
+              ? applyPinnedNoteOperation(current as VersionedPinnedNote | undefined, operation)
+              : applyFeaturesOperation(current as VersionedFeatures | undefined, operation);
+          if (acknowledgement.result !== "applied")
+            throw { code: "invalid-argument", message: "自己修復operationがFirebase上で適用されませんでした。" };
+          transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2,
+            record: acknowledgement.record ?? acknowledgement.pinnedNoteRecord ?? acknowledgement.featuresRecord,
+            serverUpdatedAt: serverTimestamp() });
+          transaction.set(receiptRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement,
+            serverReceivedAt: serverTimestamp() });
+          return { operation, acknowledgement };
+        });
+      } catch (reason) { throw adapterError(reason); }
+    },
     async readRecoverySnapshot() {
       const [nodes, pinnedNote, features, receiptCount] = await Promise.all([
         getDocsFromServer(collection(db, "users", uid, "nodesV2")),

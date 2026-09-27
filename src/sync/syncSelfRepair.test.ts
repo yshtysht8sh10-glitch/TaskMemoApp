@@ -1,0 +1,174 @@
+import { describe, expect, it } from "vitest";
+import { planSyncSelfRepair, runSyncSelfRepair, canonicalSyncValue } from "./syncSelfRepair";
+import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
+import { applyRevisionOperation } from "./revisionModel";
+import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
+import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
+import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
+import type { MemoNode } from "../models/node";
+import type { RecoveryConvergenceRequest, SyncAdapter, SyncOperation, VersionedNode } from "./types";
+
+const record = (id: string, title: string, revision = 1): VersionedNode => ({
+  value: nodeToV2Value({ id, type: "memo", parentId: null, title, body: "", sortKey: id === "a" ? "a0" : id === "b" ? "b0" : "c0",
+    dueAt: null, duePreset: "none", status: "active", completedAt: null, deletedAt: null,
+    createdAt: new Date("2026-09-27T00:00:00.000Z"), updatedAt: new Date("2026-09-27T00:00:00.000Z") } satisfies MemoNode),
+  revision, lastOpId: `prior:${revision}`, lastDeviceId: "prior", lastLocalSeq: revision,
+  operationType: "update",
+});
+
+function fixture(local: VersionedNode[], remote: VersionedNode[]) {
+  const source = JSON.stringify({ version: 2, deviceId: "local-generation", nextLocalSeq: 8,
+    domain: Object.fromEntries(local.map((item) => [item.value.id, item])),
+    history: { past: [], future: [] }, sync: { outbox: [{ opId: "new-local:1" }], seenOpIds: [] },
+    profile: { pinnedNote: { localBody: "", synced: null, dirtySince: null, migrationPending: false },
+      features: { localIdeasEnabled: false, synced: null, migrationPending: false } } });
+  let active = source, mode = true, writes = 0, failAfter = Infinity;
+  const server = new Map(remote.map((item) => [item.value.id, item]));
+  const receipts = new Map<string, SyncOperation>();
+  const persistence = {
+    isLocalRecoveryMode: async () => mode,
+    loadCommitted: async () => active,
+    loadJournal: async () => null,
+    loadLocalRecoveryEvidence: async () => ({ journal: "old-journal", committed: "old-app",
+      recoveredAt: "2026-09-27T00:00:00.000Z", archivedOutboxCount: 1024 }),
+    completeLocalSelfRepair: async (expected: string, next: string) => {
+      if (active !== expected || !mode) throw new Error("local changed");
+      active = next; mode = false;
+    },
+  } as unknown as IndexedDbTaskMemoApplicationJournal;
+  const adapter: SyncAdapter = {
+    connect: async () => undefined,
+    upload: async () => { throw new Error("normal upload not needed in fixture"); },
+    readRecoverySnapshot: async () => ({ nodes: [...server.values()], receiptDocumentCount: receipts.size }),
+    auditOutbox: async (operations) => ({ received: operations.filter((op) =>
+      canonicalSyncValue(receipts.get(op.opId)) === canonicalSyncValue(op)).length,
+      missing: operations.filter((op) => !receipts.has(op.opId)).length }),
+    convergeRecoveryTarget: async (request: RecoveryConvergenceRequest) => {
+      if (request.targetType !== "node") throw new Error("unexpected profile change");
+      const current = server.get(request.targetNodeId);
+      if (canonicalSyncValue(current?.value) === canonicalSyncValue(request.desired)) return {};
+      if (canonicalSyncValue(current?.value ?? null) !== canonicalSyncValue(request.observed?.value ?? null))
+        throw new Error("concurrent-user-change");
+      if (writes === failAfter) throw new Error("interrupted");
+      const { deviceId, localSeq, createdAt } = request.identity;
+      const operation: SyncOperation = { opId: `${deviceId}:${localSeq}`, deviceId, localSeq,
+        targetNodeId: request.targetNodeId, targetType: "node", type: current ? "update" : "create",
+        baseRevision: current?.revision ?? 0, payload: { node: request.desired }, createdAt,
+        status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
+      const acknowledgement = applyRevisionOperation(current, operation);
+      if (acknowledgement.record) server.set(request.targetNodeId, acknowledgement.record);
+      receipts.set(operation.opId, operation); writes++;
+      return { operation, acknowledgement };
+    },
+  };
+  return { persistence, adapter, server, receipts, source, get active() { return active; },
+    get mode() { return mode; }, get writes() { return writes; }, set failAfter(value: number) { failAfter = value; } };
+}
+
+describe("sync self repair", () => {
+  it("replans from the current remote and keeps the current local user value", () => {
+    const local = [record("a", "local", 20), record("b", "local only")];
+    const remote = [record("a", "old", 24), record("c", "remote only")];
+    const plan = planSyncSelfRepair(local, remote);
+    expect(plan.desired.get("a")?.value.title).toBe("local");
+    expect(plan.desired.get("b")?.value.title).toBe("local only");
+    expect(plan.desired.get("c")?.value.title).toBe("⭐⭐⭐remote only");
+    expect(plan.changedIds).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not resurrect a remote-only tombstone but lets local data restore a common deleted Node", () => {
+    const deleted = record("c", "deleted remotely");
+    deleted.value.deletedAt = "2026-09-26T00:00:00.000Z";
+    const commonDeleted = record("a", "old");
+    commonDeleted.value.deletedAt = "2026-09-26T00:00:00.000Z";
+    const plan = planSyncSelfRepair([record("a", "local active")], [commonDeleted, deleted]);
+    expect(plan.desired.get("a")?.value.deletedAt).toBeNull();
+    expect(plan.desired.get("c")?.value.deletedAt).toBe(deleted.value.deletedAt);
+    expect(plan.desired.get("c")?.value.title).toBe("deleted remotely");
+  });
+
+  it("does not write when remote already matches local, but normalizes only after verification", async () => {
+    const same = record("a", "local");
+    const state = fixture([same], [same]);
+    const result = await runSyncSelfRepair(state.persistence, state.adapter);
+    expect(result).toMatchObject({ nodeCount: 1, operationCount: 0, receiptCount: 0,
+      archivedOldOutboxCount: 1024 });
+    expect(state.writes).toBe(0);
+    expect(state.mode).toBe(false);
+    expect(JSON.parse(state.active).sync.outbox).toEqual([]);
+  });
+
+  it.each([1, 2])("restarts from current Firebase after %i committed writes", async (count) => {
+    const local = [record("a", "local a"), record("b", "local b"), record("c", "local c")];
+    const remote = local.map((item) => record(item.value.id, `old ${item.value.id}`));
+    const state = fixture(local, remote);
+    state.failAfter = count;
+    await expect(runSyncSelfRepair(state.persistence, state.adapter)).rejects.toThrow("interrupted");
+    expect(state.writes).toBe(count);
+    expect(state.mode).toBe(true);
+    expect(state.active).toBe(state.source);
+    state.failAfter = Infinity;
+    const result = await runSyncSelfRepair(state.persistence, state.adapter);
+    expect(result.operationCount).toBe(3 - count);
+    expect(state.writes).toBe(3);
+    expect(state.mode).toBe(false);
+    expect([...state.server.values()].map((item) => item.value.title)).toEqual(["local a", "local b", "local c"]);
+  });
+
+  it("keeps remote-only nodes with a marker, adds local-only nodes and repairs duplicate sort keys", async () => {
+    const a = record("a", "local"), b = record("b", "local only");
+    b.value.sortKey = a.value.sortKey;
+    const state = fixture([a, b], [record("a", "old"), record("c", "remote only")]);
+    const result = await runSyncSelfRepair(state.persistence, state.adapter);
+    expect(result.remoteOnlyCount).toBe(1);
+    expect(state.server.get("c")?.value.title).toBe("⭐⭐⭐remote only");
+    expect(state.server.has("b")).toBe(true);
+    expect(new Set([...state.server.values()].map((item) => item.value.sortKey)).size).toBe(3);
+    expect(JSON.parse(state.active).domain.c.value.title).toBe("⭐⭐⭐remote only");
+  });
+
+  it("uses the ordinary Outbox upload path for a new memo after convergence", async () => {
+    const state = fixture([record("a", "local")], [record("a", "old")]);
+    await runSyncSelfRepair(state.persistence, state.adapter);
+    const memory = { value: state.active, journal: null as string | null,
+      loadCommitted: async () => memory.value, loadJournal: async () => memory.journal,
+      writeJournal: async (raw: string) => { memory.journal = raw; },
+      writeCommitted: async (raw: string) => { memory.value = raw; },
+      clearJournal: async () => { memory.journal = null; } };
+    const store = await TaskMemoV2ApplicationStore.open(memory, [], { deviceId: "ignored" });
+    const normalUpload: SyncAdapter["upload"] = async (operation) => {
+      const acknowledgement = applyRevisionOperation(state.server.get(operation.targetNodeId), operation);
+      if (acknowledgement.record) state.server.set(operation.targetNodeId, acknowledgement.record);
+      return acknowledgement;
+    };
+    state.adapter.upload = normalUpload;
+    const controller = new TaskMemoV2SyncController(store, state.adapter);
+    await controller.start();
+    await controller.command("create", "create", (nodes) => [...nodes,
+      nodeFromV2Value(record("b", "after repair").value)]);
+    expect(state.server.get("b")?.value.title).toBe("after repair");
+    expect(store.outbox).toHaveLength(0);
+  });
+
+  it("keeps local recovery mode and Outbox when a new receipt cannot be verified", async () => {
+    const state = fixture([record("a", "local")], [record("a", "old")]);
+    state.adapter.auditOutbox = async (operations) => ({ received: 0, missing: operations.length });
+    await expect(runSyncSelfRepair(state.persistence, state.adapter)).rejects.toThrow("Receipt");
+    expect(state.mode).toBe(true);
+    expect(state.active).toBe(state.source);
+    expect(state.server.get("a")?.value.title).toBe("local");
+  });
+
+  it("keeps local recovery mode if a new remote node arrives before final verification", async () => {
+    const state = fixture([record("a", "local")], [record("a", "old")]);
+    const read = state.adapter.readRecoverySnapshot!;
+    let reads = 0;
+    state.adapter.readRecoverySnapshot = async () => {
+      if (++reads === 2) state.server.set("surprise", record("surprise", "other device"));
+      return read();
+    };
+    await expect(runSyncSelfRepair(state.persistence, state.adapter)).rejects.toThrow("再読込");
+    expect(state.mode).toBe(true);
+    expect(state.active).toBe(state.source);
+  });
+});

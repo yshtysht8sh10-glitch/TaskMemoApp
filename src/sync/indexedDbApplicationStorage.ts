@@ -26,6 +26,9 @@ type StoredScope = {
   localRecoveryAt?: string;
   localRecoveryNodeCount?: number;
   localRecoveryOldOutboxCount?: number;
+  /** Exact local generation immediately before successful cloud convergence. */
+  preservedSelfRepairCommitted?: string;
+  selfRepairCompletedAt?: string;
 };
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -164,7 +167,41 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
       journal: stored?.preservedRecoveryJournal ?? null,
       recoveredAt: stored?.localRecoveryAt ?? null,
       nodeCount: stored?.localRecoveryNodeCount ?? null,
-      archivedOutboxCount: stored?.localRecoveryOldOutboxCount ?? null };
+      archivedOutboxCount: stored?.localRecoveryOldOutboxCount ?? null,
+      selfRepairSourceCommitted: stored?.preservedSelfRepairCommitted ?? null,
+      selfRepairCompletedAt: stored?.selfRepairCompletedAt ?? null };
+  }
+  async completeLocalSelfRepair(expectedCommitted: string, convergedCommitted: string, completedAt: string) {
+    const before = validateEnvelope(expectedCommitted)!;
+    const after = validateEnvelope(convergedCommitted)!;
+    const oldOutbox = (before.sync as { outbox: SyncOperation[] }).outbox;
+    if (!Number.isFinite(Date.parse(completedAt)) || before.deviceId !== after.deviceId ||
+        (after.sync as { outbox: SyncOperation[] }).outbox.length !== 0 ||
+        Object.keys(after.domain as object).length < Object.keys(before.domain as object).length)
+      throw new Error("同期自己修復のローカル確定データが不正です。");
+    const transaction = this.database.transaction(STORE_NAME, "readwrite");
+    const done = transactionDone(transaction);
+    try {
+      const store = transaction.objectStore(STORE_NAME);
+      const current = await requestResult(store.get(this.scope) as IDBRequest<StoredScope | undefined>);
+      if (!current?.localRecoveryMode || current.committed !== expectedCommitted || current.journal !== null ||
+          !current.preservedRecoveryJournal || !current.preservedRecoveryCommitted ||
+          (current.preservedSelfRepairCommitted && current.preservedSelfRepairCommitted !== expectedCommitted))
+        throw new Error("同期自己修復中にローカルデータが変更されました。");
+      store.put({ ...current, committed: convergedCommitted, journal: null,
+        preservedSelfRepairCommitted: expectedCommitted, selfRepairCompletedAt: completedAt,
+        localRecoveryMode: false, recoveryCompleted: true,
+        localRecoveryOldOutboxCount: current.localRecoveryOldOutboxCount ?? oldOutbox.length });
+      await done;
+    } catch (reason) {
+      try { transaction.abort(); } catch { /* Already settled. */ }
+      await done.catch(() => undefined);
+      throw reason;
+    }
+    const verified = await this.read();
+    if (!verified || verified.localRecoveryMode || verified.committed !== convergedCommitted ||
+        verified.preservedSelfRepairCommitted !== expectedCommitted || !verified.recoveryCompleted)
+      throw new Error("同期自己修復の確定後検証に失敗しました。");
   }
   /** A single IDB transaction installs the local-only generation and archives the exact WAL. */
   async restoreJournalLocally(expectedCommitted: string, expectedJournal: string, recoveredAt: string) {

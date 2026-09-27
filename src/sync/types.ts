@@ -84,10 +84,25 @@ export type SyncAcknowledgement = {
   featuresRecord?: VersionedFeatures;
 };
 
+export type RecoveryConvergenceRequest = {
+  identity: { deviceId: string; localSeq: number; createdAt: string };
+} & (
+  | { targetType: "node"; targetNodeId: string; desired: SyncNodeValue; observed: VersionedNode | null }
+  | { targetType: "pinnedNote"; desired: PinnedNoteValue; observed: VersionedPinnedNote | null }
+  | { targetType: "features"; desired: FeaturesValue; observed: VersionedFeatures | null }
+);
+
+export type RecoveryConvergenceResult = {
+  operation?: SyncOperation;
+  acknowledgement?: SyncAcknowledgement;
+};
+
 export interface SyncAdapter {
   connect(): Promise<void>;
   /** Server-only snapshot for observation. Never starts a listener or writes. */
   readRecoverySnapshot?(): Promise<{ nodes: VersionedNode[]; pinnedNote?: VersionedPinnedNote; features?: VersionedFeatures; receiptDocumentCount: number }>;
+  /** Transactionally rebase one desired value on the live server revision. */
+  convergeRecoveryTarget?(request: RecoveryConvergenceRequest): Promise<RecoveryConvergenceResult>;
   /** Read-only receipt check. A failure must prevent recovery and uploading. */
   auditOutbox?(operations: SyncOperation[]): Promise<{ received: number; missing: number;
     /** Internal recovery identity audit; never emitted to diagnostic JSON. */

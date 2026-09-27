@@ -625,10 +625,20 @@ export default function HomeScreen() {
           <TopButton label="設定" onPress={() => setSettingsOpen(true)} />
         </View>
       </View>
-      {sync.status === "local-recovery" && (
-        <Text style={{ paddingHorizontal: 16, paddingVertical: 3, fontSize: 12, color: "#9a5b00" }}>
-          ローカル復旧モード：クラウド同期停止中
-        </Text>
+      {(sync.status === "local-recovery" || sync.status === "self-repairing") && (
+        <View style={{ paddingHorizontal: 16, paddingVertical: 4, flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <Text style={{ flex: 1, fontSize: 12, color: "#9a5b00" }}>
+            {sync.status === "self-repairing"
+              ? `同期自己修復中：${sync.selfRepairProgress?.completed ?? 0}/${sync.selfRepairProgress?.total ?? 0}`
+              : "ローカル復旧モード：クラウド同期停止中"}
+          </Text>
+          {sync.status === "local-recovery" && (
+            <Pressable onPress={() => { void sync.repairSync(); }} accessibilityRole="button"
+              style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, backgroundColor: "#9a5b00" }}>
+              <Text style={{ color: "white", fontSize: 12, fontWeight: "700" }}>同期自己修復</Text>
+            </Pressable>
+          )}
+        </View>
       )}
       <View style={styles.tabs}>
         <Tab
@@ -1182,6 +1192,8 @@ export default function HomeScreen() {
             value={
               sync.status === "local-recovery"
                 ? "ローカル復旧モード・同期停止中"
+                : sync.status === "self-repairing"
+                  ? "自己修復中・同期停止中"
                 : sync.status === "synced"
                 ? "同期済み"
                 : sync.status === "connecting"
@@ -1393,6 +1405,18 @@ export default function HomeScreen() {
           />
         ))}
       </View>
+      {sync.status === "self-repairing" && (
+        <View style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+          zIndex: 1000, backgroundColor: "rgba(0,0,0,0.45)",
+          alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <Text style={{ color: "white", fontSize: 18, fontWeight: "700", textAlign: "center" }}>
+            同期自己修復中
+          </Text>
+          <Text style={{ color: "white", marginTop: 8, textAlign: "center" }}>
+            Firebaseの再読込と照合が終わるまでお待ちください。{sync.selfRepairProgress?.completed ?? 0}/{sync.selfRepairProgress?.total ?? 0}
+          </Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }

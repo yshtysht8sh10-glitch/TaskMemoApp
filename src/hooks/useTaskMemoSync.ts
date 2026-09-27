@@ -8,6 +8,7 @@ import { getFirebaseClient } from "../services/firebaseClient";
 import { firebaseConfiguration } from "../services/firebaseConfig";
 import { TaskMemoV2ApplicationJournal } from "../sync/applicationStorage";
 import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicationStorage";
+import { shouldEnterLocalRecovery } from "../sync/localRecoveryRouting";
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { recoverV2ApplicationAfterAudit } from "../sync/recovery";
@@ -16,7 +17,8 @@ import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recor
 import { preflightJournalAuthoritativeRecovery,
   JOURNAL_AUTHORITATIVE_APPROVAL_KEY } from "../sync/executeJournalAuthoritativeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
-import type { SyncPhase } from "../sync/types";
+import { runSyncSelfRepair, type SyncSelfRepairProgress } from "../sync/syncSelfRepair";
+import type { SyncAdapter, SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
 import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
 import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
@@ -25,7 +27,7 @@ import { normalizeLegacyRanks } from "../services/nodeStorage";
 import type { PinnedNote } from "../services/pinnedNoteStorage";
 import { appAlert } from "../utils/appAlert";
 
-export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery";
+export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery" | "self-repairing";
 
 const message = (reason: unknown) => reason instanceof Error ? reason.message :
   reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string"
@@ -53,6 +55,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const [authReady, setAuthReady] = useState(!configured);
   const [networkPaused, setNetworkPaused] = useState(false);
   const [legacyPinnedNoteCandidates, setLegacyPinnedNoteCandidates] = useState<LegacyPinnedNoteCandidate[]>([]);
+  const [selfRepairProgress, setSelfRepairProgress] = useState<SyncSelfRepairProgress | null>(null);
   const onHistoryRef = useRef(onHistory);
   useEffect(() => { onHistoryRef.current = onHistory; }, [onHistory]);
   const onPinnedNoteRef = useRef(onPinnedNote);
@@ -66,6 +69,10 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const publishedCandidatesRef = useRef("[]");
   const storeRef = useRef<TaskMemoV2ApplicationStore | null>(null);
   const controllerRef = useRef<TaskMemoV2SyncController | null>(null);
+  const persistenceRef = useRef<IndexedDbTaskMemoApplicationJournal | null>(null);
+  const adapterRef = useRef<SyncAdapter | null>(null);
+  const repairRunningRef = useRef(false);
+  const repairGenerationRef = useRef(0);
   const localRecoveryModeRef = useRef(false);
   const localSaveErrorShownRef = useRef(false);
   const initialPinnedBody = initialPinnedNote.body;
@@ -102,16 +109,19 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         setLegacyPinnedNoteCandidates(candidates);
       }
     }
-    if (controller) { setStatus(localRecoveryModeRef.current ? "local-recovery" : controller.state.phase); setError(controller.state.lastError); }
+    if (controller) { setStatus(repairRunningRef.current ? "self-repairing" : localRecoveryModeRef.current ? "local-recovery" : controller.state.phase); setError(controller.state.lastError); }
   };
 
   useEffect(() => {
     if (!configured || !ready) return;
     const { auth, db } = getFirebaseClient();
+    const repairGeneration = repairGenerationRef;
     let generation = 0;
     const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
       const currentGeneration = ++generation;
+      repairGeneration.current++;
       controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
+      persistenceRef.current = null; adapterRef.current = null;
       localRecoveryModeRef.current = false;
       publishedCandidatesRef.current = "[]"; setLegacyPinnedNoteCandidates([]);
       onHistoryRef.current(createNodeHistory([]));
@@ -150,11 +160,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           : new TaskMemoV2ApplicationJournal(scope);
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
+        const activeLocalMode = persistence instanceof IndexedDbTaskMemoApplicationJournal &&
+          await persistence.isLocalRecoveryMode();
         if (persistence instanceof IndexedDbTaskMemoApplicationJournal &&
-            (await persistence.isLocalRecoveryMode() || manualLocalRecovery)) {
-          if (manualLocalRecovery && !manualBuildMatches)
-            throw new Error("最新のローカル復旧版を確認できません。保存データは変更していません。");
-          if (!(await persistence.isLocalRecoveryMode())) {
+            shouldEnterLocalRecovery(activeLocalMode, manualLocalRecovery,
+              manualLocalRecovery ? await persistence.isRecoveryCompleted() : false)) {
+          if (!activeLocalMode) {
+            if (!manualBuildMatches)
+              throw new Error("最新のローカル復旧版を確認できません。保存データは変更していません。");
             const committed = await persistence.loadCommitted();
             const journal = await persistence.loadJournal();
             const legacy = new TaskMemoV2ApplicationJournal(scope);
@@ -176,6 +189,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
               sourceNodeCount: evidence.nodeCount, archivedOutboxCount: evidence.archivedOutboxCount,
               cloudSyncEnabled: false } });
           const controller = new TaskMemoV2SyncController(store, adapter, publish, { localOnly: true });
+          persistenceRef.current = persistence; adapterRef.current = adapter;
           storeRef.current = store; controllerRef.current = controller;
           publish(); await controller.start(); publish();
           return;
@@ -265,6 +279,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     );
     return () => {
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
+      repairGeneration.current++; persistenceRef.current = null; adapterRef.current = null;
       removeOnlineListener();
     };
   }, [configured, ready, firebase.environment, guardedRecovery, manualAuthoritativePreflight, manualLocalRecovery,
@@ -272,6 +287,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
+    if (repairRunningRef.current) return true;
     const controller = controllerRef.current;
     if (!controller) {
       if (enabled) setError("V2同期へのログイン・初期化が完了するまで編集できません。");
@@ -285,6 +301,38 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       }
     });
     return true;
+  };
+  const repairSync = async () => {
+    const persistence = persistenceRef.current, adapter = adapterRef.current, store = storeRef.current;
+    if (repairRunningRef.current || !localRecoveryModeRef.current || !persistence || !adapter || !store) return;
+    repairRunningRef.current = true;
+    const generation = repairGenerationRef.current;
+    setStatus("self-repairing"); setError(null); setSelfRepairProgress({ phase: "reading", completed: 0, total: 0 });
+    controllerRef.current?.stop();
+    try {
+      await store.whenIdle();
+      const result = await runSyncSelfRepair(persistence, adapter, setSelfRepairProgress, () => {
+        if (generation !== repairGenerationRef.current) throw new Error("認証状態が変化したため自己修復を停止しました。");
+      });
+      localRecoveryModeRef.current = false;
+      const nextStore = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "self-repair-complete" });
+      const controller = new TaskMemoV2SyncController(nextStore, adapter, publish);
+      storeRef.current = nextStore; controllerRef.current = controller;
+      repairRunningRef.current = false; setSelfRepairProgress(null);
+      publish(); await controller.start(); publish();
+      if (controller.state.phase === "synced" || controller.state.phase === "pending")
+        appAlert("同期自己修復が完了しました", `${result.nodeCount}件のNodeをFirebaseと照合しました。${result.receiptCount}件の新規Receiptを確認し、通常同期を再開しました。`);
+      else
+        appAlert("データの自己修復は完了しました", "Firebaseとの一致を確認しました。通常同期の再接続を待っています。データは端末に保存されています。");
+    } catch (reason) {
+      repairRunningRef.current = false; setSelfRepairProgress(null);
+      const stillLocal = await persistence.isLocalRecoveryMode().catch(() => true);
+      localRecoveryModeRef.current = stillLocal;
+      setStatus(stillLocal ? "local-recovery" : "error"); setError(message(reason));
+      appAlert("同期自己修復を停止しました", `${stillLocal
+        ? "元データと旧Outboxは保持しています。同じボタンから最新状態を再取得して再試行できます。"
+        : "Firebaseとの収束は確定済みです。端末上の元データは保持されています。"}\n${message(reason)}`);
+    }
   };
   const signIn = async (email: string, password: string) => { setStatus("connecting"); setError(null); try { await signInWithEmailAndPassword(getFirebaseClient().auth, email.trim(), password); } catch (reason) { setStatus("signed-out"); setError(message(reason)); throw reason; } };
   const signUp = async (email: string, password: string) => { setStatus("connecting"); setError(null); try { await createUserWithEmailAndPassword(getFirebaseClient().auth, email.trim(), password); } catch (reason) { setStatus("signed-out"); setError(message(reason)); throw reason; } };
@@ -300,6 +348,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       },
     } : undefined,
     configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, legacyPinnedNoteCandidates,
+    selfRepairProgress, repairSync,
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),
     updatePinnedNote: (body: string) => run((controller) => controller.updatePinnedNote(body)),

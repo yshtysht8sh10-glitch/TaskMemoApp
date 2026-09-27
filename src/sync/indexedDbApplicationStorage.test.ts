@@ -48,6 +48,27 @@ describe("IndexedDB V2 migration", () => {
     await expect(persistence.restoreJournalLocally(committed, journal, "2026-09-27T00:01:00.000Z")).rejects.toThrow();
   });
 
+  it("atomically returns to normal sync only after saving the current local generation as evidence", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const committed = envelope(150, 969), journal = envelope(151, 1024);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    await persistence.restoreJournalLocally(committed, journal, "2026-09-27T00:00:00.000Z");
+    const local = (await persistence.loadCommitted())!;
+    const converged = JSON.stringify({ ...JSON.parse(local), sync: { outbox: [], seenOpIds: [] } });
+    await expect(persistence.completeLocalSelfRepair("stale", converged, "2026-09-27T01:00:00.000Z"))
+      .rejects.toThrow();
+    expect(await persistence.isLocalRecoveryMode()).toBe(true);
+    await persistence.completeLocalSelfRepair(local, converged, "2026-09-27T01:00:00.000Z");
+    expect(await persistence.isLocalRecoveryMode()).toBe(false);
+    expect(await persistence.isRecoveryCompleted()).toBe(true);
+    expect(await persistence.loadCommitted()).toBe(converged);
+    expect(await persistence.loadLocalRecoveryEvidence()).toMatchObject({ journal, committed,
+      archivedOutboxCount: 1024, selfRepairSourceCommitted: local,
+      selfRepairCompletedAt: "2026-09-27T01:00:00.000Z" });
+    expect(await legacy.loadJournal()).toBe(journal);
+  });
+
   it("copies committed 150 and journal 151 exactly, retains legacy, and survives restart", async () => {
     const legacy = new TaskMemoV2ApplicationJournal("account");
     const committed = envelope(150, 969);
