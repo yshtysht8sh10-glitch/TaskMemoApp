@@ -17,13 +17,36 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 
 const envelope = (nodes: number, outbox: number) => JSON.stringify({
   version: 2, deviceId: "device-a", domain: Object.fromEntries(Array.from({ length: nodes }, (_, i) => [`n${i}`, { value: { id: `n${i}` } }])),
-  history: { past: [{ commandId: "old" }], future: [] },
+  history: { past: [{ commandId: "old", targets: [] }], future: [] },
   sync: { outbox: Array.from({ length: outbox }, (_, i) => ({ opId: `op${i}` })), seenOpIds: [] },
 });
 
 describe("IndexedDB V2 migration", () => {
   let factory: IDBFactory;
   beforeEach(() => { storage.clear(); factory = new IDBFactory(); });
+
+  it("atomically restores the journal as local-only application and archives both original snapshots", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const committed = envelope(150, 969);
+    const journal = envelope(151, 1024);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    await persistence.saveAuthoritativeRecoveryPlan(committed, journal, JSON.stringify({ savedPartialCloudPlan: true }));
+    const outcome = await persistence.restoreJournalLocally(committed, journal, "2026-09-27T00:00:00.000Z");
+    expect(outcome).toMatchObject({ nodeCount: 151, archivedOutboxCount: 1024 });
+    expect(await persistence.isLocalRecoveryMode()).toBe(true);
+    const active = JSON.parse((await persistence.loadCommitted())!);
+    expect(Object.keys(active.domain)).toHaveLength(151);
+    expect(active.history).toEqual(JSON.parse(journal).history);
+    expect(active.sync.outbox).toEqual([]);
+    expect(await persistence.loadJournal()).toBeNull();
+    expect(await persistence.loadAuthoritativeRecoveryPlan()).toBe(JSON.stringify({ savedPartialCloudPlan: true }));
+    expect(await persistence.loadLocalRecoveryEvidence()).toMatchObject({ committed, journal,
+      recoveredAt: "2026-09-27T00:00:00.000Z", archivedOutboxCount: 1024 });
+    expect(await legacy.loadCommitted()).toBe(committed);
+    expect(await legacy.loadJournal()).toBe(journal);
+    await expect(persistence.restoreJournalLocally(committed, journal, "2026-09-27T00:01:00.000Z")).rejects.toThrow();
+  });
 
   it("copies committed 150 and journal 151 exactly, retains legacy, and survives restart", async () => {
     const legacy = new TaskMemoV2ApplicationJournal("account");
@@ -79,6 +102,25 @@ describe("IndexedDB V2 migration", () => {
       expect(await persistence.loadCommitted()).toBe(committed);
       expect(await persistence.loadJournal()).toBe(journal);
       expect(await persistence.isRecoveryCompleted()).toBe(false);
+    } finally { failure.mockRestore(); }
+  });
+
+  it("does not enter local recovery mode or alter Application when the atomic write fails", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const committed = envelope(150, 969), journal = envelope(151, 1024);
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    const original = FakeIDBDatabase.prototype.transaction;
+    const failure = vi.spyOn(FakeIDBDatabase.prototype, "transaction").mockImplementation(function (this: IDBDatabase, names, mode, options) {
+      if (mode === "readwrite") throw new DOMException("quota", "QuotaExceededError");
+      return original.call(this, names, mode, options);
+    });
+    try {
+      await expect(persistence.restoreJournalLocally(committed, journal, "2026-09-27T00:00:00.000Z")).rejects.toThrow("quota");
+      expect(await persistence.isLocalRecoveryMode()).toBe(false);
+      expect(await persistence.loadCommitted()).toBe(committed);
+      expect(await persistence.loadJournal()).toBe(journal);
+      expect(await persistence.loadLocalRecoveryEvidence()).toMatchObject({ committed: null, journal: null });
     } finally { failure.mockRestore(); }
   });
 
@@ -158,6 +200,47 @@ describe("IndexedDB V2 migration", () => {
     await recovered.redo();
     expect(recovered.nodes.find((node) => node.id === "memo")?.title).toBe("after");
     expect(storage).toEqual(preserved);
+  });
+
+  it("keeps journal data, history and post-recovery CRUD durable in a distinct outbox generation", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const at = new Date("2026-09-26T00:00:00.000Z");
+    const memo: MemoNode = { id: "memo", type: "memo", parentId: null, sortKey: "a", title: "before", body: "body", dueAt: null,
+      duePreset: "none", status: "active", completedAt: null, createdAt: at, updatedAt: at, deletedAt: null };
+    const seed = await TaskMemoV2ApplicationStore.open(legacy, [memo], { deviceId: "old-device" });
+    const committed = (await legacy.loadCommitted())!;
+    await seed.command("edit", "update", (nodes) => nodes.map((node) => node.id === "memo" ? { ...node, title: "journal title" } : node));
+    await seed.command("create", "create", (nodes) => [...nodes, { ...memo, id: "new-in-journal", title: "journal new", sortKey: "b" }]);
+    const journal = (await legacy.loadCommitted())!;
+    await legacy.writeCommitted(committed); await legacy.writeJournal(journal);
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    await persistence.restoreJournalLocally(committed, journal, "2026-09-27T00:00:00.000Z");
+    let recovered = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", preserveSortKeys: true });
+    expect(recovered.nodes.map((node) => node.title)).toEqual(["journal title", "journal new"]);
+    expect(recovered.historyDepths.past).toBe(2);
+    expect(recovered.outbox).toHaveLength(0);
+    const folder = { id: "folder", type: "category" as const, parentId: null, sortKey: "c", title: "Folder",
+      createdAt: at, updatedAt: at, deletedAt: null };
+    await recovered.command("create", "create", (nodes) => [...nodes, folder]);
+    await recovered.command("move", "update", (nodes) => nodes.map((node) => node.id === "memo" ? { ...node, parentId: "folder" } : node));
+    await recovered.command("edit", "update", (nodes) => nodes.map((node) => node.id === "memo" && node.type === "memo" ? { ...node, body: "edited locally" } : node));
+    await recovered.command("complete", "complete", (nodes) => nodes.map((node) => node.id === "memo" && node.type === "memo" ? { ...node, status: "completed", completedAt: at } : node));
+    await recovered.command("delete", "softDelete", (nodes) => nodes.map((node) => node.id === "new-in-journal" ? { ...node, deletedAt: at } : node));
+    await recovered.undo(); await recovered.redo();
+    expect(recovered.outbox.length).toBeGreaterThan(0);
+    const oldIds = new Set(JSON.parse(journal).sync.outbox.map((operation: { opId: string }) => operation.opId));
+    expect(recovered.outbox.every((operation) => !oldIds.has(operation.opId))).toBe(true);
+    const restarted = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    expect(await restarted.isLocalRecoveryMode()).toBe(true);
+    recovered = await TaskMemoV2ApplicationStore.open(restarted, [], { deviceId: "ignored", preserveSortKeys: true });
+    const recoveredMemo = recovered.nodes.find((node): node is MemoNode => node.id === "memo" && node.type === "memo");
+    expect(recoveredMemo?.status).toBe("completed");
+    expect(recoveredMemo?.body).toBe("edited locally");
+    expect(recovered.nodes.find((node) => node.id === "memo")?.parentId).toBe("folder");
+    expect(recovered.nodes.find((node) => node.id === "folder")?.title).toBe("Folder");
+    expect(recovered.nodes.find((node) => node.id === "new-in-journal")?.deletedAt).toEqual(at);
+    expect(recovered.outbox.length).toBeGreaterThan(0);
+    expect(await restarted.loadLocalRecoveryEvidence()).toMatchObject({ committed, journal, archivedOutboxCount: 2 });
   });
 
   it("rejects a local edit when IndexedDB persistence fails, without presenting it as committed", async () => {

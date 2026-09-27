@@ -49,6 +49,8 @@ const initialExecution = (): RecoveryExecutionObservation => ({
 });
 
 export type RecoveryObservation = {
+  localRecovery: { status: "active"; recoveredAt: string; sourceNodeCount: number;
+    archivedOutboxCount: number; cloudSyncEnabled: false } | null;
   journalAuthoritativePreflight: {
     status: "not-started" | "running" | "safe" | "blocked";
     journalNodeCount: number | null; remoteNodeCount: number | null;
@@ -89,6 +91,7 @@ export type RecoveryObservation = {
 };
 
 const initial = (): RecoveryObservation => ({
+  localRecovery: null,
   journalAuthoritativePreflight: null,
   recoveryPhase: "starting",
   receiptComparisonTotal: 0,

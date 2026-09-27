@@ -625,6 +625,11 @@ export default function HomeScreen() {
           <TopButton label="設定" onPress={() => setSettingsOpen(true)} />
         </View>
       </View>
+      {sync.status === "local-recovery" && (
+        <Text style={{ paddingHorizontal: 16, paddingVertical: 3, fontSize: 12, color: "#9a5b00" }}>
+          ローカル復旧モード：クラウド同期停止中
+        </Text>
+      )}
       <View style={styles.tabs}>
         <Tab
           label="一覧"
@@ -1175,7 +1180,9 @@ export default function HomeScreen() {
           <SettingsLink
             label="クラウド同期"
             value={
-              sync.status === "synced"
+              sync.status === "local-recovery"
+                ? "ローカル復旧モード・同期停止中"
+                : sync.status === "synced"
                 ? "同期済み"
                 : sync.status === "connecting"
                   ? "接続中…"

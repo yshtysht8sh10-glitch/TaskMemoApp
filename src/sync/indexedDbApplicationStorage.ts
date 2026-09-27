@@ -21,6 +21,11 @@ type StoredScope = {
   /** Exact pre-recovery WAL, retained after active state is normalized. */
   preservedRecoveryJournal?: string;
   preservedRecoveryCommitted?: string;
+  /** Local-only generation. Never connect this scope to Firebase automatically. */
+  localRecoveryMode?: boolean;
+  localRecoveryAt?: string;
+  localRecoveryNodeCount?: number;
+  localRecoveryOldOutboxCount?: number;
 };
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -152,6 +157,66 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
   async loadCommitted() { return (await this.read())?.committed ?? null; }
   async loadJournal() { return (await this.read())?.journal ?? null; }
   async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }
+  async isLocalRecoveryMode() { return (await this.read())?.localRecoveryMode === true; }
+  async loadLocalRecoveryEvidence() {
+    const stored = await this.read();
+    return { committed: stored?.preservedRecoveryCommitted ?? null,
+      journal: stored?.preservedRecoveryJournal ?? null,
+      recoveredAt: stored?.localRecoveryAt ?? null,
+      nodeCount: stored?.localRecoveryNodeCount ?? null,
+      archivedOutboxCount: stored?.localRecoveryOldOutboxCount ?? null };
+  }
+  /** A single IDB transaction installs the local-only generation and archives the exact WAL. */
+  async restoreJournalLocally(expectedCommitted: string, expectedJournal: string, recoveredAt: string) {
+    const committed = validateEnvelope(expectedCommitted)!;
+    const journal = validateEnvelope(expectedJournal)!;
+    if (committed.deviceId !== journal.deviceId || !Number.isFinite(Date.parse(recoveredAt)))
+      throw new Error("ローカル復旧元を検証できません。");
+    const applicationNodes = Object.keys(committed.domain as object);
+    const journalNodes = journal.domain as Record<string, unknown>;
+    const applicationOutbox = (committed.sync as { outbox: SyncOperation[] }).outbox;
+    const oldOutbox = (journal.sync as { outbox: SyncOperation[] }).outbox;
+    const oldIds = new Set(oldOutbox.map((operation) => operation.opId));
+    if (oldIds.size !== oldOutbox.length ||
+        applicationNodes.some((id) => !Object.hasOwn(journalNodes, id)) ||
+        applicationOutbox.some((operation) => !oldIds.has(operation.opId)) ||
+        [...(journal.history as { past: unknown[]; future: unknown[] }).past,
+          ...(journal.history as { past: unknown[]; future: unknown[] }).future].some((entry) =>
+          !entry || typeof entry !== "object" || !Array.isArray((entry as { targets?: unknown }).targets)))
+      throw new Error("JournalがApplicationまたは履歴を完全に保持していません。");
+    const newDeviceId = `local-recovery-${globalThis.crypto.randomUUID()}`;
+    const recovered = JSON.stringify({ ...journal, deviceId: newDeviceId, nextLocalSeq: 1,
+      sync: { ...journal.sync as object, outbox: [], seenOpIds: [] } });
+    validateEnvelope(recovered);
+    const nodeCount = Object.keys(journal.domain as object).length;
+    const archivedOutboxCount = oldOutbox.length;
+    const transaction = this.database.transaction(STORE_NAME, "readwrite");
+    const done = transactionDone(transaction);
+    try {
+      const objectStore = transaction.objectStore(STORE_NAME);
+      const current = await requestResult(objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>);
+      if (!current || current.localRecoveryMode || current.recoveryCompleted ||
+          current.committed !== expectedCommitted || current.journal !== expectedJournal ||
+          (current.preservedRecoveryJournal && current.preservedRecoveryJournal !== expectedJournal) ||
+          (current.preservedRecoveryCommitted && current.preservedRecoveryCommitted !== expectedCommitted))
+        throw new Error("ローカル復旧元が変更済み、または復旧済みです。");
+      objectStore.put({ ...current, committed: recovered, journal: null,
+        preservedRecoveryCommitted: expectedCommitted, preservedRecoveryJournal: expectedJournal,
+        localRecoveryMode: true, localRecoveryAt: recoveredAt,
+        localRecoveryNodeCount: nodeCount, localRecoveryOldOutboxCount: archivedOutboxCount });
+      await done;
+    } catch (reason) {
+      try { transaction.abort(); } catch { /* Transaction may already have settled. */ }
+      await done.catch(() => undefined);
+      throw reason;
+    }
+    const verified = await this.read();
+    if (!verified?.localRecoveryMode || verified.committed !== recovered ||
+        verified.preservedRecoveryJournal !== expectedJournal ||
+        verified.preservedRecoveryCommitted !== expectedCommitted)
+      throw new Error("ローカル復旧後の再読み取り検証に失敗しました。");
+    return { nodeCount, archivedOutboxCount };
+  }
   async loadAuthoritativeRecoveryPlan() { return (await this.read())?.authoritativeRecoveryPlan ?? null; }
   async loadPreservedRecoveryEvidence() {
     const stored = await this.read();

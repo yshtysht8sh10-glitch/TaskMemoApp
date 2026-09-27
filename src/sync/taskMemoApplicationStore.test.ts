@@ -21,6 +21,17 @@ const initialMemo = (): MemoNode => ({ id: "memo-a", type: "memo", memoType: "ta
 const unrelatedMemo = (): MemoNode => ({ ...initialMemo(), id: "memo-b", sortKey: "b0", title: "B", routineHistory: {} });
 
 describe("TaskMemo V2 application store", () => {
+  it("does not silently rewrite Journal sortKeys while opening local recovery mode", async () => {
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: "old" });
+    const source = JSON.parse((await persistence.loadCommitted())!);
+    source.domain[store.nodes[0].id].value.sortKey = "zzzz";
+    persistence.committed = JSON.stringify(source);
+    const restored = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", preserveSortKeys: true });
+    expect(restored.nodes[0].sortKey).toBe("zzzz");
+    expect(restored.outbox).toHaveLength(0);
+    expect(await persistence.loadCommitted()).toBe(JSON.stringify(source));
+  });
   it("queues only the new Node when a deleted sibling owns the same sortKey", async () => {
     const keys = generateNKeysBetween(null, null, 55);
     const initial = keys.map((sortKey, index): Node => ({

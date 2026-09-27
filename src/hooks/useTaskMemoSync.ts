@@ -12,8 +12,8 @@ import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { recoverV2ApplicationAfterAudit } from "../sync/recovery";
 import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation,
-  recordRecoveryExecution, recordRecoveryTransaction, recoveryErrorCode } from "../sync/recoveryObservation";
-import { preflightJournalAuthoritativeRecovery, executeJournalAuthoritativeRecovery,
+  recordRecoveryTransaction, recoveryErrorCode } from "../sync/recoveryObservation";
+import { preflightJournalAuthoritativeRecovery,
   JOURNAL_AUTHORITATIVE_APPROVAL_KEY } from "../sync/executeJournalAuthoritativeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import type { SyncPhase } from "../sync/types";
@@ -25,7 +25,7 @@ import { normalizeLegacyRanks } from "../services/nodeStorage";
 import type { PinnedNote } from "../services/pinnedNoteStorage";
 import { appAlert } from "../utils/appAlert";
 
-export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic";
+export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery";
 
 const message = (reason: unknown) => reason instanceof Error ? reason.message :
   reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string"
@@ -38,6 +38,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     new URL(window.location.href).searchParams.get("journalAuthoritativePreflight") === "1";
   const manualAuthoritativeExecution = guardedRecovery && typeof window !== "undefined" &&
     new URL(window.location.href).searchParams.get("journalAuthoritativeExecute") === "1";
+  const manualLocalRecovery = guardedRecovery && typeof window !== "undefined" &&
+    new URL(window.location.href).searchParams.get("localRecovery") === "1";
   const manualBuildMatches = guardedRecovery && typeof window !== "undefined" && typeof window.location?.href === "string" &&
     new URL(window.location.href).searchParams.get("build") === process.env.EXPO_PUBLIC_BUILD_SHA;
   const receiptModeParameter = guardedRecovery && typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("receiptMode") : null;
@@ -64,6 +66,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const publishedCandidatesRef = useRef("[]");
   const storeRef = useRef<TaskMemoV2ApplicationStore | null>(null);
   const controllerRef = useRef<TaskMemoV2SyncController | null>(null);
+  const localRecoveryModeRef = useRef(false);
   const localSaveErrorShownRef = useRef(false);
   const initialPinnedBody = initialPinnedNote.body;
   const initialPinnedUpdatedAt = initialPinnedNote.updatedAt.getTime();
@@ -99,7 +102,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         setLegacyPinnedNoteCandidates(candidates);
       }
     }
-    if (controller) { setStatus(controller.state.phase); setError(controller.state.lastError); }
+    if (controller) { setStatus(localRecoveryModeRef.current ? "local-recovery" : controller.state.phase); setError(controller.state.lastError); }
   };
 
   useEffect(() => {
@@ -109,6 +112,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
       const currentGeneration = ++generation;
       controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
+      localRecoveryModeRef.current = false;
       publishedCandidatesRef.current = "[]"; setLegacyPinnedNoteCandidates([]);
       onHistoryRef.current(createNodeHistory([]));
       setUser(nextUser); setAuthReady(true); setError(null);
@@ -146,6 +150,36 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           : new TaskMemoV2ApplicationJournal(scope);
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
+        if (persistence instanceof IndexedDbTaskMemoApplicationJournal &&
+            (await persistence.isLocalRecoveryMode() || manualLocalRecovery)) {
+          if (manualLocalRecovery && !manualBuildMatches)
+            throw new Error("最新のローカル復旧版を確認できません。保存データは変更していません。");
+          if (!(await persistence.isLocalRecoveryMode())) {
+            const committed = await persistence.loadCommitted();
+            const journal = await persistence.loadJournal();
+            const legacy = new TaskMemoV2ApplicationJournal(scope);
+            if (!committed || !journal || committed !== await legacy.loadCommitted() ||
+                journal !== await legacy.loadJournal())
+              throw new Error("ローカル復旧元のApplication/Journalが一致しません。");
+            await persistence.restoreJournalLocally(committed, journal, new Date().toISOString());
+          }
+          if (currentGeneration !== generation) return;
+          localRecoveryModeRef.current = true;
+          const store = await TaskMemoV2ApplicationStore.open(persistence, [], {
+            deviceId: "local-recovery", preserveSortKeys: true });
+          const evidence = await persistence.loadLocalRecoveryEvidence();
+          if (!evidence.recoveredAt || evidence.nodeCount === null || evidence.archivedOutboxCount === null ||
+              !evidence.journal || !evidence.committed)
+            throw new Error("ローカル復旧の退避証拠を確認できません。");
+          recordRecoveryObservation({ recoveryPhase: "local-recovery-active",
+            localRecovery: { status: "active", recoveredAt: evidence.recoveredAt,
+              sourceNodeCount: evidence.nodeCount, archivedOutboxCount: evidence.archivedOutboxCount,
+              cloudSyncEnabled: false } });
+          const controller = new TaskMemoV2SyncController(store, adapter, publish, { localOnly: true });
+          storeRef.current = store; controllerRef.current = controller;
+          publish(); await controller.start(); publish();
+          return;
+        }
         if (guardedRecovery && await persistence.loadJournal()) {
           if ((manualAuthoritativePreflight || manualAuthoritativeExecution) && !manualBuildMatches)
             throw new Error("最新のRecovery版を確認できません。書き込みは開始しません。");
@@ -160,26 +194,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           if (!(persistence instanceof IndexedDbTaskMemoApplicationJournal))
             throw new Error("IndexedDB以外ではpreflightを実行しません。");
           if (manualAuthoritativeExecution) {
-            const savedPlan = await persistence.loadAuthoritativeRecoveryPlan();
-            const approval = window.sessionStorage.getItem(JOURNAL_AUTHORITATIVE_APPROVAL_KEY);
-            if (!savedPlan && (!approval || !/^[a-f0-9]{64}$/.test(approval)))
-              throw new Error("安全な実機preflightの承認記録がありません。書き込みを開始しません。");
-            const result = await executeJournalAuthoritativeRecovery(persistence, adapter, scope,
-              new TaskMemoV2ApplicationJournal(scope), recordRecoveryExecution,
-              { journalNodeCount: 151, remoteNodeCount: 151, candidateNodeCount: 152,
-                originalOutboxCount: 1024, originalReceiptReceivedCount: 13,
-                plannedOperationCount: 64, approvalFingerprint: approval ?? undefined });
-            if (currentGeneration !== generation) return;
-            recordRecoveryObservation({ recoveryPhase: "observation-paused",
-              journalAuthoritativePreflight: { status: "safe", ...result,
-                originalOutboxCount: result.preservedOriginalOutboxCount,
-                originalReceiptReceivedCount: result.receiptReceivedCount,
-                originalReceiptMissingCount: result.preservedOriginalOutboxCount - result.receiptReceivedCount,
-                freshOperationReceiptCount: result.recoveryReceiptReceivedCount,
-                oldOutboxWillBeResent: false, blockReasons: [] } });
-            setStatus("diagnostic");
-            setError("Recoveryは完了しました。診断結果を確認してください。");
-            return;
+            throw new Error("Firebase Recoveryは無効です。ローカル復旧のみ利用してください。");
           }
           recordRecoveryObservation({ recoveryPhase: "preflight-start",
             journalAuthoritativePreflight: { status: "running", journalNodeCount: null, remoteNodeCount: null,
@@ -252,7 +267,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       removeOnlineListener();
     };
-  }, [configured, ready, firebase.environment, guardedRecovery, manualAuthoritativePreflight,
+  }, [configured, ready, firebase.environment, guardedRecovery, manualAuthoritativePreflight, manualLocalRecovery,
     manualAuthoritativeExecution, manualBuildMatches, receiptReadMode, receiptLookupIntervalMs]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 

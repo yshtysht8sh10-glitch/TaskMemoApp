@@ -47,7 +47,7 @@ type Envelope = {
     features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean };
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -110,7 +110,7 @@ export class TaskMemoV2ApplicationStore {
       }
     }
     const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()));
-    envelope = store.repairSortKeys(envelope, options.now?.() ?? new Date());
+    if (!options.preserveSortKeys) envelope = store.repairSortKeys(envelope, options.now?.() ?? new Date());
     store.envelope = envelope;
     if (!committed || envelope !== loadedEnvelope) await store.commit(envelope);
     return store;

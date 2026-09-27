@@ -12,6 +12,7 @@ function launch(values: Record<string, string>) {
   const status = { textContent: '' };
   const measure = { addEventListener: (_: string, handler: () => void) => handlers.set('measure', handler) };
   const copy = { addEventListener: (_: string, handler: () => void) => handlers.set('copy', handler) };
+  const restoreLocal = { addEventListener: (_: string, handler: () => void) => handlers.set('restore-local', handler) };
   const writes = vi.fn(() => { throw new Error('Storage write attempted'); });
   const keys = Object.keys(values);
   const storage = {
@@ -22,19 +23,30 @@ function launch(values: Record<string, string>) {
   };
   const writeText = vi.fn(async (_value: string) => undefined);
   const document = {
-    getElementById: (id: string) => ({ result, status, measure, copy })[id as 'result' | 'status' | 'measure' | 'copy'],
+    getElementById: (id: string) => ({ result, status, measure, copy, 'restore-local': restoreLocal })[id as 'result' | 'status' | 'measure' | 'copy' | 'restore-local'],
     querySelector: (selector: string) => ({ content: selector.includes('version') ? '1.0.0' : 'abcdef1234567890' }),
   };
-  runInNewContext(script, { document, window: { localStorage: storage }, navigator: { standalone: true, clipboard: { writeText } }, location: { origin: 'https://taskmemoapp-eabc3.web.app' } });
-  return { handlers, result, status, writes, writeText };
+  const assign = vi.fn();
+  runInNewContext(script, { document, window: { localStorage: storage }, navigator: { standalone: true, clipboard: { writeText } }, location: { origin: 'https://taskmemoapp-eabc3.web.app', assign } });
+  return { handlers, result, status, writes, writeText, assign };
 }
 
 it('is a separate static page with only its diagnostic script', () => {
-  expect(html).toContain('/?journalAuthoritativePreflight=1&amp;build=__TASKMEMO_DIAGNOSTIC_COMMIT__');
+  expect(html).toContain('ローカルデータを復旧して使用を再開');
+  expect(html).not.toContain('id="execute-recovery"');
+  expect(html).not.toContain('id="resume-recovery"');
   expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script defer src="/storage-diagnostics.js?build=__TASKMEMO_DIAGNOSTIC_COMMIT__">']);
-  expect(html).not.toMatch(/expo-router|index\.js|firebase|service-worker\.js/i);
+  expect(html).not.toMatch(/expo-router|index\.js|service-worker\.js/i);
   expect(script).not.toMatch(/\.(?:setItem|removeItem|clear)\s*\(/);
   expect(script).not.toMatch(/(?:fetch|importScripts|register)\s*\(/);
+});
+
+it('starts only the explicit local recovery route from one button', () => {
+  const fixture = launch({});
+  expect(fixture.assign).not.toHaveBeenCalled();
+  fixture.handlers.get('restore-local')!();
+  expect(fixture.assign).toHaveBeenCalledWith('/?localRecovery=1&build=abcdef1234567890');
+  expect(script).not.toContain('journalAuthoritativeExecute=1');
 });
 
 it('does not automatically execute recovery when the guarded journal exists', () => {
@@ -45,6 +57,9 @@ it('does not automatically execute recovery when the guarded journal exists', ()
   expect(syncHook).toContain('&& !manualBuildMatches');
   expect(syncHook).toContain('if (!manualAuthoritativePreflight && !manualAuthoritativeExecution) {');
   expect(syncHook).not.toContain('adapter.upload(');
+  expect(syncHook).not.toContain('executeJournalAuthoritativeRecovery(');
+  expect(syncHook).toContain('isLocalRecoveryMode() || manualLocalRecovery');
+  expect(syncHook).toContain('restoreJournalLocally(committed, journal');
 });
 
 it('measures all localStorage while exposing only whitelisted names and aggregate metadata', async () => {

@@ -25,6 +25,33 @@ const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sort
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it("keeps local-only edits durable without connecting, listening, auditing, or uploading after restart", async () => {
+    const persistence = new MemoryPersistence();
+    let store = await TaskMemoV2ApplicationStore.open(persistence, [memo()], { deviceId: "local-generation" });
+    const adapter = new ListenerAdapter();
+    adapter.auditOutbox = vi.fn(async () => { throw new Error("must not audit"); });
+    const connect = vi.spyOn(adapter, "connect");
+    const subscribe = vi.spyOn(adapter, "subscribe");
+    let controller = new TaskMemoV2SyncController(store, adapter, () => undefined, { localOnly: true });
+    await controller.start();
+    await controller.command("edit", "update", (nodes) => nodes.map((node) => node.id === "memo-a" ? { ...node, title: "local edit" } : node));
+    await controller.undo();
+    await controller.redo();
+    expect(store.nodes.find((node) => node.id === "memo-a")?.title).toBe("local edit");
+    expect(store.outbox.length).toBeGreaterThan(0);
+    expect(adapter.uploads).toHaveLength(0);
+    expect(connect).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(adapter.auditOutbox).not.toHaveBeenCalled();
+    store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored", preserveSortKeys: true });
+    controller = new TaskMemoV2SyncController(store, adapter, () => undefined, { localOnly: true });
+    await controller.start();
+    expect(store.nodes.find((node) => node.id === "memo-a")?.title).toBe("local edit");
+    expect(store.outbox.length).toBeGreaterThan(0);
+    expect(connect).not.toHaveBeenCalled();
+    await controller.resume();
+    expect(connect).not.toHaveBeenCalled();
+  });
   it("does not upload, subscribe, or mutate profiles when receipt audit is contradictory", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [memo()], { deviceId: "device-a" });
     await store.command("edit", "update", (nodes) => nodes.map((node) => node.id === "memo-a" ? { ...node, title: "edited" } : node));

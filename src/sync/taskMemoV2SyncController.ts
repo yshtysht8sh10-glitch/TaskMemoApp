@@ -21,12 +21,18 @@ export class TaskMemoV2SyncController {
   private receiptsAudited = false;
   private pinnedNoteTimer?: ReturnType<typeof setTimeout>;
 
-  constructor(private readonly store: TaskMemoV2ApplicationStore, private readonly adapter: SyncAdapter, private readonly onChange: () => void = () => undefined) {
+  constructor(private readonly store: TaskMemoV2ApplicationStore, private readonly adapter: SyncAdapter, private readonly onChange: () => void = () => undefined,
+    private readonly options: { localOnly?: boolean } = {}) {
     this.state = initialSyncState(store.pendingCount);
   }
 
   async start() {
     this.stop();
+    if (this.options.localOnly) {
+      this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null };
+      this.onChange();
+      return;
+    }
     this.receiptsAudited = false;
     const generation = this.generation;
     this.state = transitionSyncState(this.state, { type: "connect", pendingCount: this.store.pendingCount });
@@ -160,6 +166,7 @@ export class TaskMemoV2SyncController {
   }
 
   async flush() {
+    if (this.options.localOnly) return;
     if (this.adapter.auditOutbox && !this.receiptsAudited) return;
     if (this.paused) {
       this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, kind: "offline", message: "Development offline simulation" });
