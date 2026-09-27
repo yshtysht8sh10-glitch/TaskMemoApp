@@ -53,9 +53,9 @@
     'Firestore returned an error during recovery.',
     'Recovery stopped after an unclassified error.',
   ]);
-  function selfRepairDiagnostics(storage) {
+  function selfRepairDiagnostics(storage, key = '@taskmemo/self-repair-diagnostics/v1') {
     try {
-      const raw = storage && storage.getItem('@taskmemo/self-repair-diagnostics/v1');
+      const raw = storage && storage.getItem(key);
       if (!raw || raw.length > 100000) return null;
       const saved = object(JSON.parse(raw));
       const text = value => typeof value === 'string' ? value.slice(0, 256) : null;
@@ -68,7 +68,8 @@
       const read = value => { const m = object(value); return { fromCache: typeof m.fromCache === 'boolean' ? m.fromCache : null,
         hasPendingWrites: typeof m.hasPendingWrites === 'boolean' ? m.hasPendingWrites : null }; };
       const comparison = value => { if (!value) return null; const c = object(value); return {
-        target: text(c.target), conflictNodeId: text(c.conflictNodeId), detectedAt: text(c.detectedAt), outcome: text(c.outcome),
+        target: text(c.target), conflictNodeId: text(c.conflictNodeId), operationId: text(c.operationId),
+        detectedAt: text(c.detectedAt), outcome: text(c.outcome),
         differentFields: array(c.differentFields).slice(0, 64).map(text), beforeFields: fields(c.beforeFields), afterFields: fields(c.afterFields),
         beforeUserData: fields({ value: c.beforeUserData }).value, afterUserData: fields({ value: c.afterUserData }).value,
         beforeMetadata: meta(c.beforeMetadata), afterMetadata: meta(c.afterMetadata),
@@ -579,6 +580,7 @@
       firebaseReceiptComparison: 'not-performed',
       recoveryObservation: metadata.recoveryObservation,
       selfRepairDiagnostics: metadata.selfRepairDiagnostics,
+      previousReadOnlySelfRepairDiagnostics: metadata.previousReadOnlySelfRepairDiagnostics,
       sizeUnit: 'estimated UTF-16 bytes; not physical disk usage',
       taskMemoTotalUtf16Bytes,
       otherTotalUtf16Bytes,
@@ -604,7 +606,9 @@
         origin: location.origin,
         displayMode: navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser-or-unknown',
         recoveryObservation: recoveryObservation(window.sessionStorage),
-        selfRepairDiagnostics: selfRepairDiagnostics(window.sessionStorage),
+        selfRepairDiagnostics: selfRepairDiagnostics(window.sessionStorage) ?? selfRepairDiagnostics(window.localStorage),
+        previousReadOnlySelfRepairDiagnostics: selfRepairDiagnostics(window.localStorage, '@taskmemo/self-repair-read-only-evidence/v1') ??
+          selfRepairDiagnostics(window.sessionStorage, '@taskmemo/self-repair-read-only-evidence/v1'),
       };
       result.value = collect(window.localStorage, metadata);
       status.textContent = metadata.displayMode === 'standalone'

@@ -1,11 +1,12 @@
 /** Bounded, opt-in, same-JS-context evidence. Never stores Node title/body values. */
 export const SELF_REPAIR_DIAGNOSTICS_KEY = "@taskmemo/self-repair-diagnostics/v1";
+export const SELF_REPAIR_READ_ONLY_EVIDENCE_KEY = "@taskmemo/self-repair-read-only-evidence/v1";
 type RecordValue = { value: unknown; revision?: number; lastOpId?: string; lastDeviceId?: string;
   lastLocalSeq?: number; operationType?: string };
 type ReadMetadata = { fromCache?: boolean; hasPendingWrites?: boolean };
 type FieldDigest = { type: string; hash: string | null };
 type Comparison = {
-  target: string; conflictNodeId: string | null; detectedAt: string; outcome: string; differentFields: string[];
+  target: string; conflictNodeId: string | null; operationId: string | null; detectedAt: string; outcome: string; differentFields: string[];
   beforeFields: Record<string, FieldDigest>; afterFields: Record<string, FieldDigest>;
   beforeMetadata: Omit<RecordValue, "value"> | null; afterMetadata: Omit<RecordValue, "value"> | null;
   baselineMutatedInMemory: boolean | null; initialRead: ReadMetadata | null; transactionRead: ReadMetadata;
@@ -32,10 +33,26 @@ const canonical = (value: unknown): string => JSON.stringify(value, (_key, item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item) ?? "undefined";
 function persist() {
   if (!report) return;
-  try { if (typeof window !== "undefined") window.sessionStorage.setItem(SELF_REPAIR_DIAGNOSTICS_KEY, JSON.stringify(report)); }
-  catch { report.persistenceError = true; }
+  if (typeof window === "undefined") return;
+  const serialized = JSON.stringify(report);
+  try { window.sessionStorage.setItem(SELF_REPAIR_DIAGNOSTICS_KEY, serialized); } catch { /* Durable copy below. */ }
+  try { window.localStorage.setItem(SELF_REPAIR_DIAGNOSTICS_KEY, serialized); }
+  catch {
+    report.persistenceError = true;
+    if (!report.readOnly) throw new Error("自己修復診断を端末へ永続保存できません。Firebaseへの書き込みを停止しました。");
+  }
 }
 export function beginSelfRepairDiagnostics(localDeviceId: string, readOnly: boolean) {
+  if (!readOnly && typeof window !== "undefined") {
+    try {
+      const prior = window.sessionStorage.getItem(SELF_REPAIR_DIAGNOSTICS_KEY) ??
+        window.localStorage.getItem(SELF_REPAIR_DIAGNOSTICS_KEY);
+      if (prior && JSON.parse(prior)?.readOnly === true && JSON.parse(prior)?.status === "diagnosed") {
+        window.localStorage.setItem(SELF_REPAIR_READ_ONLY_EVIDENCE_KEY, prior);
+        try { window.sessionStorage.setItem(SELF_REPAIR_READ_ONLY_EVIDENCE_KEY, prior); } catch { /* Durable copy exists. */ }
+      }
+    } catch { throw new Error("読取専用診断の保存を確認できません。Firebaseへの書き込みを停止しました。"); }
+  }
   active = true; baselines.clear();
   report = { version: 1, build: process.env.EXPO_PUBLIC_BUILD_SHA ?? null,
     startedAt: new Date().toISOString(), endedAt: null, status: "running", readOnly, localDeviceId,
@@ -84,7 +101,7 @@ async function digest(value: unknown, exists: boolean): Promise<FieldDigest> {
   return { type, hash };
 }
 export async function recordRepairComparison(target: string, before: RecordValue | null, after: RecordValue | null,
-  outcome: string, transactionRead: ReadMetadata) {
+  outcome: string, transactionRead: ReadMetadata, operationId: string | null = null) {
   if (!active || !report) return;
   const capturedReport = report;
   const beforeValue = (before?.value ?? {}) as Record<string, unknown>;
@@ -105,7 +122,8 @@ export async function recordRepairComparison(target: string, before: RecordValue
       digest(beforeValue[field], Object.hasOwn(beforeValue, field)), digest(afterValue[field], Object.hasOwn(afterValue, field))]);
   }));
   if (report !== capturedReport) return;
-  const comparison: Comparison = { target, conflictNodeId: outcome === "conflict" && target.startsWith("node:") ? target.slice(5) : null, detectedAt, outcome, differentFields,
+  const comparison: Comparison = { target, conflictNodeId: outcome === "conflict" && target.startsWith("node:") ? target.slice(5) : null,
+    operationId, detectedAt, outcome, differentFields,
     beforeUserData, afterUserData,
     beforeFields, afterFields, beforeMetadata, afterMetadata, baselineMutatedInMemory,
     initialRead: baseline?.metadata ?? null, transactionRead,

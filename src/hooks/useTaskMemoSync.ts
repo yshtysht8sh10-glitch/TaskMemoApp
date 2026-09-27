@@ -308,11 +308,11 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     const persistence = persistenceRef.current, adapter = adapterRef.current, store = storeRef.current;
     if (repairRunningRef.current || !localRecoveryModeRef.current || !persistence || !adapter || !store) return;
     repairRunningRef.current = true;
-    beginSelfRepairDiagnostics(store.deviceId, diagnosticOnly);
     const generation = repairGenerationRef.current;
     setStatus("self-repairing"); setError(null); setSelfRepairProgress({ phase: "reading", completed: 0, total: 0 });
     controllerRef.current?.stop();
     try {
+      beginSelfRepairDiagnostics(store.deviceId, diagnosticOnly);
       await store.whenIdle();
       const result = await runSyncSelfRepair(persistence, adapter, setSelfRepairProgress, () => {
         if (generation !== repairGenerationRef.current) throw new Error("認証状態が変化したため自己修復を停止しました。");
@@ -335,7 +335,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       else
         appAlert("データの自己修復は完了しました", "Firebaseとの一致を確認しました。通常同期の再接続を待っています。データは端末に保存されています。");
     } catch (reason) {
-      finishSelfRepairDiagnostics("failed");
+      try { finishSelfRepairDiagnostics("failed"); } catch { /* Original failure remains visible. */ }
       repairRunningRef.current = false; setSelfRepairProgress(null);
       const stillLocal = await persistence.isLocalRecoveryMode().catch(() => true);
       localRecoveryModeRef.current = stillLocal;

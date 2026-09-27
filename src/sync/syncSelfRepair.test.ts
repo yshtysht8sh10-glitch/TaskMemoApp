@@ -22,7 +22,7 @@ function fixture(local: VersionedNode[], remote: VersionedNode[]) {
     history: { past: [], future: [] }, sync: { outbox: [{ opId: "new-local:1" }], seenOpIds: [] },
     profile: { pinnedNote: { localBody: "", synced: null, dirtySince: null, migrationPending: false },
       features: { localIdeasEnabled: false, synced: null, migrationPending: false } } });
-  let active = source, mode = true, writes = 0, failAfter = Infinity;
+  let active = source, mode = true, writes = 0, failAfter = Infinity, comparisons = 0;
   const server = new Map(remote.map((item) => [item.value.id, item]));
   const receipts = new Map<string, SyncOperation>();
   const persistence = {
@@ -44,6 +44,7 @@ function fixture(local: VersionedNode[], remote: VersionedNode[]) {
       canonicalSyncValue(receipts.get(op.opId)) === canonicalSyncValue(op)).length,
       missing: operations.filter((op) => !receipts.has(op.opId)).length }),
     convergeRecoveryTarget: async (request: RecoveryConvergenceRequest) => {
+      comparisons++;
       if (request.diagnosticOnly && request.targetType !== "node") return {};
       if (request.targetType !== "node") throw new Error("unexpected profile change");
       const current = server.get(request.targetNodeId);
@@ -64,7 +65,8 @@ function fixture(local: VersionedNode[], remote: VersionedNode[]) {
     },
   };
   return { persistence, adapter, server, receipts, source, get active() { return active; },
-    get mode() { return mode; }, get writes() { return writes; }, set failAfter(value: number) { failAfter = value; } };
+    get mode() { return mode; }, get writes() { return writes; }, get comparisons() { return comparisons; },
+    set failAfter(value: number) { failAfter = value; } };
 }
 
 describe("sync self repair", () => {
@@ -76,6 +78,16 @@ describe("sync self repair", () => {
     expect(state.active).toBe(state.source);
     expect(state.mode).toBe(true);
     expect(state.server.get("a")?.value.title).toBe("remote");
+  });
+  it("keeps the 159-target read-only path at zero writes", async () => {
+    const nodes = Array.from({ length: 157 }, (_, index) => record(`memo-${index}`, `memo ${index}`));
+    const state = fixture(nodes, nodes.map(node => structuredClone(node)));
+    await runSyncSelfRepair(state.persistence, state.adapter, undefined, undefined, true);
+    expect(state.comparisons).toBe(159);
+    expect(state.writes).toBe(0);
+    expect(state.receipts.size).toBe(0);
+    expect(state.active).toBe(state.source);
+    expect(state.mode).toBe(true);
   });
   it("investigation: canonical comparison ignores object key order but retains semantic and representation differences", () => {
     expect(canonicalSyncValue({ title: "a", body: "b" })).toBe(canonicalSyncValue({ body: "b", title: "a" }));

@@ -139,7 +139,7 @@ export function createFirebaseSyncAdapter(
           const baselineMismatch = canonicalSyncValue(current?.value ?? null) !== canonicalSyncValue(request.observed?.value ?? null);
           await recordRepairComparison(`${request.targetType}:${targetNodeId}`, request.observed, current ?? null,
             alreadyDesired ? "already-desired" : baselineMismatch ? "conflict" : "baseline-match", {
-              fromCache: snapshot.metadata?.fromCache, hasPendingWrites: snapshot.metadata?.hasPendingWrites });
+              fromCache: snapshot.metadata?.fromCache, hasPendingWrites: snapshot.metadata?.hasPendingWrites }, opId);
           if (alreadyDesired) return {};
           if (baselineMismatch) {
             if (selfRepairDiagnosticsActive() && current?.lastOpId && !current.lastOpId.includes("/")) {

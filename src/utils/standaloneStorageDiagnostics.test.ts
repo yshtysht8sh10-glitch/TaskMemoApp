@@ -45,6 +45,22 @@ it('exports self-repair comparison hashes and counters without raw user fields',
   expect(fixture.writes).not.toHaveBeenCalled();
 });
 
+it('exports the preserved read-only report alongside the failed write-run operation ID', () => {
+  const current = JSON.stringify({ version: 1, status: 'failed', readOnly: false,
+    conflict: { target: 'node:n', conflictNodeId: 'n', operationId: 'repair:2',
+      differentFields: ['title'], beforeUserData: { type: 'object', hash: 'a'.repeat(64) },
+      afterUserData: { type: 'object', hash: 'b'.repeat(64) }, beforeMetadata: { revision: 4 },
+      afterMetadata: { revision: 5 } }, counters: { normalUploadAttempt: 0, listenerReceived: 0, outboxGenerated: 0 } });
+  const prior = JSON.stringify({ version: 1, status: 'diagnosed', readOnly: true, comparisons: 159, conflict: null });
+  const fixture = launch({ '@taskmemo/self-repair-diagnostics/v1': current,
+    '@taskmemo/self-repair-read-only-evidence/v1': prior });
+  fixture.handlers.get('measure')!();
+  const result = JSON.parse(fixture.result.value);
+  expect(result.selfRepairDiagnostics.conflict).toMatchObject({ conflictNodeId: 'n', operationId: 'repair:2' });
+  expect(result.previousReadOnlySelfRepairDiagnostics).toMatchObject({ comparisons: 159, readOnly: true });
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
 it('is a separate static page with only its diagnostic script', () => {
   expect(html).toContain('ローカルデータを復旧して使用を再開');
   expect(html).not.toContain('id="execute-recovery"');
