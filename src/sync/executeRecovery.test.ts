@@ -90,6 +90,10 @@ describe("guarded recovery execution", () => {
       plannedOperationCount: 2 });
     expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).toBeNull();
     expect(JSON.stringify([...fixture.remote])).toBe(remoteBeforePreflight);
+    const approvedCounts = { journalNodeCount: 1, remoteNodeCount: 2,
+      candidateNodeCount: 2, originalOutboxCount: 1,
+      originalReceiptReceivedCount: 1, plannedOperationCount: 2,
+      approvalFingerprint: diagnostic.approvalFingerprint };
     const acknowledgements = new Map<string, ReturnType<typeof applyRevisionOperation>>();
     let failOnce = true;
     const uploaded: string[] = [];
@@ -107,21 +111,31 @@ describe("guarded recovery execution", () => {
       return acknowledgement;
     });
     await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
-      "account", fixture.legacy)).rejects.toThrow("interrupted");
+      "account", fixture.legacy, undefined, approvedCounts)).rejects.toThrow("interrupted");
     expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
     expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).not.toBeNull();
     const result = await executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
-      "account", fixture.legacy);
+      "account", fixture.legacy, undefined, approvedCounts);
     expect(result).toMatchObject({ receiptReceivedCount: 1, receiptSkippedOriginalCount: 1,
-      originalOutboxClearedCount: 1, candidateNodeCount: 2 });
+      preservedOriginalOutboxCount: 1, recoveryReceiptReceivedCount: 2,
+      candidateNodeCount: 2 });
     expect(uploaded).toHaveLength(4);
     expect(fixture.remote.get("n0")?.value.title).toBe(journalNode.value.title);
     expect(fixture.remote.get("n0")?.revision).toBe(9);
     expect(fixture.remote.get("extra")?.value.title).toBe("⭐⭐⭐private-extra");
     expect(await fixture.persistence.loadJournal()).toBeNull();
-    expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).toBeNull();
+    expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).not.toBeNull();
+    expect(await fixture.persistence.loadPreservedRecoveryEvidence()).toMatchObject({
+      journal: fixture.journal, committed: fixture.initial,
+    });
     expect(JSON.parse((await fixture.persistence.loadCommitted())!).sync.outbox).toEqual([]);
     expect(await fixture.legacy.loadJournal()).toBe(fixture.journal);
+    const reopened = await TaskMemoV2ApplicationStore.open(
+      await IndexedDbTaskMemoApplicationJournal.open("account", fixture.factory, { allowLegacyCopy: false }),
+      [], { deviceId: "ignored" });
+    expect(reopened.nodes).toHaveLength(2);
+    expect(reopened.outbox).toHaveLength(0);
+    expect((await fixture.persistence.loadPreservedRecoveryEvidence()).journal).toBe(fixture.journal);
   });
 
   it("refuses a changed original Receipt identity even when the received count stays the same", async () => {
@@ -137,6 +151,56 @@ describe("guarded recovery execution", () => {
     await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
       "account", fixture.legacy)).rejects.toThrow("Original Outbox receipts changed");
     expect(fixture.adapter.upload).toHaveBeenCalledTimes(1);
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+  });
+
+  it("records a partial real execution and preserves the old journal after the second upload fails", async () => {
+    const fixture = await setup(2);
+    const observed = progress();
+    let calls = 0;
+    fixture.adapter.upload = vi.fn(async (op, expected) => {
+      if (++calls === 2) throw { code: "permission-denied" };
+      const actual = applyRevisionOperation(fixture.remote.get(op.targetNodeId), op);
+      expect(actual).toEqual(expected);
+      fixture.remote.set(op.targetNodeId, actual.record!);
+      fixture.receipts.add(op.opId);
+      return actual;
+    });
+    await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy, observed.update)).rejects.toMatchObject({ code: "permission-denied" });
+    expect(observed.state).toMatchObject({ status: "failed", totalOperations: 2,
+      uploadAttemptedCount: 2, uploadSucceededCount: 1, uploadFailedCount: 1,
+      failedOperationIndex: 1, lastSuccessfulOperationIndex: 0, failurePhase: "upload",
+      failureReason: "permission-denied", postExecutionReceiptReceivedCount: 1,
+      postExecutionReceiptAuditCompleted: true });
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+    expect(await fixture.legacy.loadJournal()).toBe(fixture.journal);
+    expect(await fixture.persistence.loadAuthoritativeRecoveryPlan()).not.toBeNull();
+  });
+
+  it("refuses changed approved preflight counts before upload", async () => {
+    const fixture = await setup();
+    fixture.adapter.upload = vi.fn();
+    await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy, undefined, { journalNodeCount: 151, remoteNodeCount: 151,
+        candidateNodeCount: 152, originalOutboxCount: 1024,
+        originalReceiptReceivedCount: 13, plannedOperationCount: 64 })).rejects.toThrow("approved iPhone preflight counts");
+    expect(fixture.adapter.upload).not.toHaveBeenCalled();
+    expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
+  });
+
+  it("refuses a changed remote with the same counts as the approved preflight", async () => {
+    const fixture = await setup();
+    const approved = await preflightJournalAuthoritativeRecovery(fixture.persistence,
+      fixture.adapter, "account", fixture.legacy);
+    fixture.remote.set("other", node("other", "a9"));
+    fixture.adapter.upload = vi.fn();
+    await expect(executeJournalAuthoritativeRecovery(fixture.persistence, fixture.adapter,
+      "account", fixture.legacy, undefined, { journalNodeCount: 1, remoteNodeCount: 1,
+        candidateNodeCount: 2, originalOutboxCount: 1,
+        originalReceiptReceivedCount: 0, plannedOperationCount: 1,
+        approvalFingerprint: approved.approvalFingerprint })).rejects.toThrow("approved iPhone preflight");
+    expect(fixture.adapter.upload).not.toHaveBeenCalled();
     expect(await fixture.persistence.loadJournal()).toBe(fixture.journal);
   });
 

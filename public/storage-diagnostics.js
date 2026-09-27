@@ -134,6 +134,10 @@
           errorCode: safeCode(execution.errorCode),
           errorMessage: safeErrorMessages.has(execution.errorMessage) ? execution.errorMessage : null,
           failureReason: failureReasons.has(execution.failureReason) ? execution.failureReason : null,
+          postRecoveryRemoteNodeCount: count(execution.postRecoveryRemoteNodeCount),
+          postRecoveryCandidateDifferenceCount: count(execution.postRecoveryCandidateDifferenceCount),
+          preservedJournal: execution.preservedJournal === true,
+          preservedOriginalOutboxCount: count(execution.preservedOriginalOutboxCount),
           preExecutionReceiptReceivedCount: count(execution.preExecutionReceiptReceivedCount),
           preExecutionReceiptMissingCount: count(execution.preExecutionReceiptMissingCount),
           postExecutionReceiptReceivedCount: count(execution.postExecutionReceiptReceivedCount),
@@ -552,6 +556,30 @@
   }
   const result = document.getElementById('result');
   const status = document.getElementById('status');
+  const execute = document.getElementById('execute-recovery');
+  const resume = document.getElementById('resume-recovery');
+  const approvedPreview = () => {
+    const approval = window.sessionStorage && window.sessionStorage.getItem('@taskmemo/journal-authoritative-preflight-approval/v1');
+    const report = recoveryObservation(window.sessionStorage).journalAuthoritativePreflight;
+    return typeof approval === 'string' && /^[a-f0-9]{64}$/.test(approval) &&
+      report && report.status === 'safe' && report.journalNodeCount === 151 &&
+      report.remoteNodeCount === 151 && report.candidateNodeCount === 152 &&
+      report.originalOutboxCount === 1024 && report.originalReceiptReceivedCount === 13 &&
+      report.plannedOperationCount === 64 && report.duplicateActiveSortKeyGroupCount === 0 &&
+      report.nonSortKeyJournalDifferenceNodeCount === 0 && report.blockReasons.length === 0;
+  };
+  if (execute) execute.addEventListener('click', function () {
+    if (!approvedPreview()) { status.textContent = '直近の安全なpreflight結果がありません。再実行してください。'; return; }
+    if (!window.confirm || !window.confirm('Firebaseへ新規64 operationを書き込みます。元のjournalと旧Outboxは保全します。開始しますか？')) return;
+    location.assign('/?journalAuthoritativeExecute=1');
+  });
+  if (resume) resume.addEventListener('click', function () {
+    const progress = recoveryObservation(window.sessionStorage).execution;
+    if (!progress || progress.status !== 'failed' || progress.totalOperations !== 64 ||
+        progress.uploadAttemptedCount < 1) return;
+    if (!window.confirm || !window.confirm('保存済み計画とReceiptを再検証してRecoveryを再開しますか？')) return;
+    location.assign('/?journalAuthoritativeExecute=1');
+  });
   document.getElementById('measure').addEventListener('click', function () {
     try {
       const metadata = {
@@ -562,6 +590,11 @@
         recoveryObservation: recoveryObservation(window.sessionStorage),
       };
       result.value = collect(window.localStorage, metadata);
+      if (execute) execute.disabled = !approvedPreview();
+      if (resume) resume.disabled = !(metadata.recoveryObservation.execution &&
+        metadata.recoveryObservation.execution.status === 'failed' &&
+        metadata.recoveryObservation.execution.totalOperations === 64 &&
+        metadata.recoveryObservation.execution.uploadAttemptedCount >= 1);
       status.textContent = metadata.displayMode === 'standalone'
         ? '読み取り完了。結果を確認してからコピーしてください。'
         : '読み取り完了。ただしSafari側の保存領域かもしれません。問題のPWA内で開いたか確認してください。';

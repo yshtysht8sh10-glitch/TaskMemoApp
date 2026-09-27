@@ -18,6 +18,9 @@ type StoredScope = {
   recoveryCompleted?: boolean;
   /** Crash-safe, immutable execution plan. The original journal remains untouched. */
   authoritativeRecoveryPlan?: string;
+  /** Exact pre-recovery WAL, retained after active state is normalized. */
+  preservedRecoveryJournal?: string;
+  preservedRecoveryCommitted?: string;
 };
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -150,6 +153,12 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
   async loadJournal() { return (await this.read())?.journal ?? null; }
   async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }
   async loadAuthoritativeRecoveryPlan() { return (await this.read())?.authoritativeRecoveryPlan ?? null; }
+  async loadPreservedRecoveryEvidence() {
+    const stored = await this.read();
+    return { journal: stored?.preservedRecoveryJournal ?? null,
+      committed: stored?.preservedRecoveryCommitted ?? null,
+      plan: stored?.authoritativeRecoveryPlan ?? null };
+  }
   async saveAuthoritativeRecoveryPlan(expectedCommitted: string, expectedJournal: string, planRaw: string) {
     JSON.parse(planRaw);
     await this.update((current) => {
@@ -184,7 +193,8 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
           current.authoritativeRecoveryPlan !== expectedPlanRaw || current.recoveryCompleted)
         throw new Error("復旧確定前にローカル状態が変化しました。");
       objectStore.put({ ...current, committed: recoveredCommitted, journal: null,
-        recoveryCompleted: true, authoritativeRecoveryPlan: undefined });
+        preservedRecoveryJournal: expectedJournal, preservedRecoveryCommitted: expectedCommitted,
+        recoveryCompleted: true });
       await done;
     } catch (reason) {
       try { transaction.abort(); } catch { /* Transaction may have settled. */ }

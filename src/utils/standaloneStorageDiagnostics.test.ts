@@ -41,7 +41,8 @@ it('does not automatically execute recovery when the guarded journal exists', ()
   expect(syncHook).toContain('journalAuthoritativePreflight');
   expect(syncHook).toContain('preflightJournalAuthoritativeRecovery(persistence, adapter, scope)');
   expect(syncHook).not.toContain('executeJournalRecovery(');
-  expect(syncHook).not.toContain('executeJournalAuthoritativeRecovery(');
+  expect(syncHook).toContain('if (manualAuthoritativeExecution) {');
+  expect(syncHook).toContain('if (!manualAuthoritativePreflight && !manualAuthoritativeExecution) {');
   expect(syncHook).not.toContain('adapter.upload(');
 });
 

@@ -25,6 +25,10 @@ export type RecoveryExecutionObservation = {
   transactionStartedCount: number; transactionSucceededCount: number; transactionFailedCount: number;
   receiptExistingCount: number; receiptCreatedCount: number; nodeWriteCount: number;
   serverWinnerNoWriteCount: number;
+  postRecoveryRemoteNodeCount: number | null;
+  postRecoveryCandidateDifferenceCount: number | null;
+  preservedJournal: boolean;
+  preservedOriginalOutboxCount: number | null;
 };
 
 const initialExecution = (): RecoveryExecutionObservation => ({
@@ -40,6 +44,8 @@ const initialExecution = (): RecoveryExecutionObservation => ({
   transactionStartedCount: 0, transactionSucceededCount: 0, transactionFailedCount: 0,
   receiptExistingCount: 0, receiptCreatedCount: 0, nodeWriteCount: 0,
   serverWinnerNoWriteCount: 0,
+  postRecoveryRemoteNodeCount: null, postRecoveryCandidateDifferenceCount: null,
+  preservedJournal: false, preservedOriginalOutboxCount: null,
 });
 
 export type RecoveryObservation = {
