@@ -49,7 +49,7 @@ describe("TaskMemo V2 application store", () => {
     expect(store.nodes).toHaveLength(56);
   });
 
-  it("repairs a received invalid key once without updating the valid sibling group", async () => {
+  it("does not turn a remote invalid key into a normal local update", async () => {
     const keys = generateNKeysBetween(null, null, 54);
     const initial = keys.map((sortKey, index): Node => ({
       id: `category-${index}`, type: "category", parentId: null, sortKey, title: `C${index}`,
@@ -61,12 +61,12 @@ describe("TaskMemo V2 application store", () => {
       revision: 0, lastOpId: "remote:1", lastDeviceId: "remote", lastLocalSeq: 1, operationType: "import",
     };
     await store.receive(incoming);
-    expect(store.outbox.map((operation) => operation.targetNodeId)).toEqual(["remote-invalid"]);
+    expect(store.outbox).toHaveLength(0);
     await store.receive(incoming);
-    expect(store.outbox.map((operation) => operation.targetNodeId)).toEqual(["remote-invalid"]);
+    expect(store.outbox).toHaveLength(0);
   });
 
-  it("limits repeated remote duplicate-key arrivals to one repair per conflicting Node", async () => {
+  it("does not amplify repeated remote duplicate-key arrivals into Outbox writes", async () => {
     const seed: Node = { id: "seed", type: "category", parentId: null, sortKey: "a0", title: "seed", createdAt: at(0), updatedAt: at(0), deletedAt: null };
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [seed], { deviceId: "device-a" });
     for (let index = 0; index < 54; index++) {
@@ -81,11 +81,13 @@ describe("TaskMemo V2 application store", () => {
       await store.receive(incoming);
       expect(store.outbox.length - before).toBeLessThanOrEqual(1);
     }
-    expect(store.outbox).toHaveLength(54);
-    expect(new Set(store.nodes.map((node) => node.sortKey)).size).toBe(55);
+    // Remote snapshots are preserved as received; a later explicit local command
+    // or self-repair may resolve duplicates without listener feedback writes.
+    expect(store.outbox).toHaveLength(0);
+    expect(new Set(store.nodes.map((node) => node.sortKey)).size).toBe(1);
   });
 
-  it("converges concurrent same-rank creates from two devices with bounded repair", async () => {
+  it("does not create a listener feedback loop for concurrent same-rank creates", async () => {
     const seed: Node = { id: "seed", type: "category", parentId: null, sortKey: "a0", title: "seed", createdAt: at(0), updatedAt: at(0), deletedAt: null };
     const a = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [seed], { deviceId: "device-a" });
     const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [seed], { deviceId: "device-b" });
@@ -104,7 +106,8 @@ describe("TaskMemo V2 application store", () => {
       await b.receive(ack.record!);
     }
     expect(a.nodes.map((node) => [node.id, node.sortKey]).sort()).toEqual(b.nodes.map((node) => [node.id, node.sortKey]).sort());
-    expect(new Set(a.nodes.map((node) => node.sortKey)).size).toBe(3);
+    expect(repairs).toHaveLength(0);
+    expect(new Set(a.nodes.map((node) => node.sortKey)).size).toBe(2);
   });
 
   it("uses deterministic feature revisions, suppresses duplicate/self echo, and never touches History", async () => {

@@ -25,9 +25,9 @@ const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sort
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
-  it("investigation: stop does not cancel an already running normal upload loop", async () => {
+  it("stop prevents every subsequent upload after the in-flight operation settles", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
-    await store.command("create", "create", () => [{ ...memo(), sortKey: "a0" }, { ...memo(), id: "memo-b", sortKey: "a1" }]);
+    await store.command("create", "create", () => [{ ...memo(), sortKey: "a0" }, { ...memo(), id: "memo-b", sortKey: "a1" }, { ...memo(), id: "memo-c", sortKey: "a2" }]);
     const adapter = new ListenerAdapter();
     let release!: () => void;
     adapter.auditOutbox = async operations => ({ received: 0, missing: operations.length });
@@ -40,7 +40,32 @@ describe("V2 listener controller", () => {
     const flushing = controller.start();
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     controller.stop(); release(); await flushing;
-    // Characterization of the existing cancellation gap; not a desired invariant.
+    expect(adapter.uploads.map(op => op.targetNodeId)).toEqual(["memo-a"]);
+    expect(store.outbox.map(op => op.targetNodeId)).toEqual(["memo-b", "memo-c"]);
+  });
+  it("start after stop waits for the old in-flight upload and never runs two loops", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
+    await store.command("create", "create", () => [{ ...memo(), sortKey: "a0" }, { ...memo(), id: "memo-b", sortKey: "a1" }]);
+    const adapter = new ListenerAdapter();
+    adapter.auditOutbox = async operations => ({ received: 0, missing: operations.length });
+    const original = adapter.upload.bind(adapter);
+    let release!: () => void;
+    let active = 0;
+    let maxActive = 0;
+    adapter.upload = async operation => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      if (operation.targetNodeId === "memo-a") await new Promise<void>(resolve => { release = resolve; });
+      try { return await original(operation); } finally { active--; }
+    };
+    const controller = new TaskMemoV2SyncController(store, adapter);
+    const oldStart = controller.start();
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    controller.stop();
+    const newStart = controller.start();
+    release();
+    await Promise.all([oldStart, newStart]);
+    expect(maxActive).toBe(1);
     expect(adapter.uploads.map(op => op.targetNodeId)).toEqual(["memo-a", "memo-b"]);
   });
   it("keeps local-only edits durable without connecting, listening, auditing, or uploading after restart", async () => {
@@ -123,7 +148,7 @@ describe("V2 listener controller", () => {
     expect(store.pinnedNote.body).toBe("legacy");
     expect(adapter.uploads.some((operation) => operation.targetType === "pinnedNote" && (operation.payload.pinnedNote as { body?: string })?.body === "legacy")).toBe(true);
   });
-  it("repairs and uploads an invalid remote sort key instead of retaining it authoritatively", async () => {
+  it("does not upload a remote-origin sortKey correction as a user edit", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
     const root = provisionedRoutineRoot();
     const incoming: VersionedNode = { value: nodeToV2Value(root), revision: 0, lastOpId: "legacy-root", lastDeviceId: "migration", lastLocalSeq: 0, operationType: "import" };
@@ -132,10 +157,10 @@ describe("V2 listener controller", () => {
     const controller = new TaskMemoV2SyncController(store, adapter);
 
     await controller.start();
-    await vi.waitFor(() => expect(adapter.uploads.some((operation) => operation.targetNodeId === "system-routine")).toBe(true));
-
-    expect(store.nodes[0].sortKey).not.toBe("zzzz");
-    expect(adapter.server.get("system-routine")?.value.sortKey).not.toBe("zzzz");
+    await vi.waitFor(() => expect(store.nodes.some(node => node.id === "system-routine")).toBe(true));
+    expect(adapter.uploads).toHaveLength(0);
+    expect(store.nodes[0].sortKey).toBe("zzzz");
+    expect(adapter.server.get("system-routine")?.value.sortKey).toBe("zzzz");
   });
 
   it("keeps a UI-created memo durable after receiving the provisioned RC routine root", async () => {
@@ -143,13 +168,14 @@ describe("V2 listener controller", () => {
     const store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "device-a" });
     const root = provisionedRoutineRoot();
     await store.receive({ value: nodeToV2Value(root), revision: 0, lastOpId: "migration:v2-rc-20260919:system-routine", lastDeviceId: "migration:v2-rc-20260919", lastLocalSeq: 0, operationType: "import" });
-    expect(store.nodes[0].sortKey).not.toBe("zzzz");
-    expect(store.outbox).toHaveLength(1);
+    expect(store.nodes[0].sortKey).toBe("zzzz");
+    expect(store.outbox).toHaveLength(0);
     let applicationNodes = store.nodes;
     const adapter = new ListenerAdapter();
     const controller = new TaskMemoV2SyncController(store, adapter, () => {
       applicationNodes = store.nodes;
     });
+    await controller.start();
 
     await controller.command("Nodeを作成", "create", (nodes) =>
       createNode(nodes, "memo", { title: "new memo", parentId: null }, new Date("2026-09-19T05:52:50.700Z"), "memo-new"),

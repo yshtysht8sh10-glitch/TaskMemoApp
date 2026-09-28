@@ -60,6 +60,28 @@ it('exports the preserved read-only report alongside the failed write-run operat
   expect(result.previousReadOnlySelfRepairDiagnostics).toMatchObject({ comparisons: 159, readOnly: true });
   expect(fixture.writes).not.toHaveBeenCalled();
 });
+it('exports repair lock, final verification and bounded sortKey counters without raw values', () => {
+  const fixture = launch({ '@taskmemo/sort-key-diagnostics/v1': JSON.stringify({ normalizationPassCount: 2,
+    scannedNodeCount: 110, alreadyNormalizedNodeCount: 109, changedNodeCount: 1,
+    generatedOperationCount: 0, suppressedNoOpOperationCount: 109,
+    remoteOriginSuppressedCount: 1, maxChangedNodesPerPass: 1, maxGeneratedOperationsPerPass: 0,
+    passes: [{ trigger: 'remote-listener', scannedCount: 55, changedCount: 1,
+      generatedOperationCount: 0, suppressedCount: 54, durationMs: 1, title: 'PRIVATE' }] }),
+  }, { '@taskmemo/self-repair-diagnostics/v1': JSON.stringify({ repairLockAcquired: true,
+    repairLockType: 'firestore-lease+rules', normalWriteDuringRepairCount: 0,
+    selfRepairVerification: { status: 'verification-failed', differenceCount: 1,
+      localAuthoritativeNodeCount: 151, remoteNodeCount: 152, differentNodeIds: ['n'],
+      differences: [{ nodeId: 'n', differentFields: ['sortKey'], localHash: 'a'.repeat(64),
+        remoteHash: 'b'.repeat(64), body: 'PRIVATE' }], serverRead: true } }) });
+  fixture.handlers.get('measure')!();
+  const result = JSON.parse(fixture.result.value);
+  expect(result.selfRepairDiagnostics.selfRepairVerification).toMatchObject({ status: 'verification-failed',
+    differenceCount: 1, serverRead: true });
+  expect(result.sortKeyDiagnostics).toMatchObject({ normalizationPassCount: 2,
+    remoteOriginSuppressedCount: 1, generatedOperationCount: 0 });
+  expect(fixture.result.value).not.toContain('PRIVATE');
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
 
 it('is a separate static page with only its diagnostic script', () => {
   expect(html).toContain('ローカルデータを復旧して使用を再開');

@@ -12,6 +12,7 @@
     ['@taskmemo/sync-v2/application/v1', 'foundation-committed'],
     ['@taskmemo/sync-v2/application-journal/v1', 'foundation-journal'],
     ['@taskmemo/sync-outbox/v1', 'foundation-outbox'],
+    ['@taskmemo/sort-key-diagnostics/v1', 'sort-key-diagnostics'],
   ]);
   const scoped = [
     ['@taskmemo/sync-v2/taskmemo-application/v2/', 'v2-committed'],
@@ -77,7 +78,25 @@
         initialRead: read(c.initialRead), transactionRead: read(c.transactionRead),
         lastSuccessfulRepairOperationId: text(c.lastSuccessfulRepairOperationId) }; };
       const actor = object(saved.actorReceipt);
+      const verification = object(saved.selfRepairVerification);
       return { version: saved.version, build: text(saved.build), startedAt: text(saved.startedAt), endedAt: text(saved.endedAt),
+        repairLockAcquired: saved.repairLockAcquired === true, repairLockType: text(saved.repairLockType),
+        repairLockOwner: text(saved.repairLockOwner), repairLockAcquiredAt: text(saved.repairLockAcquiredAt),
+        repairLockReleasedAt: text(saved.repairLockReleasedAt),
+        normalUploadBlockedByRepairCount: count(saved.normalUploadBlockedByRepairCount),
+        normalOperationGenerationBlockedByRepairCount: count(saved.normalOperationGenerationBlockedByRepairCount),
+        normalWriteDuringRepairCount: count(saved.normalWriteDuringRepairCount),
+        inFlightNormalWritesAtRepairStart: count(saved.inFlightNormalWritesAtRepairStart),
+        waitedForNormalWritesCount: count(saved.waitedForNormalWritesCount),
+        otherContextRepairLockObservedCount: count(saved.otherContextRepairLockObservedCount),
+        selfRepairVerification: saved.selfRepairVerification ? {
+          status: text(verification.status), localAuthoritativeNodeCount: count(verification.localAuthoritativeNodeCount),
+          remoteNodeCount: count(verification.remoteNodeCount), differenceCount: count(verification.differenceCount),
+          differentNodeIds: array(verification.differentNodeIds).slice(0, 50).map(text),
+          differences: array(verification.differences).slice(0, 20).map(item => ({
+            nodeId: text(item.nodeId), differentFields: array(item.differentFields).slice(0, 40).map(text),
+            localHash: text(item.localHash), remoteHash: text(item.remoteHash) })),
+          verifiedAt: text(verification.verifiedAt), serverRead: verification.serverRead === true } : null,
         actorReceipt: saved.actorReceipt ? { status: text(actor.status), operationId: text(actor.operationId), deviceId: text(actor.deviceId),
           localSeq: count(actor.localSeq), baseRevision: count(actor.baseRevision), operationType: text(actor.operationType),
           producerType: text(actor.producerType), acknowledgedValueMatchesCurrent: typeof actor.acknowledgedValueMatchesCurrent === 'boolean' ? actor.acknowledgedValueMatchesCurrent : null } : null,
@@ -87,6 +106,28 @@
         lastSuccessfulRepairOperationId: text(saved.lastSuccessfulRepairOperationId), comparisons: count(saved.comparisons),
         conflict: comparison(saved.conflict), differences: array(saved.differences).slice(-8).map(comparison),
         lastComparison: comparison(saved.lastComparison), persistenceError: saved.persistenceError === true };
+    } catch { return { status: 'unreadable' }; }
+  }
+  function sortKeyDiagnostics(storage) {
+    try {
+      const raw = storage && storage.getItem('@taskmemo/sort-key-diagnostics/v1');
+      if (!raw || raw.length > 30000) return null;
+      const saved = object(JSON.parse(raw));
+      const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+      const pass = value => { const p = object(value); return {
+        trigger: typeof p.trigger === 'string' ? p.trigger.slice(0, 30) : null,
+        startedAt: typeof p.startedAt === 'string' ? p.startedAt.slice(0, 40) : null,
+        scannedCount: count(p.scannedCount), changedCount: count(p.changedCount),
+        generatedOperationCount: count(p.generatedOperationCount), suppressedCount: count(p.suppressedCount),
+        durationMs: count(p.durationMs) }; };
+      return { normalizationPassCount: count(saved.normalizationPassCount),
+        scannedNodeCount: count(saved.scannedNodeCount), alreadyNormalizedNodeCount: count(saved.alreadyNormalizedNodeCount),
+        changedNodeCount: count(saved.changedNodeCount), generatedOperationCount: count(saved.generatedOperationCount),
+        suppressedNoOpOperationCount: count(saved.suppressedNoOpOperationCount),
+        remoteOriginSuppressedCount: count(saved.remoteOriginSuppressedCount),
+        maxChangedNodesPerPass: count(saved.maxChangedNodesPerPass),
+        maxGeneratedOperationsPerPass: count(saved.maxGeneratedOperationsPerPass),
+        passes: array(saved.passes).slice(-32).map(pass) };
     } catch { return { status: 'unreadable' }; }
   }
   function recoveryObservation(storage) {
@@ -580,6 +621,7 @@
       firebaseReceiptComparison: 'not-performed',
       recoveryObservation: metadata.recoveryObservation,
       selfRepairDiagnostics: metadata.selfRepairDiagnostics,
+      sortKeyDiagnostics: metadata.sortKeyDiagnostics,
       previousReadOnlySelfRepairDiagnostics: metadata.previousReadOnlySelfRepairDiagnostics,
       sizeUnit: 'estimated UTF-16 bytes; not physical disk usage',
       taskMemoTotalUtf16Bytes,
@@ -607,6 +649,7 @@
         displayMode: navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser-or-unknown',
         recoveryObservation: recoveryObservation(window.sessionStorage),
         selfRepairDiagnostics: selfRepairDiagnostics(window.sessionStorage) ?? selfRepairDiagnostics(window.localStorage),
+        sortKeyDiagnostics: sortKeyDiagnostics(window.localStorage),
         previousReadOnlySelfRepairDiagnostics: selfRepairDiagnostics(window.localStorage, '@taskmemo/self-repair-read-only-evidence/v1') ??
           selfRepairDiagnostics(window.sessionStorage, '@taskmemo/self-repair-read-only-evidence/v1'),
       };

@@ -1,5 +1,5 @@
 import { deleteApp, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { MemoNode, Node } from '../../src/models/node.js';
@@ -54,6 +54,13 @@ describe.runIf(enabled)('External AI V2 Firestore repository', () => {
     expect(nodes.size).toBe(1); expect(nodes.docs[0].data().record.revision).toBe(1);
     expect(operations.size).toBe(1); expect(operations.docs[0].data()).toMatchObject({ ownerUid: uid, schemaVersion: 2, producerType: 'externalAI', acknowledgement: { result: 'applied' } });
     expect(requests.size).toBe(1);
+  });
+
+  it('blocks Admin SDK AI writes while a self-repair lease is active', async () => {
+    await db.doc(`users/${uid}/syncMetadataV2/repairLock`).set({ owner: 'sync-self-repair-test', expiresAt: Timestamp.fromMillis(Date.now() + 90_000) });
+    await expect(service.createMemo(user, { requestId: requestId(10), title: 'blocked' })).rejects.toThrow('同期自己修復中');
+    expect((await db.collection(`users/${uid}/nodesV2`).get()).size).toBe(0);
+    expect((await db.collection(`users/${uid}/syncOperationsV2`).get()).size).toBe(0);
   });
 
   it('rejects a stale AI update after another producer advanced the revision', async () => {

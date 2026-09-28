@@ -1,5 +1,5 @@
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, Timestamp, type Firestore } from "firebase/firestore";
+import { doc, getDoc, runTransaction, setDoc, Timestamp, type Firestore } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
@@ -75,6 +75,7 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
       lastOpId: "old:7", lastDeviceId: "old", lastLocalSeq: 7, operationType: "update" as const };
     await setDoc(doc(db, "users/owner/nodesV2/self-repair-node"),
       { ownerUid: "owner", schemaVersion: 2, record: prior });
+    await adapter.withExclusiveRepair!("sync-self-repair-emulator", async () => {
     const result = await adapter.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "self-repair-node",
       desired: { ...prior.value, title: "local" }, observed: prior,
       identity: { deviceId: "sync-self-repair-emulator", localSeq: 1,
@@ -89,6 +90,61 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
       identity: { deviceId: "sync-self-repair-emulator", localSeq: 1,
         createdAt: "2026-09-27T00:00:00.000Z" } });
     expect(again.operation?.opId).toBe(result.operation?.opId);
+    });
+  });
+
+  it("server repair lease blocks an old-context direct write and a second repair owner", async () => {
+    const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });
+    const other = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });
+    const ref = doc(db, "users/owner/nodesV2/lock-node");
+    const prior = { value: { id: "lock-node", type: "memo", parentId: null,
+      title: "before", sortKey: "a0", deletedAt: null }, revision: 1,
+      lastOpId: "normal:1", lastDeviceId: "normal", lastLocalSeq: 1, operationType: "update" as const };
+    await setDoc(ref, { ownerUid: "owner", schemaVersion: 2, record: prior });
+    beginSelfRepairDiagnostics("local", false);
+    await adapter.withExclusiveRepair!("sync-self-repair-lock-test", async () => {
+      await assertFails(setDoc(ref, { ownerUid: "owner", schemaVersion: 2,
+        record: { ...prior, revision: 2, lastOpId: "old-build:2", lastDeviceId: "old-build", lastLocalSeq: 2 } }));
+      const normal: SyncOperation = { opId: "normal:2", deviceId: "normal", localSeq: 2,
+        targetNodeId: "lock-node", type: "update", baseRevision: 1, payload: { node: prior.value },
+        createdAt: new Date().toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null };
+      await expect(other.upload(normal)).rejects.toBeTruthy();
+      await expect(other.withExclusiveRepair!("sync-self-repair-other", async () => undefined)).rejects.toBeTruthy();
+      const result = await adapter.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "lock-node",
+        desired: { ...prior.value, title: "repaired" }, observed: prior,
+        identity: { deviceId: "sync-self-repair-lock-test", localSeq: 1, createdAt: new Date().toISOString() } });
+      expect(result.acknowledgement?.result).toBe("applied");
+      expect(getSelfRepairDiagnostics()).toMatchObject({ repairLockAcquired: true,
+        normalUploadBlockedByRepairCount: 1, normalWriteDuringRepairCount: 0 });
+    });
+    finishSelfRepairDiagnostics("completed");
+    expect((await getDoc(ref)).data()?.record.value.title).toBe("repaired");
+    expect((await getDoc(doc(db, "users/owner/syncMetadataV2/repairLock"))).exists()).toBe(false);
+  });
+  it("an old transaction begun before repair cannot commit after the server lease", async () => {
+    const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });
+    const ref = doc(db, "users/owner/nodesV2/in-flight-node");
+    const prior = { value: { id: "in-flight-node", type: "memo", parentId: null, title: "before", sortKey: "a0" },
+      revision: 1, lastOpId: "normal:1", lastDeviceId: "normal", lastLocalSeq: 1, operationType: "update" as const };
+    await setDoc(ref, { ownerUid: "owner", schemaVersion: 2, record: prior });
+    let resume!: () => void, started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const held = new Promise<void>(resolve => { resume = resolve; });
+    const oldWrite = runTransaction(db, async transaction => {
+      await transaction.get(ref);
+      started();
+      await held;
+      transaction.set(ref, { ownerUid: "owner", schemaVersion: 2,
+        record: { ...prior, revision: 2, lastOpId: "old-build:2", lastDeviceId: "old-build", lastLocalSeq: 2 } });
+    }, { maxAttempts: 1 }).then(() => "committed", () => "rejected");
+    await entered;
+    await adapter.withExclusiveRepair!("sync-self-repair-inflight", async () => {
+      resume();
+      expect(await oldWrite).toBe("rejected");
+      expect((await getDoc(ref)).data()?.record.lastOpId).toBe("normal:1");
+    });
   });
 
   it("rebuilds from current local state, retains remote-only, verifies receipts and normalizes Outbox", async () => {

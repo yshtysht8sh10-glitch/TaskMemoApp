@@ -18,7 +18,7 @@ import { preflightJournalAuthoritativeRecovery,
   JOURNAL_AUTHORITATIVE_APPROVAL_KEY } from "../sync/executeJournalAuthoritativeRecovery";
 import { TaskMemoV2SyncController } from "../sync/taskMemoV2SyncController";
 import { runSyncSelfRepair, type SyncSelfRepairProgress } from "../sync/syncSelfRepair";
-import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, recordSyncActivity } from "../sync/selfRepairDiagnostics";
+import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, recordNormalOperationGenerationBlockedByRepair, recordSyncActivity } from "../sync/selfRepairDiagnostics";
 import type { SyncAdapter, SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
 import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
@@ -289,7 +289,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
-    if (repairRunningRef.current) { recordSyncActivity("blockedCommand"); return true; }
+    if (repairRunningRef.current) { recordSyncActivity("blockedCommand"); recordNormalOperationGenerationBlockedByRepair(); return true; }
     const controller = controllerRef.current;
     if (!controller) {
       if (enabled) setError("V2同期へのログイン・初期化が完了するまで編集できません。");
@@ -331,9 +331,9 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       repairRunningRef.current = false; setSelfRepairProgress(null);
       publish(); await controller.start(); publish();
       if (controller.state.phase === "synced" || controller.state.phase === "pending")
-        appAlert("同期自己修復が完了しました", `${result.nodeCount}件のNodeをFirebaseと照合しました。${result.receiptCount}件の新規Receiptを確認し、通常同期を再開しました。`);
+        appAlert("同期自己修復が完了しました", `ローカルデータとFirebaseの一致を確認しました。${result.nodeCount}件のNodeと${result.receiptCount}件の新規Receiptを確認しました。`);
       else
-        appAlert("データの自己修復は完了しました", "Firebaseとの一致を確認しました。通常同期の再接続を待っています。データは端末に保存されています。");
+        appAlert("同期自己修復が完了しました", "ローカルデータとFirebaseの一致を確認しました。通常同期の再接続を待っています。データは端末に保存されています。");
     } catch (reason) {
       try { finishSelfRepairDiagnostics("failed"); } catch { /* Original failure remains visible. */ }
       repairRunningRef.current = false; setSelfRepairProgress(null);

@@ -1,5 +1,6 @@
 import type { NodeHistory } from "../domain/nodeHistory";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
+import { recordSortKeyPass } from "./sortKeyDiagnostics";
 import type { Node } from "../models/node";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
@@ -70,7 +71,9 @@ export class TaskMemoV2ApplicationStore {
     const journal = await persistence.loadJournal();
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
+    const hydrateStarted = new Date();
     const normalizedInitialNodes = normalizeNodeSortKeys(initialNodes);
+    recordSortKeyPass("hydrate", initialNodes, normalizedInitialNodes, 0, hydrateStarted, Date.now() - hydrateStarted.getTime());
     const loadedEnvelope = committed ? JSON.parse(committed) as Envelope : null;
     let envelope: Envelope = loadedEnvelope ?? {
       version: 2, deviceId: options.deviceId, nextLocalSeq: 1,
@@ -82,6 +85,12 @@ export class TaskMemoV2ApplicationStore {
         features: { localIdeasEnabled: options.initialIdeasEnabled === true, synced: null, migrationPending: true },
       },
     };
+    if (loadedEnvelope) {
+      const storedNodes = Object.values(envelope.domain).map(record => nodeFromV2Value(record.value));
+      const started = new Date();
+      recordSortKeyPass("hydrate", storedNodes, normalizeNodeSortKeys(storedNodes), 0,
+        started, Date.now() - started.getTime());
+    }
     if (!envelope.profile) envelope = {
       ...envelope,
       profile: {
@@ -112,7 +121,8 @@ export class TaskMemoV2ApplicationStore {
       }
     }
     const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()));
-    if (!options.preserveSortKeys) envelope = store.repairSortKeys(envelope, options.now?.() ?? new Date());
+    // Remote/committed snapshots are not user edits. Auto-rewriting their sortKeys
+    // produced normal Outbox operations and a listener/upload feedback loop.
     store.envelope = envelope;
     if (!committed || envelope !== loadedEnvelope) await store.commit(envelope);
     return store;
@@ -347,7 +357,10 @@ export class TaskMemoV2ApplicationStore {
         seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
       },
     };
-    next = this.repairSortKeys(next, this.now());
+    const remoteNodes = Object.values(next.domain).map(record => nodeFromV2Value(record.value));
+    const started = new Date();
+    try { recordSortKeyPass("remote-listener", remoteNodes, normalizeNodeSortKeys(remoteNodes), 0,
+      started, Date.now() - started.getTime()); } catch { /* Passive diagnostics never reject remote input. */ }
     const localMutation = !same(next.domain, this.envelope.domain);
     await this.commit(next);
     if (localMutation) recordSyncActivity("listenerLocalMutation", { operationId: incoming.lastOpId, deviceId: incoming.lastDeviceId });
@@ -484,7 +497,9 @@ export class TaskMemoV2ApplicationStore {
     let localSeq = this.envelope.nextLocalSeq;
     const operations: SyncOperation[] = [];
     const domain = { ...this.envelope.domain };
-    const after = new Map(normalizeNodeSortKeys(nodes).map((node) => [node.id, nodeToV2Value(node)]));
+    const normalizationStarted = new Date();
+    const normalizedNodes = normalizeNodeSortKeys(nodes);
+    const after = new Map(normalizedNodes.map((node) => [node.id, nodeToV2Value(node)]));
     for (const [id, current] of Object.entries(domain)) {
       if (!after.has(id)) after.set(id, { ...current.value, deletedAt: commandTime.toISOString(), deletionBatchId: null });
     }
@@ -501,6 +516,12 @@ export class TaskMemoV2ApplicationStore {
       };
       localSeq += 1; operations.push(operation); domain[id] = candidateForOperation(operation);
     }
+    const beforeKeys = new Map(nodes.map(node => [node.id, node.sortKey]));
+    const normalizedIds = new Set(normalizedNodes.filter(node => beforeKeys.get(node.id) !== node.sortKey).map(node => node.id));
+    recordSortKeyPass(type === "import" || label.includes("移行") ? "migration" :
+      label.includes("ルーティン") ? "routine" : "local-command", nodes, normalizedNodes,
+      operations.filter(operation => normalizedIds.has(operation.targetNodeId)).length,
+      normalizationStarted, Date.now() - normalizationStarted.getTime());
     const targets: NodeHistoryTarget[] = operations.map((operation) => {
       const previous = this.envelope.domain[operation.targetNodeId];
       const nextRecord = domain[operation.targetNodeId];
@@ -513,28 +534,6 @@ export class TaskMemoV2ApplicationStore {
     const next: Envelope = { ...this.envelope, nextLocalSeq: localSeq, domain, history, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, ...operations] } };
     await this.commit(next);
     return operations;
-  }
-
-  private repairSortKeys(source: Envelope, commandTime: Date) {
-    recordSyncActivity("sortKeyRepair");
-    const nodes = Object.values(source.domain).map((record) => nodeFromV2Value(record.value));
-    const normalized = normalizeNodeSortKeys(nodes);
-    if (same(encodeNodes(nodes), encodeNodes(normalized))) return source;
-    let localSeq = source.nextLocalSeq;
-    const domain = { ...source.domain };
-    const operations: SyncOperation[] = [];
-    for (const node of normalized) {
-      const current = domain[node.id];
-      const value = nodeToV2Value(node);
-      if (same(current.value, value)) continue;
-      const operation: SyncOperation = {
-        opId: `${source.deviceId}:${localSeq}`, deviceId: source.deviceId, localSeq,
-        targetNodeId: node.id, type: "update", baseRevision: current.revision, payload: { node: value },
-        createdAt: commandTime.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
-      };
-      localSeq += 1; operations.push(operation); domain[node.id] = candidateForOperation(operation);
-    }
-    return { ...source, nextLocalSeq: localSeq, domain, sync: { ...source.sync, outbox: [...source.sync.outbox, ...operations] } };
   }
 
   private async commit(next: Envelope) {

@@ -13,6 +13,11 @@ type Comparison = {
   lastSuccessfulRepairOperationId: string | null;
   beforeUserData: FieldDigest; afterUserData: FieldDigest;
 };
+export type SelfRepairVerification = { status: "success" | "verification-failed";
+  localAuthoritativeNodeCount: number; remoteNodeCount: number; differenceCount: number;
+  differentNodeIds: string[];
+  differences: { nodeId: string; differentFields: string[]; localHash: string | null; remoteHash: string | null }[];
+  verifiedAt: string; serverRead: true };
 export type SyncActivity = "normalStart" | "localOnlyStart" | "stop" | "normalFlush" |
   "normalUploadAttempt" | "normalUploadSucceeded" | "legacyUploadAttempt" | "outboxGenerated" |
   "listenerReceived" | "listenerLocalMutation" | "localCommit" | "hydrate" | "sortKeyRepair" |
@@ -23,6 +28,12 @@ type Report = { version: 1; build: string | null; startedAt: string; endedAt: st
   events: { at: string; kind: SyncActivity; operationId?: string; deviceId?: string }[];
   lastSuccessfulRepairOperationId: string | null; comparisons: number;
   lastComparison: Comparison | null; conflict: Comparison | null; differences: Comparison[]; persistenceError: boolean;
+  repairLockAcquired: boolean; repairLockType: string | null; repairLockOwner: string | null;
+  repairLockAcquiredAt: string | null; repairLockReleasedAt: string | null;
+  normalUploadBlockedByRepairCount: number; normalOperationGenerationBlockedByRepairCount: number;
+  normalWriteDuringRepairCount: number; inFlightNormalWritesAtRepairStart: number;
+  waitedForNormalWritesCount: number; otherContextRepairLockObservedCount: number;
+  selfRepairVerification: SelfRepairVerification | null;
   actorReceipt: { status: string; operationId?: string; deviceId?: string; localSeq?: number;
     baseRevision?: number; operationType?: string; producerType?: string; acknowledgedValueMatchesCurrent?: boolean } | null };
 let report: Report | null = null;
@@ -62,7 +73,13 @@ export function beginSelfRepairDiagnostics(localDeviceId: string, readOnly: bool
       outboxGenerated: 0, listenerReceived: 0, listenerLocalMutation: 0, localCommit: 0,
       hydrate: 0, sortKeyRepair: 0, blockedCommand: 0, authChanged: 0, repairCommitted: 0, repairTransactionAttempt: 0 },
     events: [], lastSuccessfulRepairOperationId: null, comparisons: 0,
-    lastComparison: null, conflict: null, differences: [], persistenceError: false, actorReceipt: null };
+    lastComparison: null, conflict: null, differences: [], persistenceError: false, actorReceipt: null,
+    repairLockAcquired: false, repairLockType: null, repairLockOwner: null,
+    repairLockAcquiredAt: null, repairLockReleasedAt: null,
+    normalUploadBlockedByRepairCount: 0, normalOperationGenerationBlockedByRepairCount: 0,
+    normalWriteDuringRepairCount: 0, inFlightNormalWritesAtRepairStart: 0,
+    waitedForNormalWritesCount: 0, otherContextRepairLockObservedCount: 0,
+    selfRepairVerification: null };
   persist();
 }
 export function finishSelfRepairDiagnostics(status: string) {
@@ -71,6 +88,37 @@ export function finishSelfRepairDiagnostics(status: string) {
 }
 export function getSelfRepairDiagnostics() { return report ? structuredClone(report) : null; }
 export function selfRepairDiagnosticsActive() { return active; }
+export function recordRepairLock(state: "acquired" | "released" | "blocked", owner: string) {
+  if (!active || !report) return;
+  if (state === "acquired") {
+    report.repairLockAcquired = true; report.repairLockType = "firestore-lease+rules+web-lock-when-supported";
+    report.repairLockOwner = owner; report.repairLockAcquiredAt = new Date().toISOString();
+  } else if (state === "released") report.repairLockReleasedAt = new Date().toISOString();
+  else report.otherContextRepairLockObservedCount++;
+  persist();
+}
+export function recordRepairLockWait(inFlight: number, waited: boolean) {
+  if (!active || !report) return;
+  report.inFlightNormalWritesAtRepairStart = inFlight;
+  if (waited) report.waitedForNormalWritesCount++;
+  persist();
+}
+export function recordNormalUploadBlockedByRepair() {
+  if (!active || !report) return;
+  report.normalUploadBlockedByRepairCount++; persist();
+}
+export function recordNormalOperationGenerationBlockedByRepair() {
+  if (!active || !report) return;
+  report.normalOperationGenerationBlockedByRepairCount++; persist();
+}
+export function recordNormalWriteDuringRepair() {
+  if (!active || !report || !report.repairLockAcquired || report.repairLockReleasedAt) return;
+  report.normalWriteDuringRepairCount++; persist();
+}
+export function recordSelfRepairVerification(value: SelfRepairVerification) {
+  if (!active || !report) return;
+  report.selfRepairVerification = value; persist();
+}
 export function recordActorReceipt(value: NonNullable<Report["actorReceipt"]>) {
   if (active && report) { report.actorReceipt = value; persist(); }
 }

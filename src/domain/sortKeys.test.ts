@@ -18,6 +18,15 @@ describe('minimal active sortKey repair', () => {
     expect(new Set(fixed.map((node) => node.sortKey)).size).toBe(55);
     expect(normalizeNodeSortKeys(fixed)).toBe(fixed);
   });
+  it('is a zero-change second pass even for a large sibling group', () => {
+    const keys = generateNKeysBetween(null, null, 54);
+    const nodes = [...keys.map((key, index) => category(`node-${index}`, key)), category('duplicate', keys[20])];
+    const first = normalizeNodeSortKeys(nodes);
+    const second = normalizeNodeSortKeys(first);
+    expect(first.filter((node, index) => node.sortKey !== nodes[index].sortKey)).toHaveLength(1);
+    expect(second.filter((node, index) => node.sortKey !== first[index].sortKey)).toHaveLength(0);
+    expect(second).toBe(first);
+  });
 
   it('does not reassign a deleted sibling when a new active node reuses its key', () => {
     const keys = generateNKeysBetween(null, null, 55);

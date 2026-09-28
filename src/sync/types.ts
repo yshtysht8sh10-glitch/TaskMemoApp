@@ -101,6 +101,9 @@ export type RecoveryConvergenceResult = {
 
 export interface SyncAdapter {
   connect(): Promise<void>;
+  /** Server-backed exclusive lease. The callback must not start repair writes without it. */
+  withExclusiveRepair?<T>(owner: string, task: () => Promise<T>): Promise<T>;
+  assertExclusiveRepair?(): Promise<void>;
   /** Server-only snapshot for observation. Never starts a listener or writes. */
   readRecoverySnapshot?(): Promise<{ nodes: VersionedNode[]; pinnedNote?: VersionedPinnedNote; features?: VersionedFeatures; receiptDocumentCount: number }>;
   /** Transactionally rebase one desired value on the live server revision. */
@@ -112,7 +115,7 @@ export interface SyncAdapter {
   /** Recovery may provide the exact preflight winner; a mismatch aborts before transaction writes. */
   upload(operation: SyncOperation, expected?: SyncAcknowledgement,
     /** Recovery-only optimistic precondition. null means the target must still be absent. */
-    expectedCurrent?: VersionedNode | null): Promise<SyncAcknowledgement>;
+    expectedCurrent?: VersionedNode | null, mayStart?: () => boolean): Promise<SyncAcknowledgement>;
   subscribe?(
     onRecord: (record: VersionedNode) => void | Promise<void>,
     onError: (reason: unknown) => void,

@@ -4,6 +4,7 @@ import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
 import { applyRevisionOperation } from "./revisionModel";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
+import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, getSelfRepairDiagnostics } from "./selfRepairDiagnostics";
 import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
 import type { MemoNode } from "../models/node";
 import type { RecoveryConvergenceRequest, SyncAdapter, SyncOperation, VersionedNode } from "./types";
@@ -38,6 +39,8 @@ function fixture(local: VersionedNode[], remote: VersionedNode[]) {
   } as unknown as IndexedDbTaskMemoApplicationJournal;
   const adapter: SyncAdapter = {
     connect: async () => undefined,
+    withExclusiveRepair: async (_owner, task) => task(),
+    assertExclusiveRepair: async () => undefined,
     upload: async () => { throw new Error("normal upload not needed in fixture"); },
     readRecoverySnapshot: async () => ({ nodes: [...server.values()], receiptDocumentCount: receipts.size }),
     auditOutbox: async (operations) => ({ received: operations.filter((op) =>
@@ -137,6 +140,16 @@ describe("sync self repair", () => {
     expect(state.mode).toBe(false);
     expect(JSON.parse(state.active).sync.outbox).toEqual([]);
   });
+  it("records server verification success before clearing the active Outbox", async () => {
+    const state = fixture([record("a", "local")], [record("a", "old")]);
+    beginSelfRepairDiagnostics("local-generation", false);
+    try {
+      await runSyncSelfRepair(state.persistence, state.adapter);
+      expect(getSelfRepairDiagnostics()?.selfRepairVerification).toMatchObject({ status: "success",
+        localAuthoritativeNodeCount: 1, remoteNodeCount: 1, differenceCount: 0, serverRead: true });
+      expect(JSON.parse(state.active).sync.outbox).toEqual([]);
+    } finally { finishSelfRepairDiagnostics("completed"); }
+  });
 
   it.each([1, 2])("restarts from current Firebase after %i committed writes", async (count) => {
     const local = [record("a", "local a"), record("b", "local b"), record("c", "local c")];
@@ -204,10 +217,19 @@ describe("sync self repair", () => {
     const read = state.adapter.readRecoverySnapshot!;
     let reads = 0;
     state.adapter.readRecoverySnapshot = async () => {
-      if (++reads === 2) state.server.set("surprise", record("surprise", "other device"));
+      if (++reads === 2) {
+        const incoming = record("surprise", "other device");
+        incoming.value.sortKey = "a1";
+        state.server.set("surprise", incoming);
+      }
       return read();
     };
-    await expect(runSyncSelfRepair(state.persistence, state.adapter)).rejects.toThrow("再読込");
+    beginSelfRepairDiagnostics("local-generation", false);
+    try {
+      await expect(runSyncSelfRepair(state.persistence, state.adapter)).rejects.toThrow("再読込");
+      expect(getSelfRepairDiagnostics()?.selfRepairVerification).toMatchObject({ status: "verification-failed",
+        differenceCount: 1, differentNodeIds: ["surprise"], serverRead: true });
+    } finally { finishSelfRepairDiagnostics("failed"); }
     expect(state.mode).toBe(true);
     expect(state.active).toBe(state.source);
   });

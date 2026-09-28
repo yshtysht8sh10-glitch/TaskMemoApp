@@ -2,11 +2,18 @@ import { planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
 import { isValidSortKey } from "../domain/sortKeys";
 import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
-import { recordSyncActivity } from "./selfRepairDiagnostics";
+import { getSelfRepairDiagnostics, recordSelfRepairVerification, recordSyncActivity } from "./selfRepairDiagnostics";
 
 export const canonicalSyncValue = (value: unknown): string => JSON.stringify(value, (_key, item) =>
   item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+async function diagnosticHash(value: unknown) {
+  try {
+    const bytes = new TextEncoder().encode(canonicalSyncValue(value) ?? "undefined");
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  } catch { return null; }
+}
 
 const knownFields = new Set(["id", "sortKey", "type", "parentId", "title", "body", "memoType",
   "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "repeatRule",
@@ -79,6 +86,8 @@ export type SyncSelfRepairProgress = { phase: "reading" | "writing" | "verifying
 export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicationJournal, adapter: SyncAdapter,
   onProgress: (progress: SyncSelfRepairProgress) => void = () => undefined,
   assertActive: () => void = () => undefined, diagnosticOnly = false) {
+  const repairDeviceId = `sync-self-repair-${globalThis.crypto.randomUUID()}`;
+  const execute = async () => {
   assertActive();
   if (!await persistence.isLocalRecoveryMode()) throw new Error("ローカル復旧モードではありません。");
   const sourceRaw = await persistence.loadCommitted();
@@ -97,9 +106,12 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     throw new Error("元Journalと旧Outboxの退避証拠がありません。");
   if (!adapter.readRecoverySnapshot || !adapter.convergeRecoveryTarget || !adapter.auditOutbox)
     throw new Error("Firebase自己修復の機能が利用できません。");
+  const readRecoverySnapshot = adapter.readRecoverySnapshot;
+  const convergeRecoveryTarget = adapter.convergeRecoveryTarget;
+  const auditOutbox = adapter.auditOutbox;
   onProgress({ phase: "reading", completed: 0, total: 0 });
   await adapter.connect();
-  const initial = await adapter.readRecoverySnapshot();
+  const initial = await readRecoverySnapshot();
   const plan = planSyncSelfRepair(Object.values(source.domain), initial.nodes);
   const targets: ({ kind: "node"; id: string } | { kind: "pinnedNote" } | { kind: "features" })[] =
     (diagnosticOnly ? [...plan.desired.keys()].sort() : plan.changedIds).map((id) => ({ kind: "node", id }));
@@ -109,7 +121,6 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     targets.push({ kind: "pinnedNote" });
   if (diagnosticOnly || canonicalSyncValue(initial.features?.value ?? { ideasEnabled: false }) !== canonicalSyncValue(featuresDesired))
     targets.push({ kind: "features" });
-  const repairDeviceId = `sync-self-repair-${globalThis.crypto.randomUUID()}`;
   const operations: SyncOperation[] = [];
   let completed = 0;
   for (const target of targets) {
@@ -118,12 +129,12 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     const identity = { deviceId: repairDeviceId, localSeq: completed + 1,
       createdAt: new Date().toISOString() };
     const result = target.kind === "pinnedNote"
-      ? await adapter.convergeRecoveryTarget({ targetType: "pinnedNote", desired: pinnedDesired,
+      ? await convergeRecoveryTarget({ targetType: "pinnedNote", desired: pinnedDesired,
           observed: initial.pinnedNote ?? null, identity, diagnosticOnly })
       : target.kind === "features"
-        ? await adapter.convergeRecoveryTarget({ targetType: "features", desired: featuresDesired,
+        ? await convergeRecoveryTarget({ targetType: "features", desired: featuresDesired,
             observed: initial.features ?? null, identity, diagnosticOnly })
-        : await adapter.convergeRecoveryTarget({ targetType: "node", targetNodeId: target.id,
+        : await convergeRecoveryTarget({ targetType: "node", targetNodeId: target.id,
             desired: plan.desired.get(target.id)!.value,
             observed: initial.nodes.find((record) => record.value.id === target.id) ?? null, identity, diagnosticOnly });
     if (result.operation) {
@@ -139,17 +150,43 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     receiptCount: 0, remoteOnlyCount: plan.remoteOnlyCount, archivedOldOutboxCount: evidence.archivedOutboxCount };
   onProgress({ phase: "verifying", completed, total: targets.length });
   assertActive();
-  const receipts = await adapter.auditOutbox(operations);
+  const receipts = await auditOutbox(operations);
   if (receipts.received !== operations.length || receipts.missing !== 0)
     throw new Error("自己修復Receiptの照合が完了していません。");
-  const final = await adapter.readRecoverySnapshot();
+  const final = await readRecoverySnapshot();
+  if (!adapter.assertExclusiveRepair) throw new Error("自己修復lockの最終確認が利用できません。");
+  await adapter.assertExclusiveRepair();
   const finalMap = new Map(final.nodes.map((record) => [record.value.id, record]));
-  if (finalMap.size !== final.nodes.length || finalMap.size !== plan.desired.size ||
-      [...plan.desired].some(([id, record]) =>
-        canonicalSyncValue(record.value) !== canonicalSyncValue(finalMap.get(id)?.value)) ||
-      canonicalSyncValue(final.pinnedNote?.value ?? { body: "" }) !== canonicalSyncValue(pinnedDesired) ||
-      canonicalSyncValue(final.features?.value ?? { ideasEnabled: false }) !== canonicalSyncValue(featuresDesired) ||
-      planRecoverySortKeyRepair(finalMap).changedNodeCount !== 0)
+  const differences: { nodeId: string; local: unknown; remote: unknown; differentFields: string[] }[] = [];
+  for (const id of new Set([...plan.desired.keys(), ...finalMap.keys()])) {
+    const local = plan.desired.get(id)?.value, remote = finalMap.get(id)?.value;
+    if (canonicalSyncValue(local) === canonicalSyncValue(remote)) continue;
+    const left = (local ?? {}) as Record<string, unknown>, right = (remote ?? {}) as Record<string, unknown>;
+    differences.push({ nodeId: id, local, remote,
+      differentFields: [...new Set([...Object.keys(left), ...Object.keys(right)])]
+        .filter(field => canonicalSyncValue(left[field]) !== canonicalSyncValue(right[field])).sort() });
+  }
+  for (const [nodeId, local, remote] of [
+    ["$pinnedNote", pinnedDesired, final.pinnedNote?.value ?? { body: "" }],
+    ["$features", featuresDesired, final.features?.value ?? { ideasEnabled: false }],
+  ] as const) if (canonicalSyncValue(local) !== canonicalSyncValue(remote)) {
+    const left = local as Record<string, unknown>, right = remote as Record<string, unknown>;
+    differences.push({ nodeId, local, remote,
+      differentFields: [...new Set([...Object.keys(left), ...Object.keys(right)])]
+        .filter(field => canonicalSyncValue(left[field]) !== canonicalSyncValue(right[field])).sort() });
+  }
+  if (finalMap.size !== final.nodes.length) differences.push({ nodeId: "$duplicateNodeIds", local: null, remote: null, differentFields: ["id"] });
+  if (planRecoverySortKeyRepair(finalMap).changedNodeCount !== 0)
+    differences.push({ nodeId: "$sortKeyNormalization", local: null, remote: null, differentFields: ["sortKey"] });
+  const diagnosticDifferences = await Promise.all(differences.slice(0, 20).map(async item => ({
+    nodeId: item.nodeId, differentFields: item.differentFields,
+    localHash: await diagnosticHash(item.local), remoteHash: await diagnosticHash(item.remote),
+  })));
+  recordSelfRepairVerification({ status: differences.length ? "verification-failed" : "success",
+    localAuthoritativeNodeCount: Object.keys(source.domain).length, remoteNodeCount: final.nodes.length,
+    differenceCount: differences.length, differentNodeIds: differences.map(item => item.nodeId).slice(0, 50),
+    differences: diagnosticDifferences, verifiedAt: new Date().toISOString(), serverRead: true });
+  if (differences.length || (getSelfRepairDiagnostics()?.normalWriteDuringRepairCount ?? 0) !== 0)
     throw new Error("Firebase再読込と現在ローカル状態が一致しません。再試行できます。");
   if (await persistence.loadCommitted() !== sourceRaw || await persistence.loadJournal())
     throw new Error("自己修復中にローカル状態が変更されました。同期復帰を停止しました。");
@@ -167,4 +204,8 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
   return { nodeCount: final.nodes.length, operationCount: operations.length,
     receiptCount: receipts.received, remoteOnlyCount: plan.remoteOnlyCount,
     archivedOldOutboxCount: evidence.archivedOutboxCount };
+  };
+  if (diagnosticOnly) return execute();
+  if (!adapter.withExclusiveRepair) throw new Error("自己修復の排他lockが利用できません。Firebaseへ書き込んでいません。");
+  return adapter.withExclusiveRepair(repairDeviceId, execute);
 }

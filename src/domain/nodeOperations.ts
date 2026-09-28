@@ -51,7 +51,9 @@ export function siblingsOf(
 }
 
 export function nextSortKey(nodes: Node[], parentId: string | null) {
-  const siblings = siblingsOf(nodes, parentId);
+  // A remote snapshot may contain legacy invalid ranks. Reading it must not
+  // emit sync writes, but a subsequent explicit local create must still work.
+  const siblings = siblingsOf(nodes, parentId).filter(node => isValidSortKey(node.sortKey));
   return generateKeyBetween(siblings.at(-1)?.sortKey ?? null, null);
 }
 

@@ -10,16 +10,21 @@ const state = vi.hoisted(() => ({ documents: new Map<string, unknown>(), sdkFail
   writes: 0 }));
 vi.mock("firebase/firestore", () => ({
   doc: (_db: unknown, ...parts: string[]) => parts.join("/"),
+  Timestamp: class { constructor(private readonly value: number) {} toMillis() { return this.value; }
+    static fromMillis(value: number) { return new this(value); } },
   serverTimestamp: () => "server-time",
   runTransaction: async (_db: unknown, action: (transaction: unknown) => Promise<unknown>) => {
     if (state.sdkFailure) throw state.sdkFailure;
-    const pending: { path: string; value: unknown }[] = [];
+    const pending: { path: string; value: unknown; deleted?: boolean }[] = [];
     const transaction = {
       get: async (path: string) => ({ exists: () => state.documents.has(path), data: () => state.documents.get(path) }),
       set: (path: string, value: unknown) => { pending.push({ path, value }); },
+      delete: (path: string) => { pending.push({ path, value: null, deleted: true }); },
+      update: (path: string, value: unknown) => { pending.push({ path, value: { ...(state.documents.get(path) as object), ...(value as object) } }); },
     };
     const result = await action(transaction);
-    for (const write of pending) { state.documents.set(write.path, write.value); state.writes++; }
+    for (const write of pending) { if (write.deleted) state.documents.delete(write.path); else state.documents.set(write.path, write.value);
+      if (!write.path.endsWith("/repairLock")) state.writes++; }
     return result;
   },
 }));
@@ -122,24 +127,30 @@ describe("recovery transaction diagnostics", () => {
     const request = { targetType: "node" as const, targetNodeId: "node-1",
       desired: { id: "node-1", title: "local" }, observed,
       identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } };
-    const first = await adapter([]).convergeRecoveryTarget!(request);
+    const locked = adapter([]);
+    await locked.withExclusiveRepair!(request.identity.deviceId, async () => {
+    const first = await locked.convergeRecoveryTarget!(request);
     expect(first.operation?.baseRevision).toBe(8);
     expect(first.acknowledgement?.record?.revision).toBe(9);
     expect(state.writes).toBe(2);
-    const again = await adapter([]).convergeRecoveryTarget!(request);
+    const again = await locked.convergeRecoveryTarget!(request);
     expect(again.operation).toEqual(first.operation);
     expect(state.writes).toBe(2);
+    });
   });
 
   it("does not write if Firebase already has the desired value", async () => {
     const current = { ...applyRevisionOperation(undefined, operation).record!,
       value: { id: "node-1", title: "local" } };
     state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2, record: current });
-    const result = await adapter([]).convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
+    const locked = adapter([]);
+    await locked.withExclusiveRepair!("sync-self-repair-device", async () => {
+    const result = await locked.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
       desired: current.value, observed: null,
       identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } });
     expect(result.operation).toBeUndefined();
     expect(state.writes).toBe(0);
+    });
   });
 
   it("stops before writing when another device changes user data inside the transaction", async () => {
@@ -147,11 +158,14 @@ describe("recovery transaction diagnostics", () => {
       value: { id: "node-1", title: "old" } };
     state.documents.set(nodePath, { ownerUid: "uid", schemaVersion: 2,
       record: { ...observed, revision: 3, value: { id: "node-1", title: "other device" } } });
-    await expect(adapter([]).convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
+    const locked = adapter([]);
+    await locked.withExclusiveRepair!("sync-self-repair-device", async () => {
+    await expect(locked.convergeRecoveryTarget!({ targetType: "node", targetNodeId: "node-1",
       desired: { id: "node-1", title: "local" }, observed,
       identity: { deviceId: "sync-self-repair-device", localSeq: 1, createdAt: "2026-09-27T00:00:00.000Z" } }))
       .rejects.toMatchObject({ recoveryReason: "concurrent-user-change" });
     expect(state.writes).toBe(0);
+    });
   });
   it("diagnostic-only compares a changed desired target without writing Node or Receipt", async () => {
     const current = applyRevisionOperation(undefined, operation).record!;

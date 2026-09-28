@@ -82,6 +82,12 @@ export class FirestoreTaskMemoNodeRepository implements TaskMemoNodeRepository {
     const requestRef = this.db.doc(`users/${uid}/externalAiRequestsV2/${requestKey}`);
     return this.db.runTransaction(async (transaction) => {
       await this.assertGate(uid, (ref) => transaction.get(ref));
+      // Admin SDK bypasses Firestore rules. Keep AI writes out of an active
+      // self-repair transaction using the same server-side lease document.
+      const repairLock = await transaction.get(this.db.doc(`users/${uid}/syncMetadataV2/repairLock`));
+      const expiresAt = repairLock.data()?.expiresAt as Timestamp | undefined;
+      if (expiresAt instanceof Timestamp && expiresAt.toMillis() > Date.now())
+        throw new ExternalAiError('conflict', '同期自己修復中のためAI書き込みを停止しました。');
       const existingRequest = await transaction.get(requestRef);
       if (existingRequest.exists) return existingRequest.data()!.result as T;
       const collection = this.db.collection(`users/${uid}/nodesV2`);

@@ -17,6 +17,9 @@ export class TaskMemoV2SyncController {
   state: SyncState;
   private unsubscribe?: () => void;
   private running = false;
+  private stopped = true;
+  private activeFlushGeneration = -1;
+  private flushTask: Promise<void> | null = null;
   private generation = 0;
   private paused = false;
   private receiptsAudited = false;
@@ -35,6 +38,7 @@ export class TaskMemoV2SyncController {
       this.onChange();
       return;
     }
+    this.stopped = false;
     this.receiptsAudited = false;
     const generation = this.generation;
     this.state = transitionSyncState(this.state, { type: "connect", pendingCount: this.store.pendingCount });
@@ -98,7 +102,7 @@ export class TaskMemoV2SyncController {
     await this.start();
   }
 
-  stop() { recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; }
+  stop() { recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
 
   async updatePinnedNote(body: string, debounceMs = 500) {
     await this.store.setPinnedNoteDraft(body);
@@ -170,19 +174,37 @@ export class TaskMemoV2SyncController {
   async flush() {
     if (this.options.localOnly) return;
     recordSyncActivity("normalFlush", { deviceId: this.store.deviceId });
-    if (this.adapter.auditOutbox && !this.receiptsAudited) return;
     if (this.paused) {
       this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, kind: "offline", message: "Development offline simulation" });
       return;
     }
-    if (this.running) return;
+    if (this.stopped) return;
+    if (this.adapter.auditOutbox && !this.receiptsAudited) return;
+    if (this.running) {
+      // A fresh start must wait for the old generation's in-flight transaction.
+      // Same-generation listener callbacks must not wait: upload may await them.
+      if (this.activeFlushGeneration === this.generation) return;
+      await this.flushTask;
+      if (this.stopped) return;
+    }
+    const generation = this.generation;
     this.running = true;
+    this.activeFlushGeneration = generation;
+    const task = this.drain(generation);
+    this.flushTask = task;
+    try { await task; }
+    finally { if (this.flushTask === task) this.flushTask = null; }
+  }
+
+  private async drain(generation: number) {
     try {
-      while (this.store.outbox.length) {
+      while (!this.stopped && generation === this.generation && this.store.outbox.length) {
         const operation = this.store.outbox[0];
         this.state = transitionSyncState(this.state, { type: "upload-started", pendingCount: this.store.pendingCount, retry: operation.attemptCount > 0 });
         try {
-          const acknowledgement = await this.adapter.upload(operation);
+          if (this.stopped || generation !== this.generation) return;
+          const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
+            () => !this.stopped && generation === this.generation);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
           this.refresh();
@@ -192,7 +214,7 @@ export class TaskMemoV2SyncController {
           return;
         }
       }
-    } finally { this.running = false; }
+    } finally { this.running = false; this.activeFlushGeneration = -1; }
   }
 
   private refresh() {

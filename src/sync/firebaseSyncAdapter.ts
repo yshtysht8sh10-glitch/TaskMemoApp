@@ -1,11 +1,11 @@
-import { collection, doc, documentId, getCountFromServer, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, serverTimestamp, where, type Firestore } from "firebase/firestore";
+import { collection, doc, documentId, getCountFromServer, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, serverTimestamp, Timestamp, where, type Firestore } from "firebase/firestore";
 
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
 import { validateCompatibilityGate } from "./compatibilityGate";
 import type { RecoveryConvergenceRequest, SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import { canonicalSyncValue } from "./syncSelfRepair";
-import { recordActorReceipt, recordRepairComparison, recordRepairSnapshot, recordSyncActivity, selfRepairDiagnosticsActive } from "./selfRepairDiagnostics";
+import { recordActorReceipt, recordNormalUploadBlockedByRepair, recordNormalWriteDuringRepair, recordRepairComparison, recordRepairLock, recordRepairLockWait, recordRepairSnapshot, recordSyncActivity, selfRepairDiagnosticsActive } from "./selfRepairDiagnostics";
 
 type AdapterOptions = {
   emulator?: boolean;
@@ -96,13 +96,71 @@ export function createFirebaseSyncAdapter(
   if (!developmentAllowed && !productionAllowed && !emulatorAllowed) {
     throw new Error(`Firebase V2 sync adapter is disabled for ${environment}/${projectId ?? "unknown"}.`);
   }
+  const repairLockRef = () => doc(db, "users", uid, "syncMetadataV2", "repairLock");
+  const originLockName = `taskmemo-firebase-user-data:${uid}`;
+  const withOriginLock = async <T>(mode: "shared" | "exclusive", task: () => Promise<T>) => {
+    if (typeof navigator === "undefined" || !navigator.locks) return task();
+    if (mode === "exclusive") {
+      const held = ((await navigator.locks.query()).held ?? []).filter(lock => lock.name === originLockName && lock.mode === "shared").length;
+      recordRepairLockWait(held, held > 0);
+    }
+    return navigator.locks.request(originLockName, { mode }, task);
+  };
+  const leaseActive = (data: Record<string, unknown> | undefined) =>
+    data?.expiresAt instanceof Timestamp && data.expiresAt.toMillis() > Date.now();
+  let heldRepairOwner: string | null = null;
+  let renewalFailed = false;
 
   return {
+    async assertExclusiveRepair() {
+      const lock = await getDocFromServer(repairLockRef());
+      if (!heldRepairOwner || renewalFailed || !lock.exists() ||
+          lock.data().owner !== heldRepairOwner || !leaseActive(lock.data()))
+        throw { kind: "permanent", message: "自己修復lockの有効性を確認できません。" };
+    },
+    async withExclusiveRepair<T>(owner: string, task: () => Promise<T>): Promise<T> {
+      return withOriginLock("exclusive", async () => {
+      if (!owner.startsWith("sync-self-repair-")) throw new Error("自己修復lockの所有者が不正です。");
+      await runTransaction(db, async transaction => {
+        const current = await transaction.get(repairLockRef());
+        if (current.exists() && leaseActive(current.data())) {
+          recordRepairLock("blocked", owner);
+          throw { code: "aborted", message: "別の自己修復が進行中です。" };
+        }
+        transaction.set(repairLockRef(), { owner, expiresAt: Timestamp.fromMillis(Date.now() + 90_000), acquiredAt: serverTimestamp() });
+      });
+      heldRepairOwner = owner;
+      recordRepairLock("acquired", owner);
+      renewalFailed = false;
+      let renewal = Promise.resolve();
+      const timer = setInterval(() => {
+        renewal = renewal.then(() => runTransaction(db, async transaction => {
+          const current = await transaction.get(repairLockRef());
+          if (!current.exists() || current.data().owner !== owner || !leaseActive(current.data()))
+            throw new Error("自己修復lockが失われました。");
+          transaction.update(repairLockRef(), { expiresAt: Timestamp.fromMillis(Date.now() + 90_000) });
+        })).catch(() => { renewalFailed = true; });
+      }, 15_000);
+      try { return await task(); }
+      finally {
+        clearInterval(timer);
+        await renewal;
+        heldRepairOwner = null;
+        await runTransaction(db, async transaction => {
+          const current = await transaction.get(repairLockRef());
+          if (current.exists() && current.data().owner === owner) transaction.delete(repairLockRef());
+        });
+        recordRepairLock("released", owner);
+      }
+      });
+    },
     async convergeRecoveryTarget(request: RecoveryConvergenceRequest) {
       try {
         const { deviceId, localSeq, createdAt } = request.identity;
         if (!deviceId.startsWith("sync-self-repair-") || !Number.isSafeInteger(localSeq) || localSeq < 1)
           throw { code: "invalid-argument", message: "自己修復operationの識別子が不正です。" };
+        if (!request.diagnosticOnly && (heldRepairOwner !== deviceId || renewalFailed))
+          throw { code: "aborted", message: "自己修復lockがありません。" };
         const targetNodeId = request.targetType === "node" ? request.targetNodeId : request.targetType;
         const opId = `${deviceId}:${localSeq}`;
         const receiptRef = doc(db, "users", uid, "syncOperationsV2", opId);
@@ -111,6 +169,9 @@ export function createFirebaseSyncAdapter(
           : doc(db, "users", uid, "profileV2", targetNodeId);
         return await runTransaction(db, async (transaction) => {
           recordSyncActivity("repairTransactionAttempt", { operationId: opId, deviceId });
+          const lock = await transaction.get(repairLockRef());
+          if (!request.diagnosticOnly && (!lock.exists() || lock.data().owner !== deviceId || !leaseActive(lock.data()) || renewalFailed))
+            throw { code: "aborted", message: "自己修復lockが失われました。" };
           const receipt = await transaction.get(receiptRef);
           if (receipt.exists()) {
             const data = receipt.data();
@@ -388,7 +449,10 @@ export function createFirebaseSyncAdapter(
     },
 
     async upload(operation: SyncOperation, expected?: SyncAcknowledgement,
-      expectedCurrent?: VersionedNode | null) {
+      expectedCurrent?: VersionedNode | null, mayStart?: () => boolean) {
+      return withOriginLock("shared", async () => {
+      if (mayStart && !mayStart())
+        throw { kind: "offline", message: "停止済みuploadを送信しません。" };
       recordSyncActivity("normalUploadAttempt", { operationId: operation.opId, deviceId: operation.deviceId });
       const emit = (event: RecoveryTransactionEvent) => {
         if (expected) try { options.onRecoveryTransaction?.(event); }
@@ -406,6 +470,11 @@ export function createFirebaseSyncAdapter(
         let outcome: RecoveryTransactionEvent = { phase: "success", receipt: null, nodeWrite: false, serverWinnerNoWrite: false };
         const acknowledgement = await runTransaction(db, async (transaction) => {
           emit({ phase: "start", receipt: null, nodeWrite: false, serverWinnerNoWrite: false });
+          const lock = await transaction.get(repairLockRef());
+          if (lock.exists() && leaseActive(lock.data())) {
+            recordNormalUploadBlockedByRepair();
+            throw { code: "aborted", message: "自己修復中のため通常同期書き込みを停止しました。" };
+          }
           const existing = await transaction.get(operationRef);
           if (existing.exists()) {
             const data = existing.data();
@@ -437,11 +506,13 @@ export function createFirebaseSyncAdapter(
         });
         emit(outcome);
         recordSyncActivity("normalUploadSucceeded", { operationId: operation.opId, deviceId: operation.deviceId });
+        recordNormalWriteDuringRepair();
         return acknowledgement;
       } catch (reason) {
         emit({ phase: "failure", receipt: null, nodeWrite: false, serverWinnerNoWrite: false });
         throw adapterError(reason);
       }
+      });
     },
 
     async readPinnedNote() {
