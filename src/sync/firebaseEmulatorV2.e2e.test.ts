@@ -38,6 +38,18 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
   });
   afterAll(async () => environment.cleanup());
 
+  it("connects and reads the server snapshot after acquiring the production repair lease", async () => {
+    const uid = "owner";
+    const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, uid, "test", { emulator: true });
+    await adapter.withExclusiveRepair!("sync-self-repair-gate-regression", async () => {
+      await adapter.connect();
+      expect((await adapter.readRecoverySnapshot!()).nodes).toEqual([]);
+      await assertFails(setDoc(doc(db, "syncControl/current"), { schemaVersion: 1, writesEnabled: false }));
+      await assertFails(getDoc(doc(environment.unauthenticatedContext().firestore(), "syncControl/current")));
+    });
+  });
+
   it("reads Timestamp and nullable legacy fields identically through server query and diagnostic transaction, with zero writes", async () => {
     const db = environment.authenticatedContext("owner").firestore() as unknown as Firestore;
     const adapter = createFirebaseSyncAdapter(db, "owner", "test", { emulator: true });

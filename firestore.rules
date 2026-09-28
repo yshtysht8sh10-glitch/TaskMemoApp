@@ -28,6 +28,12 @@ service cloud.firestore {
         (!exists(lockPath(userId)) || get(lockPath(userId)).data.expiresAt <= request.time ||
           get(lockPath(userId)).data.owner == request.resource.data.owner);
     }
+    // V2 adapter.connect() reads this gate after taking the repair lease.
+    // The gate is server-managed and must remain read-only to clients.
+    match /syncControl/current {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
     match /users/{userId}/syncMetadataV2/repairLock {
       allow read: if owns(userId);
       allow create, update: if owns(userId) && validRepairLock(userId);

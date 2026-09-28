@@ -80,6 +80,9 @@
       const actor = object(saved.actorReceipt);
       const verification = object(saved.selfRepairVerification);
       return { version: saved.version, build: text(saved.build), startedAt: text(saved.startedAt), endedAt: text(saved.endedAt),
+        failurePhase: text(saved.failurePhase), errorCode: text(saved.errorCode),
+        errorMessage: text(saved.errorMessage), failureReason: text(saved.failureReason),
+        phaseEvents: array(saved.phaseEvents).slice(-64).map(event => ({ phase: text(event.phase), status: text(event.status), at: text(event.at) })),
         repairLockAcquired: saved.repairLockAcquired === true, repairLockType: text(saved.repairLockType),
         repairLockOwner: text(saved.repairLockOwner), repairLockAcquiredAt: text(saved.repairLockAcquiredAt),
         repairLockReleasedAt: text(saved.repairLockReleasedAt),

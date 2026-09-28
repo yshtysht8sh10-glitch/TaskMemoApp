@@ -33,6 +33,8 @@ function launch(values: Record<string, string>, session: Record<string, string> 
 
 it('exports self-repair comparison hashes and counters without raw user fields', () => {
   const fixture = launch({}, { '@taskmemo/self-repair-diagnostics/v1': JSON.stringify({ version: 1, status: 'failed',
+    failurePhase: 'connect', errorCode: 'permission-denied', errorMessage: 'gate read denied',
+    failureReason: 'permission-denied', phaseEvents: [{ phase: 'connect', status: 'failed', at: '2026-09-28T00:00:00.000Z', title: 'PRIVATE' }],
     localDeviceId: 'local', counters: { normalUploadAttempt: 0 }, conflict: { target: 'node:n',
       beforeUserData: { type: 'object', hash: 'a'.repeat(64), title: 'PRIVATE TITLE' },
       beforeFields: { title: { type: 'string', hash: 'b'.repeat(64), raw: 'PRIVATE BODY' } },
@@ -41,6 +43,9 @@ it('exports self-repair comparison hashes and counters without raw user fields',
   const report = JSON.parse(fixture.result.value).selfRepairDiagnostics;
   expect(report.conflict.afterMetadata).toMatchObject({ revision: 3, lastOpId: 'writer:3' });
   expect(report.counters.normalUploadAttempt).toBe(0);
+  expect(report).toMatchObject({ failurePhase: 'connect', errorCode: 'permission-denied',
+    errorMessage: 'gate read denied', failureReason: 'permission-denied' });
+  expect(report.phaseEvents[0]).toMatchObject({ phase: 'connect', status: 'failed' });
   expect(fixture.result.value).not.toContain('PRIVATE');
   expect(fixture.writes).not.toHaveBeenCalled();
 });

@@ -2,7 +2,7 @@ import { planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
 import { isValidSortKey } from "../domain/sortKeys";
 import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
-import { getSelfRepairDiagnostics, recordSelfRepairVerification, recordSyncActivity } from "./selfRepairDiagnostics";
+import { getSelfRepairDiagnostics, recordSelfRepairFailure, recordSelfRepairPhase, recordSelfRepairVerification, recordSyncActivity } from "./selfRepairDiagnostics";
 
 export const canonicalSyncValue = (value: unknown): string => JSON.stringify(value, (_key, item) =>
   item && typeof item === "object" && !Array.isArray(item)
@@ -87,7 +87,12 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
   onProgress: (progress: SyncSelfRepairProgress) => void = () => undefined,
   assertActive: () => void = () => undefined, diagnosticOnly = false) {
   const repairDeviceId = `sync-self-repair-${globalThis.crypto.randomUUID()}`;
+  let phase = diagnosticOnly ? "local-preconditions" : "lock-acquisition";
+  const startPhase = (next: string) => { phase = next; recordSelfRepairPhase(next, "start"); };
+  const completePhase = () => recordSelfRepairPhase(phase, "complete");
   const execute = async () => {
+  if (!diagnosticOnly) completePhase();
+  startPhase("local-preconditions");
   assertActive();
   if (!await persistence.isLocalRecoveryMode()) throw new Error("ローカル復旧モードではありません。");
   const sourceRaw = await persistence.loadCommitted();
@@ -106,12 +111,18 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     throw new Error("元Journalと旧Outboxの退避証拠がありません。");
   if (!adapter.readRecoverySnapshot || !adapter.convergeRecoveryTarget || !adapter.auditOutbox)
     throw new Error("Firebase自己修復の機能が利用できません。");
+  completePhase();
   const readRecoverySnapshot = adapter.readRecoverySnapshot;
   const convergeRecoveryTarget = adapter.convergeRecoveryTarget;
   const auditOutbox = adapter.auditOutbox;
   onProgress({ phase: "reading", completed: 0, total: 0 });
+  startPhase("connect");
   await adapter.connect();
+  completePhase();
+  startPhase("server-read");
   const initial = await readRecoverySnapshot();
+  completePhase();
+  startPhase("planning");
   const plan = planSyncSelfRepair(Object.values(source.domain), initial.nodes);
   const targets: ({ kind: "node"; id: string } | { kind: "pinnedNote" } | { kind: "features" })[] =
     (diagnosticOnly ? [...plan.desired.keys()].sort() : plan.changedIds).map((id) => ({ kind: "node", id }));
@@ -121,6 +132,8 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     targets.push({ kind: "pinnedNote" });
   if (diagnosticOnly || canonicalSyncValue(initial.features?.value ?? { ideasEnabled: false }) !== canonicalSyncValue(featuresDesired))
     targets.push({ kind: "features" });
+  completePhase();
+  startPhase("repair-transactions");
   const operations: SyncOperation[] = [];
   let completed = 0;
   for (const target of targets) {
@@ -146,14 +159,20 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     }
     completed++;
   }
+  completePhase();
   if (diagnosticOnly) return { nodeCount: initial.nodes.length, operationCount: 0,
     receiptCount: 0, remoteOnlyCount: plan.remoteOnlyCount, archivedOldOutboxCount: evidence.archivedOutboxCount };
   onProgress({ phase: "verifying", completed, total: targets.length });
+  startPhase("receipt-audit");
   assertActive();
   const receipts = await auditOutbox(operations);
   if (receipts.received !== operations.length || receipts.missing !== 0)
     throw new Error("自己修復Receiptの照合が完了していません。");
+  completePhase();
+  startPhase("final-server-read");
   const final = await readRecoverySnapshot();
+  completePhase();
+  startPhase("verification");
   if (!adapter.assertExclusiveRepair) throw new Error("自己修復lockの最終確認が利用できません。");
   await adapter.assertExclusiveRepair();
   const finalMap = new Map(final.nodes.map((record) => [record.value.id, record]));
@@ -190,8 +209,10 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
     throw new Error("Firebase再読込と現在ローカル状態が一致しません。再試行できます。");
   if (await persistence.loadCommitted() !== sourceRaw || await persistence.loadJournal())
     throw new Error("自己修復中にローカル状態が変更されました。同期復帰を停止しました。");
+  completePhase();
   assertActive();
   onProgress({ phase: "finalizing", completed, total: targets.length });
+  startPhase("local-finalization");
   const next: LocalEnvelope = { ...source, domain: Object.fromEntries(finalMap),
     sync: { ...source.sync, outbox: [], seenOpIds: [...new Set([...source.sync.seenOpIds,
       ...operations.map((operation) => operation.opId)])].slice(-500) },
@@ -201,11 +222,18 @@ export async function runSyncSelfRepair(persistence: IndexedDbTaskMemoApplicatio
       features: { ...source.profile.features, synced: final.features ?? null,
         migrationPending: false } } };
   await persistence.completeLocalSelfRepair(sourceRaw, JSON.stringify(next), new Date().toISOString());
+  completePhase();
   return { nodeCount: final.nodes.length, operationCount: operations.length,
     receiptCount: receipts.received, remoteOnlyCount: plan.remoteOnlyCount,
     archivedOldOutboxCount: evidence.archivedOutboxCount };
   };
-  if (diagnosticOnly) return execute();
-  if (!adapter.withExclusiveRepair) throw new Error("自己修復の排他lockが利用できません。Firebaseへ書き込んでいません。");
-  return adapter.withExclusiveRepair(repairDeviceId, execute);
+  try {
+    if (diagnosticOnly) return await execute();
+    startPhase("lock-acquisition");
+    if (!adapter.withExclusiveRepair) throw new Error("自己修復の排他lockが利用できません。Firebaseへ書き込んでいません。");
+    return await adapter.withExclusiveRepair(repairDeviceId, execute);
+  } catch (reason) {
+    recordSelfRepairFailure(phase, reason);
+    throw reason;
+  }
 }

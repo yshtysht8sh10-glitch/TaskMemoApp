@@ -92,6 +92,25 @@ describe("sync self repair", () => {
     expect(state.active).toBe(state.source);
     expect(state.mode).toBe(true);
   });
+  it("persists the failing pre-transaction phase and error without touching local evidence", async () => {
+    const state = fixture([record("a", "local")], [record("a", "remote")]);
+    state.adapter.connect = async () => { throw { code: "permission-denied", message: "gate read denied" }; };
+    beginSelfRepairDiagnostics("local-generation", false);
+    try {
+      await expect(runSyncSelfRepair(state.persistence, state.adapter)).rejects.toMatchObject({ code: "permission-denied" });
+      expect(getSelfRepairDiagnostics()).toMatchObject({ failurePhase: "connect",
+        errorCode: "permission-denied", errorMessage: "gate read denied",
+        failureReason: "permission-denied" });
+      expect(getSelfRepairDiagnostics()?.phaseEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ phase: "local-preconditions", status: "complete" }),
+        expect.objectContaining({ phase: "connect", status: "start" }),
+        expect.objectContaining({ phase: "connect", status: "failed" }),
+      ]));
+      expect(state.writes).toBe(0);
+      expect(state.active).toBe(state.source);
+      expect(state.mode).toBe(true);
+    } finally { finishSelfRepairDiagnostics("failed"); }
+  });
   it("investigation: canonical comparison ignores object key order but retains semantic and representation differences", () => {
     expect(canonicalSyncValue({ title: "a", body: "b" })).toBe(canonicalSyncValue({ body: "b", title: "a" }));
     expect(canonicalSyncValue({ dueAt: undefined })).toBe(canonicalSyncValue({}));
