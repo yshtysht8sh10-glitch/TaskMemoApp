@@ -25,7 +25,7 @@ export function parseLocalDateTime(value: string) {
   if (!match) return null;
   const [, year, month, day, hour, minute] = match.map(Number);
   const date = new Date(year, month - 1, day, hour, minute, 0, 0);
-  return Number.isNaN(date.getTime()) ? null : date;
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day && date.getHours() === hour && date.getMinutes() === minute ? date : null;
 }
 
 export const formatDateTimeInput = (date: Date) =>

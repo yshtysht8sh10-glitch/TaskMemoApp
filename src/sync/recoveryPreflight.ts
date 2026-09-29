@@ -211,7 +211,7 @@ const canonical = (value: unknown): string => JSON.stringify(value, (_key, item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 
 const operationTypes = ["create", "update", "complete", "uncomplete", "softDelete", "restore", "purge", "undo", "redo", "import"] as const;
-const userContentFields = new Set(["type", "parentId", "title", "body", "memoType", "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "repeatRule", "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt", "deletionBatchId", "purgedAt"]);
+const userContentFields = new Set(["type", "parentId", "title", "body", "memoType", "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "routineDueOverrides", "repeatRule", "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt", "deletionBatchId", "purgedAt"]);
 const timestampFields = new Set(["createdAt", "updatedAt"]);
 // createdAt and updatedAt can affect routine anchors and completion-history presentation.
 const knownValueFields = new Set(["id", "sortKey", ...userContentFields, ...timestampFields]);

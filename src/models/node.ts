@@ -74,6 +74,11 @@ export type MemoNode = BaseNode & {
   /** Completion timestamps keyed by the local calendar date (YYYY-MM-DD). */
   /** ISO completion timestamp, or null as a synchronized completion-cancellation tombstone. */
   routineHistory?: Record<string, string | null>;
+  /** Per-occurrence due time. Null cancels an override during sync/undo. */
+  routineDueOverrides?: Record<string, string | null>;
+  /** Transient list projection for a missed occurrence; never persisted. */
+  routineOccurrenceKey?: string;
+  routineSourceId?: string;
   repeatRule?: RepeatRule | null;
 };
 

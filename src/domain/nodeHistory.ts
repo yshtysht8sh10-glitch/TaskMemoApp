@@ -41,9 +41,13 @@ function replayNodes(current: Node[], target: Node[], now: Date) {
       const routineHistory = { ...node.routineHistory };
       for (const key of Object.keys(previous.routineHistory ?? {}))
         if (!(key in routineHistory)) routineHistory[key] = null;
+      const routineDueOverrides = { ...node.routineDueOverrides };
+      for (const key of Object.keys(previous.routineDueOverrides ?? {}))
+        if (!(key in routineDueOverrides)) routineDueOverrides[key] = null;
       return {
         ...node,
         ...(Object.keys(routineHistory).length ? { routineHistory } : {}),
+        ...(Object.keys(routineDueOverrides).length ? { routineDueOverrides } : {}),
         updatedAt,
       };
     }

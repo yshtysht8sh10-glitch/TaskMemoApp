@@ -16,7 +16,7 @@ async function diagnosticHash(value: unknown) {
 }
 
 const knownFields = new Set(["id", "sortKey", "type", "parentId", "title", "body", "memoType",
-  "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "repeatRule",
+  "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "routineDueOverrides", "repeatRule",
   "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt",
   "deletionBatchId", "purgedAt", "createdAt", "updatedAt"]);
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { CategoryNode, MemoNode, Node, RepeatRule } from '@/models/node';
 import { completeMemo, ensureRoutineCategories, moveNode, restoreMemo } from './nodeOperations';
-import { isRoutineDueOn, localDateKey, repeatRuleLabel, routineCategoryForMemo, routineHistoryDays, routineOccurrenceDueAt } from './routine';
+import { clearRoutineCompletion, isRoutineDueOn, localDateKey, repeatRuleLabel, routineCategoryForMemo, routineHistoryDays, routineOccurrenceDueAt, toggleRoutineCompletion } from './routine';
+import { deadlineGroups, moveMemoInDeadlineList } from './deadlineView';
+import { commitNodeHistory, createNodeHistory, undoNodeHistory } from './nodeHistory';
 
 const now = new Date(2026, 8, 16, 10);
 const root = (): CategoryNode => ({ id: 'routine', type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: 'a', title: 'ルーティーン', createdAt: now, updatedAt: now, deletedAt: null });
@@ -30,4 +32,39 @@ describe('routine', () => {
   it('通常Categoryから移動しただけではruleを設定せず履歴を保持する', () => { const normal: CategoryNode = { ...root(), id: 'normal', categoryKind: undefined }; const source = [root(), normal, { ...memo({ frequency: 'day', interval: 1, startsOn: '2026-09-16' }, 'normal'), routineHistory: { [localDateKey(now)]: now.toISOString() } }]; const moved = moveNode(source, 'm', 'routine'); expect(moved[2]).toMatchObject({ repeatRule: null, routineHistory: (source[2] as MemoNode).routineHistory }); });
   it('旧周期Categoryをruleへ移行してtombstone化する', () => { const daily: CategoryNode = { ...root(), id: 'daily', categoryKind: 'routineDaily', parentId: 'routine' }; const migrated = ensureRoutineCategories([root(), daily, memo(null, 'daily')], now); expect(migrated.find((node) => node.id === 'daily')).toMatchObject({ purgedAt: now }); expect(migrated.find((node) => node.id === 'm')).toMatchObject({ parentId: 'routine', repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-09-16' } }); });
   it('表示名は固定値ではなくfrequencyとintervalから作る', () => { expect(repeatRuleLabel({ frequency: 'week', interval: 2, startsOn: '2026-09-16' })).toBe('2週間おき'); });
+  it('当日分だけ昼へ移動し、完了取消後も昼に復帰し、翌日は基本の夜へ戻る', () => {
+    const source: Node[] = [root(), { ...memo({ frequency: 'day', interval: 1, startsOn: '2026-09-16' }), dueAt: new Date(2026, 8, 16, 23, 59), duePreset: 'custom' }];
+    const moved = moveMemoInDeadlineList(source, 'm', 'daytime', undefined, now, 'dayNight');
+    const task = moved[1] as MemoNode;
+    expect(task.dueAt).toEqual((source[1] as MemoNode).dueAt);
+    expect(deadlineGroups(moved, now, undefined, 'dayNight').find((group) => group.key === 'daytime')?.memos.map((item) => item.id)).toContain('m');
+    const completed = completeMemo(moved, 'm', now);
+    const restored = restoreMemo(completed, 'm', now);
+    expect(deadlineGroups(restored, now, undefined, 'dayNight').find((group) => group.key === 'daytime')?.memos.map((item) => item.id)).toContain('m');
+    expect(routineOccurrenceDueAt(restored, restored[1] as MemoNode, new Date(2026, 8, 17, 10))).toEqual(new Date(2026, 8, 17, 23, 59));
+    const undone = undoNodeHistory(commitNodeHistory(createNodeHistory(source), 'move', () => moved), new Date(now.getTime() + 1));
+    expect(routineOccurrenceDueAt(undone.nodes, undone.nodes[1] as MemoNode, now)).toEqual(new Date(2026, 8, 16, 23, 59));
+  });
+  it('未完了の過去回を期限切れに残し、当日回も同時に表示する', () => {
+    const task = memo({ frequency: 'day', interval: 1, startsOn: '2026-09-15' });
+    const nodes: Node[] = [root(), task];
+    const groups = deadlineGroups(nodes, now);
+    expect(groups.find((group) => group.key === 'overdue')?.memos.map((item) => item.routineOccurrenceKey)).toContain('2026-09-15');
+    expect(groups.find((group) => group.key === 'pm')?.memos.map((item) => item.id)).toContain('m');
+    const completed = toggleRoutineCompletion(nodes, 'm', new Date(2026, 8, 15, 10), now);
+    expect(completed[1].updatedAt).toEqual(now);
+    expect(deadlineGroups(completed, now).find((group) => group.key === 'overdue')?.memos).toHaveLength(0);
+    const restored = clearRoutineCompletion(completed, 'm', new Date(2026, 8, 15), now);
+    expect(deadlineGroups(restored, now).find((group) => group.key === 'overdue')?.memos.map((item) => item.routineOccurrenceKey)).toContain('2026-09-15');
+    const todayCompleted = toggleRoutineCompletion(nodes, 'm', now, now);
+    expect(deadlineGroups(todayCompleted, now).find((group) => group.key === 'overdue')?.memos.map((item) => item.routineOccurrenceKey)).toContain('2026-09-15');
+  });
+  it.each([
+    [{ frequency: 'day', interval: 1, startsOn: '2026-09-16' }, ['2026-09-30', '2026-09-29', '2026-09-28']],
+    [{ frequency: 'week', interval: 1, startsOn: '2026-09-16' }, ['2026-09-30', '2026-09-23', '2026-09-16']],
+    [{ frequency: 'week', interval: 2, startsOn: '2026-09-16' }, ['2026-09-30', '2026-09-16']],
+  ] as const)('実績は直近の実行周期だけを表示する', (rule, expected) => {
+    const task = memo(rule);
+    expect(routineHistoryDays(task, new Date(2026, 8, 30), 3).map((day) => day.key)).toEqual(expected);
+  });
 });

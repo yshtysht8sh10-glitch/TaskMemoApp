@@ -115,6 +115,12 @@ export function routineOccurrenceDueAt(
     isRoutineCompletedOn(memo, now)
   )
     return null;
+  const overridden = memo.routineDueOverrides?.[localDateKey(now)];
+  if (overridden) {
+    const date = new Date(overridden);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  if (memo.dueAt) return new Date(now.getFullYear(), now.getMonth(), now.getDate(), memo.dueAt.getHours(), memo.dueAt.getMinutes(), memo.dueAt.getSeconds(), memo.dueAt.getMilliseconds());
   return endOfDay(now);
 }
 
@@ -130,6 +136,21 @@ export const isRoutineDueOn = (
   );
 };
 
+export function missedRoutineOccurrences(nodes: Node[], memo: MemoNode, now = new Date()): MemoNode[] {
+  if (!routineCategoryForMemo(nodes, memo) || !isValidRepeatRule(memo.repeatRule)) return [];
+  const start = parseLocalDateKey(memo.repeatRule.startsOn)!;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const missed: MemoNode[] = [];
+  for (let date = start; date < today; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)) {
+    if (!isRepeatRuleDate(memo.repeatRule, date) || isRoutineCompletedOn(memo, date)) continue;
+    const dueAt = routineOccurrenceDueAt(nodes, memo, date);
+    if (!dueAt) continue;
+    const key = localDateKey(date);
+    missed.push({ ...memo, id: `routine-overdue:${memo.id}:${key}`, dueAt, routineOccurrenceKey: key, routineSourceId: memo.id });
+  }
+  return missed;
+}
+
 export function repeatRuleLabel(rule: RepeatRule | null | undefined) {
   if (!isValidRepeatRule(rule)) return "未設定";
   const units = { day: "日", week: "週間", month: "か月", year: "年" } as const;
@@ -144,6 +165,7 @@ export function toggleRoutineCompletion(
   nodes: Node[],
   memoId: string,
   date = new Date(),
+  now = date,
 ) {
   const key = localDateKey(date);
   return nodes.map((node) => {
@@ -154,8 +176,8 @@ export function toggleRoutineCompletion(
     )
       return node;
     const routineHistory = { ...node.routineHistory };
-    routineHistory[key] = routineHistory[key] ? null : date.toISOString();
-    return { ...node, routineHistory, updatedAt: date };
+    routineHistory[key] = routineHistory[key] ? null : now.toISOString();
+    return { ...node, routineHistory, updatedAt: now };
   });
 }
 
@@ -183,16 +205,12 @@ export function routineHistoryDays(
   end = new Date(),
   count = 7,
 ) {
-  return Array.from({ length: count }, (_, index) => {
-    const date = new Date(
-      end.getFullYear(),
-      end.getMonth(),
-      end.getDate() - index,
-    );
-    return {
-      key: localDateKey(date),
-      date,
-      completed: isRoutineCompletedOn(memo, date),
-    };
-  });
+  if (!isValidRepeatRule(memo.repeatRule)) return [];
+  const start = parseLocalDateKey(memo.repeatRule.startsOn)!;
+  const days: { key: string; date: Date; completed: boolean }[] = [];
+  for (let date = new Date(end.getFullYear(), end.getMonth(), end.getDate()); date >= start && days.length < count; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)) {
+    if (!isRepeatRuleDate(memo.repeatRule, date)) continue;
+    days.push({ key: localDateKey(date), date, completed: isRoutineCompletedOn(memo, date) });
+  }
+  return days;
 }

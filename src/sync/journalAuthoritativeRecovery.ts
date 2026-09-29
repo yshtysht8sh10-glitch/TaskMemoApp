@@ -7,7 +7,7 @@ const canonical = (value: unknown): string => JSON.stringify(value, (_key, item)
   item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const knownValueFields = new Set(["id", "sortKey", "type", "parentId", "title", "body", "memoType",
-  "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "repeatRule",
+  "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "routineDueOverrides", "repeatRule",
   "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt",
   "deletionBatchId", "purgedAt", "createdAt", "updatedAt"]);
 

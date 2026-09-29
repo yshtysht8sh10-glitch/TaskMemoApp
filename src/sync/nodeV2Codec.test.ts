@@ -11,7 +11,7 @@ describe("V2 Node codec", () => {
       id: "memo-a", type: "memo", memoType: "task", parentId: "category-a", sortKey: "a0",
       deadlineSortKey: "d0", title: "Title", body: "Body", dueAt: at, duePreset: "afternoon",
       status: "completed", completedAt: at, repeatRule: { frequency: "week", interval: 2, startsOn: "2026-09-18", weekdays: [1, 5] },
-      routineHistory: { "2026-09-18": at.toISOString(), "2026-09-17": null }, createdAt: at, updatedAt: at,
+      routineHistory: { "2026-09-18": at.toISOString(), "2026-09-17": null }, routineDueOverrides: { "2026-09-18": at.toISOString(), "2026-09-17": null }, createdAt: at, updatedAt: at,
       deletedAt: null, deletionBatchId: "batch-a", purgedAt: null, futureField: { retained: true },
     } as MemoNode & { futureField: { retained: boolean } };
     const encoded = nodeToV2Value(source);

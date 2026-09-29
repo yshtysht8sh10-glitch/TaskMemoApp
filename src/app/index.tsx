@@ -28,6 +28,8 @@ import { DeadlineView } from "@/components/DeadlineView";
 import { QuickTitleEditor } from "@/components/QuickTitleEditor";
 import { DateTimeField } from "@/components/DateTimeField";
 import { DateField } from "@/components/DateField";
+import { TimeField } from "@/components/TimeField";
+import { categoryMoveDestinations } from "@/domain/moveDestinations";
 import {
   canMoveNode,
   completeMemo,
@@ -112,6 +114,7 @@ import {
   clearRoutineCompletion,
   isValidRepeatRule,
   localDateKey,
+  parseLocalDateKey,
   repeatRuleLabel,
   routineCategoryForParent,
   routineHistoryDays,
@@ -217,6 +220,7 @@ export default function HomeScreen() {
   const [quickTitleTarget, setQuickTitleTarget] = useState<{ id: string; title: string } | null>(null);
   const [menuNode, setMenuNode] = useState<Node | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [revealMemoId, setRevealMemoId] = useState<string | null>(null);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [movingNode, setMovingNode] = useState<Node | null>(null);
   const [bulkMove, setBulkMove] = useState<{
@@ -231,7 +235,7 @@ export default function HomeScreen() {
     () => new Map(),
   );
   const [completionNotices, setCompletionNotices] = useState<
-    { token: string; id: string; title: string }[]
+    { token: string; id: string; title: string; occurrenceKey?: string }[]
   >([]);
   const [reminders, setReminders] = useState<ReminderPreferences>(
     DEFAULT_REMINDER_PREFERENCES,
@@ -448,6 +452,14 @@ export default function HomeScreen() {
   };
   const completeWithUndo = (memo: MemoNode) => {
     if (exitingMemos.has(memo.id)) return;
+    if (memo.routineOccurrenceKey && memo.routineSourceId) {
+      const date = parseLocalDateKey(memo.routineOccurrenceKey);
+      if (date) {
+        apply('ルーティーン旧回を完了', (current) => toggleRoutineCompletion(current, memo.routineSourceId!, date, new Date()));
+        setCompletionNotices((current) => [...current, { token: `${memo.id}-${Date.now()}`, id: memo.routineSourceId!, title: memo.title, occurrenceKey: memo.routineOccurrenceKey }]);
+      }
+      return;
+    }
     setExitingMemos((current) => new Map(current).set(memo.id, memo));
     apply("Memoを完了", (current) => completeMemo(current, memo.id));
   };
@@ -671,6 +683,8 @@ export default function HomeScreen() {
       <View style={styles.tree} pointerEvents={ready ? "auto" : "none"}>
         {view === "tree" ? (
           <NodeTree
+            revealMemoId={revealMemoId}
+            onMemoRevealed={() => setRevealMemoId(null)}
             nodes={displayNodes}
             showCompletedMemos={showCompletedTreeMemos}
             onShowCompletedMemosChange={(value) => {
@@ -729,6 +743,8 @@ export default function HomeScreen() {
           />
         ) : view === "deadline" ? (
           <DeadlineView
+            revealMemoId={revealMemoId}
+            onMemoRevealed={() => setRevealMemoId(null)}
             nodes={displayNodes}
             visibleGroupIds={visibleGroupIds}
             todayGranularity={todayGranularity}
@@ -749,15 +765,17 @@ export default function HomeScreen() {
             }}
             expandedGroups={deadlineExpanded}
             onExpandedGroupsChange={setDeadlineExpanded}
-            onQuickAdd={(title, deadline) =>
+            onQuickAdd={(title, deadline) => {
+              const id = `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
               apply("Memoをクイック追加", (current) =>
                 createNode(current, "memo", {
                   title,
                   parentId: null,
                   ...deadline,
-                }),
-              )
-            }
+                }, new Date(), id),
+              );
+              setRevealMemoId(id);
+            }}
             onRenameMemo={(id, title) =>
               apply("Memoタイトルを変更", (current) =>
                 updateNode(current, id, { title }),
@@ -1098,16 +1116,19 @@ export default function HomeScreen() {
         nodes={nodes}
         onToggleRoutineHistory={(memoId, date) =>
           apply("ルーティーン実績を変更", (current) =>
-            toggleRoutineCompletion(current, memoId, date),
+            toggleRoutineCompletion(current, memoId, date, new Date()),
           )
         }
         onClose={() => setEditor(null)}
         onSave={(draft, close = true) => {
+          const createdId = !editor?.node && editor?.type === 'memo'
+            ? `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : null;
           apply(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
             editor?.node
               ? updateNode(current, editor.node.id, draft)
-              : createNode(current, editor!.type, draft),
+              : createNode(current, editor!.type, draft, new Date(), createdId ?? undefined),
           );
+          if (createdId) setRevealMemoId(createdId);
           if (close) setEditor(null);
         }}
       />
@@ -1401,9 +1422,9 @@ export default function HomeScreen() {
                 next.delete(notice.id);
                 return next;
               });
-              apply("完了を元に戻す", (current) =>
-                restoreMemo(current, notice.id),
-              );
+              apply("完了を元に戻す", (current) => notice.occurrenceKey
+                ? clearRoutineCompletion(current, notice.id, parseLocalDateKey(notice.occurrenceKey) ?? new Date())
+                : restoreMemo(current, notice.id));
               setCompletionNotices((current) =>
                 current.filter((item) => item.token !== notice.token),
               );
@@ -1485,15 +1506,19 @@ function Action({
   label,
   onPress,
   danger,
+  depth = 0,
+  disabled = false,
 }: {
   label: string;
   onPress: () => void;
   danger?: boolean;
+  depth?: number;
+  disabled?: boolean;
 }) {
   const styles = useStyles();
   return (
-    <Pressable onPress={onPress} style={styles.action}>
-      <Text style={[styles.actionText, danger && styles.danger]}>{label}</Text>
+    <Pressable onPress={onPress} disabled={disabled} accessibilityState={{ disabled }} style={[styles.action, { paddingLeft: Math.min(depth, 8) * 20 }, disabled && { opacity: 0.4 }]}>
+      <Text style={[styles.actionText, danger && styles.danger]}>{depth > 0 ? '└ ' : ''}{label}</Text>
     </Pressable>
   );
 }
@@ -1741,7 +1766,10 @@ function EditorModal({
   const [repeatStartsOn, setRepeatStartsOn] = useState(
     initialMemo?.repeatRule?.startsOn ?? localDateKey(),
   );
-  const signature = JSON.stringify([title, body, preset, custom, status, repeatFrequency, repeatInterval, repeatStartsOn]);
+  const [routineTime, setRoutineTime] = useState(() => initialMemo?.dueAt
+    ? `${String(initialMemo.dueAt.getHours()).padStart(2, '0')}:${String(initialMemo.dueAt.getMinutes()).padStart(2, '0')}`
+    : '23:59');
+  const signature = JSON.stringify([title, body, preset, custom, status, repeatFrequency, repeatInterval, repeatStartsOn, routineTime]);
   const initialSignature = useRef(signature);
   const committedSignature = useRef(signature);
   useEffect(() => {
@@ -1754,12 +1782,13 @@ function EditorModal({
     const nextFrequency = memo.repeatRule?.frequency ?? "none";
     const nextInterval = String(memo.repeatRule?.interval ?? 1);
     const nextStartsOn = memo.repeatRule?.startsOn ?? repeatStartsOn;
-    const nextSignature = JSON.stringify([nextTitle, nextBody, nextPreset, nextCustom, nextStatus, nextFrequency, nextInterval, nextStartsOn]);
+    const nextRoutineTime = memo.dueAt ? `${String(memo.dueAt.getHours()).padStart(2, '0')}:${String(memo.dueAt.getMinutes()).padStart(2, '0')}` : '23:59';
+    const nextSignature = JSON.stringify([nextTitle, nextBody, nextPreset, nextCustom, nextStatus, nextFrequency, nextInterval, nextStartsOn, nextRoutineTime]);
     if (nextSignature === signature) return;
     const timer = setTimeout(() => {
       committedSignature.current = nextSignature;
       setTitle(nextTitle); setBody(nextBody); setPreset(nextPreset); setCustom(nextCustom);
-      setStatus(nextStatus); setRepeatFrequency(nextFrequency); setRepeatInterval(nextInterval); setRepeatStartsOn(nextStartsOn);
+      setStatus(nextStatus); setRepeatFrequency(nextFrequency); setRepeatInterval(nextInterval); setRepeatStartsOn(nextStartsOn); setRoutineTime(nextRoutineTime);
     }, 0);
     return () => clearTimeout(timer);
   // Update the open sheet when Undo/Redo or a remote revision changes this memo.
@@ -1801,12 +1830,17 @@ function EditorModal({
           "入力エラー",
           "間隔は1以上の整数、開始日は YYYY-MM-DD 形式で入力してください。",
         ) : undefined;
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(routineTime))
+        return close ? appAlert('入力エラー', '基本時刻を確認してください。') : undefined;
+      const [hour, minute] = routineTime.split(':').map(Number);
+      const baseDueAt = new Date();
+      baseDueAt.setHours(hour, minute, 0, 0);
       return commit({
         title,
         parentId: editor.parentId,
         body,
-        duePreset: memo?.duePreset ?? "none",
-        dueAt: memo?.dueAt ?? null,
+        duePreset: "custom",
+        dueAt: baseDueAt,
         status: "active",
         repeatRule,
         memoType: "task",
@@ -1987,12 +2021,14 @@ function EditorModal({
                           value={repeatStartsOn}
                           onChange={setRepeatStartsOn}
                         />
+                        <Text style={styles.label}>基本時刻</Text>
+                        <TimeField value={routineTime} onChange={setRoutineTime} />
                       </>
                     )}
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        {routineHistoryDays(memo).map((day) => (
+                        {routineHistoryDays({ ...memo, repeatRule: repeatFrequency === "none" ? null : { frequency: repeatFrequency, interval: Number(repeatInterval), startsOn: repeatStartsOn } }).map((day) => (
                           <Action
                             key={day.key}
                             label={`${day.completed ? "✓" : "—"} ${day.key}`}
@@ -2446,13 +2482,7 @@ function MovePanel({
   onMove: (parentId: string | null) => void;
 }) {
   const styles = useStyles();
-  const categories = nodes.filter(
-    (item) =>
-      item.type === "category" &&
-      item.deletedAt === null &&
-      !!node &&
-      canMoveNode(nodes, node.id, item.id),
-  );
+  const categories = categoryMoveDestinations(nodes, (id) => !!node && canMoveNode(nodes, node.id, id));
   return (
     <Modal
       visible={!!node}
@@ -2469,10 +2499,12 @@ function MovePanel({
         </View>
         <ScrollView contentContainerStyle={styles.panelList}>
           <Action label="ルート" onPress={() => onMove(null)} />
-          {categories.map((category) => (
+          {categories.map(({ category, depth, available }) => (
             <Action
               key={category.id}
               label={category.title}
+              depth={depth}
+              disabled={!available}
               onPress={() => onMove(category.id)}
             />
           ))}
@@ -2494,13 +2526,7 @@ function BulkMovePanel({
   onMove: (parentId: string | null) => void;
 }) {
   const styles = useStyles();
-  const categories = nodes.filter(
-    (item) =>
-      item.type === "category" &&
-      item.deletedAt === null &&
-      !item.purgedAt &&
-      canMoveSelectedNodes(nodes, nodeIds, item.id),
-  );
+  const categories = categoryMoveDestinations(nodes, (id) => canMoveSelectedNodes(nodes, nodeIds, id));
   return (
     <Modal
       visible={nodeIds.length > 0}
@@ -2518,12 +2544,14 @@ function BulkMovePanel({
           </View>
           <ScrollView contentContainerStyle={styles.panelList}>
             {canMoveSelectedNodes(nodes, nodeIds, null) && (
-              <Action label="◇ 無所属" onPress={() => onMove(null)} />
+              <Action label="ルート" onPress={() => onMove(null)} />
             )}
-            {categories.map((category) => (
+            {categories.map(({ category, depth, available }) => (
               <Action
                 key={category.id}
                 label={`📁 ${category.title}`}
+                depth={depth}
+                disabled={!available}
                 onPress={() => onMove(category.id)}
               />
             ))}

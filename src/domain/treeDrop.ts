@@ -65,7 +65,7 @@ export function dropCandidateFor(nodes: Node[], movingId: string, target?: Node,
   const moving = nodes.find((node) => node.id === movingId && node.deletedAt === null);
   if (!moving || !target || target.id === movingId) return null;
 
-  if (placement === 'after' && target.type === 'memo') {
+  if (placement === 'after') {
     if (!canMoveNode(nodes, movingId, target.parentId)) return null;
     const siblings = siblingsOf(nodes, target.parentId, movingId);
     if (!siblings.some((node) => node.id === target.id)) return null;
@@ -79,7 +79,7 @@ export function dropCandidateFor(nodes: Node[], movingId: string, target?: Node,
     return { parentId: null, beforeId: firstRootMemo?.id, targetId: target.id, kind: 'inside' };
   }
 
-  if (target.type === 'category' && (moving.type === 'memo' || target.parentId !== moving.parentId || target.id === moving.parentId)) {
+  if (target.type === 'category' && placement === 'on') {
     if (!canMoveNode(nodes, movingId, target.id)) return null;
     // Dropping on a Category header means inserting at the beginning of that
     // Category. This remains meaningful when it is already the current parent.

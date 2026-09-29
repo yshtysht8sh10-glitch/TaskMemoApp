@@ -125,6 +125,9 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
         !validDateString(value.completedAt, true)
       )
         throw new Error(`${value.id}のMemo日付が不正です。`);
+      if (value.routineDueOverrides !== undefined &&
+        (!isObject(value.routineDueOverrides) || Object.entries(value.routineDueOverrides).some(([key, due]) => !/^\d{4}-\d{2}-\d{2}$/.test(key) || !validDateString(due, true))))
+        throw new Error(`${value.id}のルーティーン当日設定が不正です。`);
     }
     return value;
   });

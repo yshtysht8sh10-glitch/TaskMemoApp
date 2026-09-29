@@ -11,6 +11,11 @@ const settings: TaskMemoBackupSettings = { listDisplay: { visibleGroupIds: ['ove
 describe('Node backup', () => {
   it('Task/Idea種別をJSONで往復し、旧バックアップMemoはTaskへ正規化する', () => { const idea = { ...memo, memoType: 'idea' as const }; const { memoType: _memoType, ...legacy } = memo; expect(parseNodeBackup(serializeNodeBackup([category, idea]))[1]).toMatchObject({ memoType: 'idea' }); expect(parseNodeBackup(serializeNodeBackup([category, legacy as Node]))[1]).toMatchObject({ memoType: 'task' }); });
   it('全Node項目とDateを往復する', () => { const restored = parseNodeBackup(serializeNodeBackup([category, memo], date)); expect(restored).toEqual([category, memo]); expect(restored[1].createdAt).toBeInstanceOf(Date); });
+  it('Routine当日設定をJSONで往復し、不正な設定は拒否する', () => {
+    const withOverride: Node = { ...memo, routineDueOverrides: { '2026-09-13': date.toISOString() } };
+    expect(parseNodeBackup(serializeNodeBackup([category, withOverride]))[1]).toEqual(withOverride);
+    expect(() => parseNodeBackup(serializeNodeBackup([category, { ...memo, routineDueOverrides: { '2026-09-13': 'invalid' } }]))).toThrow(/当日設定/);
+  });
   it('完全削除tombstoneをDateとして往復する', () => { const purged = [{ ...category, deletedAt: date, purgedAt: date }, { ...memo, deletedAt: date, purgedAt: date }]; expect(parseNodeBackup(serializeNodeBackup(purged, date))).toEqual(purged); });
   it('壊れたJSONとschemaVersionを拒否する', () => { expect(() => parseNodeBackup('{')).toThrow(/JSON/); expect(() => parseNodeBackup('{"schemaVersion":99,"exportedAt":"2026-01-01T00:00:00Z","nodes":[]}')).toThrow(/対応/); });
   it('存在しない親とMemo親を拒否する', () => { expect(() => parseNodeBackup(serializeNodeBackup([{ ...memo, parentId: 'missing' }]))).toThrow(/親参照/); expect(() => parseNodeBackup(serializeNodeBackup([{ ...memo, parentId: null }, { ...category, parentId: 'm' }]))).toThrow(/親参照/); });

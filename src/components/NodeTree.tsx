@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ElementRef } from 'react';
 import { Platform, Pressable, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
 import DraggableFlatList, { type DragEndParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, visibleDescendantNodeCount, visibleUnassignedMemoCount, type VisibleTreeRow } from '@/domain/treeView';
@@ -19,16 +19,17 @@ import { isMobileTitleEditor } from '@/utils/memoTap';
 
 export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
-type Props = { nodes: Node[]; showCompletedMemos: boolean; onShowCompletedMemosChange: (value: boolean) => void; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => void; onOpenMemo: (memo: import('@/models/node').MemoNode) => void; onQuickTitle: (memo: import('@/models/node').MemoNode) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
+type Props = { nodes: Node[]; revealMemoId?: string | null; onMemoRevealed?: () => void; showCompletedMemos: boolean; onShowCompletedMemosChange: (value: boolean) => void; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => void; onOpenMemo: (memo: import('@/models/node').MemoNode) => void; onQuickTitle: (memo: import('@/models/node').MemoNode) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
 const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
 let retainedExpandedCategoryIds = new Set(INITIAL_EXPANDED_CATEGORY_IDS);
 
-export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onOpenMemo, onQuickTitle, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
+export function NodeTree({ nodes, revealMemoId, onMemoRevealed, showCompletedMemos, onShowCompletedMemosChange, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onOpenMemo, onQuickTitle, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
   const { width } = useWindowDimensions();
   const mobileTitleEditor = isMobileTitleEditor(Platform.OS, width, Platform.OS === 'web' && typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
   const { colors } = useAppTheme(); const styles = createStyles(colors);
   const [mountId] = useState(nextTreeMountId);
   const viewportRef = useRef<View>(null); const scrollOffsetRef = useRef(0);
+  const listRef = useRef<ElementRef<typeof DraggableFlatList<VisibleRow>>>(null);
   const [renderedAt] = useState(() => Date.now());
   const [expanded, setExpanded] = useState(() => new Set(retainedExpandedCategoryIds));
   const [candidate, setCandidate] = useState<DropCandidate | null>(null);
@@ -37,6 +38,33 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
   const movingId = useRef<string | null>(null);
   const candidateRef = useRef<DropCandidate | null>(null);
   const rows = useMemo(() => flattenVisibleNodes(nodes, expanded, showCompletedMemos), [nodes, expanded, showCompletedMemos]);
+  useEffect(() => {
+    if (!revealMemoId) return;
+    const memo = nodes.find((node) => node.id === revealMemoId && node.type === 'memo');
+    if (!memo) return;
+    const next = new Set(expanded);
+    let parentId = memo.parentId;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId); next.add(parentId);
+      parentId = nodes.find((node) => node.id === parentId)?.parentId ?? null;
+    }
+    if (!memo.parentId) next.add(UNASSIGNED_GROUP_ID);
+    if (next.size !== expanded.size) {
+      const timer = setTimeout(() => setExpanded(next), 0);
+      return () => clearTimeout(timer);
+    }
+    const index = rows.findIndex((row) => row.node.id === revealMemoId);
+    if (index < 0) return;
+    const frame = requestAnimationFrame(() => {
+      if (Platform.OS === 'web') {
+        const element = Array.from(document.querySelectorAll<HTMLElement>('[data-taskmemo-dnd-key]')).find((item) => item.dataset.taskmemoDndKey === revealMemoId);
+        element?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+      onMemoRevealed?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expanded, nodes, onMemoRevealed, revealMemoId, rows]);
   const categoryIds = useMemo(() => [UNASSIGNED_GROUP_ID, ...nodes.filter((node) => node.type === 'category' && node.deletedAt === null).map((node) => node.id)], [nodes]);
   const categoryChildCounts = useMemo(() => new Map(categoryIds.map((id) => [id, id === UNASSIGNED_GROUP_ID ? visibleUnassignedMemoCount(nodes) : visibleDescendantNodeCount(nodes, id)])), [categoryIds, nodes]);
   const orderedKeys = useMemo(() => rows.map((row) => row.node.id), [rows]);
@@ -61,7 +89,7 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
   };
   const selectionTools = selectionMode ? <><Text style={styles.selectionCount}>{normalizedIds.length}件選択</Text><Pressable style={styles.tool} onPress={clearSelection}><Text style={styles.toolText}>キャンセル</Text></Pressable></> : <Pressable style={styles.tool} onPress={() => setSelectionMode(true)}><Text style={styles.toolText}>複数選択</Text></Pressable>;
   const actionBar = selectionMode && <View style={styles.actionBar}><Text style={styles.actionCount}>{normalizedIds.length}件選択</Text><Pressable disabled={!normalizedIds.length} style={[styles.actionButton, !normalizedIds.length && styles.disabled]} onPress={() => onBulkMove(normalizedIds, clearSelection)}><Text style={styles.actionText}>移動</Text></Pressable><Pressable disabled={!completableCount} style={[styles.actionButton, !completableCount && styles.disabled]} onPress={() => { if (onBulkComplete(normalizedIds)) clearSelection(); }}><Text style={styles.actionText}>{completableCount}件のMemoを完了</Text></Pressable><Pressable disabled={!normalizedIds.length} style={[styles.actionButton, styles.deleteButton, !normalizedIds.length && styles.disabled]} onPress={() => onBulkDelete(normalizedIds, clearSelection)}><Text style={styles.deleteText}>削除</Text></Pressable></View>;
-  const updateCandidate = (index: number, data = rows) => { const target = data[index]?.node; const next = movingId.current ? dropCandidateFor(nodes, movingId.current, target) : null; candidateRef.current = next; setCandidate(next); treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next }); };
+  const updateCandidate = (index: number, data = rows) => { const atEnd = index >= data.length; const target = (atEnd ? data.at(-1) : data[index])?.node; const next = movingId.current ? dropCandidateFor(nodes, movingId.current, target, atEnd ? 'after' : 'on') : null; candidateRef.current = next; setCandidate(next); treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next }); };
   const drop = ({ data, from, to }: DragEndParams<VisibleRow>) => {
     const id = movingId.current;
     // The returned array already contains the moving row at `to`, so it is not
@@ -79,21 +107,22 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
     <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !selectionMode && !row.virtual}
       distinguishBeforeTarget
-      canDropAfter={(row) => row.node.type === 'memo'}
+      canDropAfter={() => true}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: selectionMode ? 170 : 110 }}
       onHover={(active, target, placement) => { movingId.current = active.node.id; const next = placement === 'before' ? candidateBeforeTarget(active, target) : dropCandidateFor(nodes, active.node.id, target.node, placement); candidateRef.current = next; setCandidate(next); }}
       onDrop={(active, target, placement) => { const next = placement === 'before' ? candidateBeforeTarget(active, target) : dropCandidateFor(nodes, active.node.id, target.node, placement); candidateRef.current = null; setCandidate(null); if (next) onDrop(active.node.id, next); }}
       renderItem={(item, isActive) => {
         const isTarget = candidate?.targetId === item.node.id; const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
         const selectionState = selectedNodeState(nodes, selectedNodeIds, item.node.id);
-        return item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} collapsedChildCount={categoryChildCounts.get(item.node.id) ?? 0} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} titleEdit={titleEdit} onOpen={() => onOpenMemo(item.node as import('@/models/node').MemoNode)} onQuickTitle={() => onQuickTitle(item.node as import('@/models/node').MemoNode)} mobileTitleEditor={mobileTitleEditor} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} />;
+        return item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} collapsedChildCount={categoryChildCounts.get(item.node.id) ?? 0} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} showInsertAfter={isTarget && candidate?.kind === 'after'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} titleEdit={titleEdit} onOpen={() => onOpenMemo(item.node as import('@/models/node').MemoNode)} onQuickTitle={() => onQuickTitle(item.node as import('@/models/node').MemoNode)} mobileTitleEditor={mobileTitleEditor} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={() => {}} />;
       }} />
     {actionBar}
   </View>;
   return <View style={styles.container}>
     <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <View ref={viewportRef} collapsable={false} style={styles.listViewport}>
-      <DraggableFlatList data={rows} keyExtractor={(row) => row.node.id}
+      <DraggableFlatList ref={listRef} data={rows} keyExtractor={(row) => row.node.id}
+        onScrollToIndexFailed={({ index, averageItemLength }) => listRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: true })}
         onDragBegin={(index) => { movingId.current = rows[index]?.virtual ? null : rows[index]?.node.id ?? null; if (movingId.current) beginTreeDragTrace(movingId.current); treeDiagnosticLog('drag-begin', { mountId, index, movingId: movingId.current, nodes: summarizeNodes(nodes), treeRows: summarizeRows(rows), keys: orderedKeys }); updateCandidate(index); }}
         onPlaceholderIndexChange={updateCandidate} onRelease={(index) => { treeDiagnosticLog('drag-release', { index, movingId: movingId.current, candidate: candidateRef.current }); measureAllTreeRows('release'); }} onDragEnd={drop}
         onScrollOffsetChange={(offset) => { scrollOffsetRef.current = offset; }} activationDistance={NATIVE_DRAG_ACTIVATION_DISTANCE_PX} autoscrollThreshold={DRAG_AUTOSCROLL_THRESHOLD_PX} autoscrollSpeed={NATIVE_DRAG_AUTOSCROLL_SPEED}
@@ -102,7 +131,7 @@ export function NodeTree({ nodes, showCompletedMemos, onShowCompletedMemosChange
     const treeProps = { depth: item.depth, ancestorContinuation: item.ancestorContinuation, hasNextSibling: item.hasNextSibling };
     const selectionState = selectedNodeState(nodes, selectedNodeIds, item.node.id);
     return <TreeRowDiagnostics rowKey={item.node.id} index={getIndex() ?? -1} orderedKeys={orderedKeys} viewportRef={viewportRef} scrollOffsetRef={scrollOffsetRef} revision={revision}>
-      <ScaleDecorator activeScale={1.025}>{item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} collapsedChildCount={categoryChildCounts.get(item.node.id) ?? 0} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode || item.virtual ? () => {} : drag} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} titleEdit={titleEdit} onOpen={() => onOpenMemo(item.node as import('@/models/node').MemoNode)} onQuickTitle={() => onQuickTitle(item.node as import('@/models/node').MemoNode)} mobileTitleEditor={mobileTitleEditor} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode ? () => {} : drag} />}</ScaleDecorator>
+      <ScaleDecorator activeScale={1.025}>{item.node.type === 'category' ? <CategoryRow category={item.node} {...treeProps} virtual={!!item.virtual} allowAddMemo={true} isExpanded={expanded.has(item.node.id)} collapsedChildCount={categoryChildCounts.get(item.node.id) ?? 0} isActive={isActive} isDropInside={isTarget && candidate?.kind === 'inside'} showInsertBefore={isTarget && candidate?.kind === 'before'} showInsertAfter={isTarget && candidate?.kind === 'after'} selectionMode={selectionMode && !item.virtual && item.node.categoryKind !== 'routineRoot'} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onToggle={() => toggle(item.node.id)} onAddMemo={() => onAddMemo(item.virtual ? null : item.node.id)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode || item.virtual ? () => {} : drag} /> : <MemoRow memo={item.node} {...treeProps} now={renderedAt} isActive={isActive} showInsertBefore={isTarget && candidate?.kind === 'before'} completing={completingIds.has(item.node.id)} routine={!!routineCategoryForMemo(nodes, item.node)} selectionMode={selectionMode} selectionState={selectionState} onToggleSelected={() => toggleSelected(item.node.id)} onCompletionAnimationFinished={() => onCompletionAnimationFinished(item.node.id)} titleEdit={titleEdit} onOpen={() => onOpenMemo(item.node as import('@/models/node').MemoNode)} onQuickTitle={() => onQuickTitle(item.node as import('@/models/node').MemoNode)} mobileTitleEditor={mobileTitleEditor} onComplete={() => item.node.type === 'memo' && onComplete(item.node)} onMenu={() => onMenu(item.node)} onLongPress={selectionMode ? () => {} : drag} />}</ScaleDecorator>
     </TreeRowDiagnostics>;
       }} />
     </View>

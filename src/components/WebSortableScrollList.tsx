@@ -122,24 +122,41 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
     activeKey === null
       ? null
       : (data.find((item) => keyFor(item) === activeKey) ?? null);
+  const tailItem = data.at(-1);
+  const tailKey = tailItem && canDropAfter?.(tailItem) ? keyFor(tailItem) : null;
+  const targetTail = useCallback(() => {
+    const active = activeRef.current;
+    if (!active || !tailItem || !tailKey) return;
+    targetRef.current = tailItem;
+    placementRef.current = 'after';
+    setTargetKey(tailKey);
+    setPlacement('after');
+    onHover(active, tailItem, 'after');
+  }, [onHover, tailItem, tailKey]);
 
   const updateTarget = useCallback((item: T, key: string, clientY: number, currentTarget: { getBoundingClientRect(): { top: number; height: number } }) => {
     const active = activeRef.current; if (!active) return;
     const bounds = currentTarget.getBoundingClientRect();
     const nextPlacement = canDropAfter?.(item)
-      ? clientY >= bounds.top + bounds.height / 2 ? 'after' : 'before'
+      ? distinguishBeforeTarget
+        ? clientY <= bounds.top + bounds.height * 0.25 ? 'before' : clientY >= bounds.top + bounds.height * 0.75 ? 'after' : 'on'
+        : clientY >= bounds.top + bounds.height / 2 ? 'after' : 'before'
       : distinguishBeforeTarget && clientY <= bounds.top + bounds.height * 0.25 ? 'before' : distinguishBeforeTarget ? 'on' : 'before';
     targetRef.current = item; placementRef.current = nextPlacement; setTargetKey(key); setPlacement(nextPlacement); onHover(active, item, nextPlacement);
   }, [canDropAfter, distinguishBeforeTarget, onHover]);
   useEffect(() => {
     refreshTargetRef.current = () => {
       if (!activeRef.current || typeof document === 'undefined') return;
+      if (document.elementFromPoint(pointerRef.current.x, pointerRef.current.y)?.closest('[data-taskmemo-dnd-tail]')) {
+        targetTail();
+        return;
+      }
       const element = document.elementFromPoint(pointerRef.current.x, pointerRef.current.y)?.closest<HTMLElement>('[data-taskmemo-dnd-key]');
       const key = element?.dataset.taskmemoDndKey;
       const item = key ? data.find((candidate) => keyFor(candidate) === key) : undefined;
       if (item && element) updateTarget(item, key!, pointerRef.current.y, element);
     };
-  }, [data, keyFor, updateTarget]);
+  }, [data, keyFor, updateTarget, targetTail]);
 
   return <div ref={scrollRef} style={webStyles.scroll}
     onDragOver={(event) => { event.preventDefault(); pointerRef.current = { x: event.clientX, y: event.clientY }; autoScrollerRef.current?.update(event.clientY); }}>
@@ -251,6 +268,10 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
         </div>
       </div>;
     })}
+    {tailKey && <div data-taskmemo-dnd-tail="true" style={{ minHeight: 55 }}
+      onDragEnter={(event) => { event.preventDefault(); targetTail(); }}
+      onDragOver={(event) => { event.preventDefault(); pointerRef.current = { x: event.clientX, y: event.clientY }; targetTail(); }}
+      onDrop={(event) => { event.preventDefault(); finish(); }} />}
     </View>
   </div>;
 }
@@ -263,7 +284,7 @@ const webStyles = {
   scroll: { flex: 1, minHeight: 0, overflowY: 'auto', touchAction: 'pan-y' },
   slot: { position: 'relative' },
   row: { position: 'relative', display: 'flex', alignItems: 'stretch', transition: 'transform 40ms cubic-bezier(.2,.8,.2,1)' },
-  draggable: { cursor: 'grab' },
+  draggable: { cursor: 'grab', userSelect: 'none', WebkitUserSelect: 'none' },
   active: { opacity: 0.55 },
   openAbove: { transform: 'translateY(-8px)' },
   openBelow: { transform: 'translateY(8px)' },

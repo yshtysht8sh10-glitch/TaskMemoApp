@@ -277,6 +277,8 @@ const createStyles = (colors: ThemeColors) =>
     title: { color: colors.memoText, fontSize: 15, lineHeight: 19 },
     titleLine: { flexDirection: "row", alignItems: "center" },
     titleInput: {
+      fontSize: 16,
+      userSelect: 'text',
       flex: 1,
       minHeight: 30,
       paddingVertical: 3,

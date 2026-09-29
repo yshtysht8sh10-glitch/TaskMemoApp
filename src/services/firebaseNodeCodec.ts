@@ -73,6 +73,11 @@ export function mergeNodesByUpdatedAt(local: Node[], remote: Node[]) {
       const mergedMemo = { ...(chosen as MemoNode) };
       if (Object.keys(routineHistory).length) mergedMemo.routineHistory = routineHistory;
       else delete mergedMemo.routineHistory;
+      const routineDueOverrides = chosen === node
+        ? { ...cloud.routineDueOverrides, ...node.routineDueOverrides }
+        : { ...node.routineDueOverrides, ...cloud.routineDueOverrides };
+      if (Object.keys(routineDueOverrides).length) mergedMemo.routineDueOverrides = routineDueOverrides;
+      else delete mergedMemo.routineDueOverrides;
       merged.set(node.id, mergedMemo);
     } else merged.set(node.id, chosen);
   }

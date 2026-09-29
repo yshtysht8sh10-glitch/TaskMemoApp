@@ -1,7 +1,7 @@
 import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
 import type { DuePreset, MemoNode, Node } from "@/models/node";
 import { compareSortKeys } from "./nodeOperations";
-import { routineCategoryForMemo, routineOccurrenceDueAt } from "./routine";
+import { localDateKey, missedRoutineOccurrences, routineCategoryForMemo, routineOccurrenceDueAt } from "./routine";
 import { isTask } from "./memoType";
 import { beforeIdForInsertion } from "./insertionPosition";
 
@@ -333,7 +333,7 @@ export function deadlineGroups(
     visibleGroupIds ?? new Set(definitions.map((group) => group.id));
   const grouped = new Map<DeadlineGroupKey, MemoNode[]>();
   const occurrenceDueAt = (memo: MemoNode) =>
-    routineCategoryForMemo(nodes, memo)
+    memo.routineOccurrenceKey ? memo.dueAt : routineCategoryForMemo(nodes, memo)
       ? routineOccurrenceDueAt(nodes, memo, now)
       : memo.dueAt;
   const memos = nodes
@@ -342,10 +342,12 @@ export function deadlineGroups(
         node.type === "memo" &&
         isTask(node) &&
         node.status === "active" &&
-        node.deletedAt === null &&
-        (!routineCategoryForMemo(nodes, node) ||
-          occurrenceDueAt(node) !== null),
+        node.deletedAt === null,
     )
+    .flatMap((memo) => [
+      ...(!routineCategoryForMemo(nodes, memo) || occurrenceDueAt(memo) !== null ? [memo] : []),
+      ...missedRoutineOccurrences(nodes, memo, now),
+    ])
     .sort((a, b) =>
       a.deadlineSortKey && b.deadlineSortKey
         ? compareSortKeys(a.deadlineSortKey, b.deadlineSortKey) ||
@@ -517,6 +519,13 @@ export function updateMemoDeadline(
     memo.status !== "active"
   )
     return nodes;
+  if (routineCategoryForMemo(nodes, memo)) {
+    const dueAt = target.create.dueAt(now);
+    if (!dueAt || localDateKey(dueAt) !== localDateKey(now)) return nodes;
+    return nodes.map((node) => node.id === memoId && node.type === 'memo'
+      ? { ...node, routineDueOverrides: { ...node.routineDueOverrides, [localDateKey(now)]: dueAt.toISOString() }, updatedAt: now }
+      : node);
+  }
   return nodes.map((node) =>
     node.id === memoId
       ? {
@@ -550,7 +559,9 @@ export function moveMemoInDeadlineList(
     !target
   )
     return nodes;
-  const same = deadlineGroupForMemo(moving, now, granularity) === targetId;
+  const same = (routineCategoryForMemo(nodes, moving)
+    ? deadlineGroupForDueAt(routineOccurrenceDueAt(nodes, moving, now), now, granularity)
+    : deadlineGroupForMemo(moving, now, granularity)) === targetId;
   if (!same && (!target.create || target.create.editable)) return nodes;
   const ordered = deadlineGroups(nodes, now, undefined, granularity).flatMap(
     (group) => group.memos,

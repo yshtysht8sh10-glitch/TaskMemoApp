@@ -45,6 +45,18 @@ describe('tree drop candidate', () => {
     const moved = moveNode(current, 'moving', candidate.parentId, candidate.beforeId, new Date(1));
     expect(moved.find((node) => node.id === 'moving')).toMatchObject({ parentId: 'other' });
   });
+  it('同じ階層のCategory中央へdropすると子Categoryにする', () => {
+    const current = [category('a', null, 'a0'), category('b', null, 'a1')];
+    const candidate = dropCandidateFor(current, 'a', current[1], 'on')!;
+    expect(moveNode(current, 'a', candidate.parentId, candidate.beforeId)[0].parentId).toBe('b');
+  });
+  it('最後のCategory下端へdropすると同じ階層の末尾へ移動する', () => {
+    const current = [category('a', null, 'a0'), category('b', null, 'a1')];
+    const candidate = dropCandidateFor(current, 'a', current[1], 'after')!;
+    expect(candidate).toMatchObject({ parentId: null, kind: 'after' });
+    expect(current.map((node) => node.id)).toEqual(['a', 'b']);
+    expect(moveNode(current, 'a', candidate.parentId, candidate.beforeId).filter((node) => node.parentId === null).sort(compareNodes).map((node) => node.id)).toEqual(['b', 'a']);
+  });
 
   it('実際に先頭のNodeを同じ先頭位置へdropした場合だけno-opにする', () => {
     const current = nodes(); const parent = current[0]; const candidate = dropCandidateFor(current, 'first', parent)!;

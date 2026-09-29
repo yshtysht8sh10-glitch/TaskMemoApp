@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ElementRef } from "react";
 import {
   AppState,
   PanResponder,
@@ -74,6 +74,8 @@ type Props = {
   visibleGroupIds: ReadonlySet<DeadlineGroupKey>;
   todayGranularity: TodayGranularity;
   completingIds: ReadonlySet<string>;
+  revealMemoId?: string | null;
+  onMemoRevealed?: () => void;
   onCompletionAnimationFinished: (id: string) => void;
   showPinnedNote: boolean;
   pinnedNote: string;
@@ -214,6 +216,8 @@ function WebPinnedNote({
 }
 
 export function DeadlineView({
+  revealMemoId,
+  onMemoRevealed,
   nodes,
   visibleGroupIds,
   todayGranularity,
@@ -324,6 +328,21 @@ export function DeadlineView({
     () => deadlineDisplayGroups(sourceGroups, currentDate, todayGranularity),
     [currentDate, sourceGroups, todayGranularity],
   );
+  useEffect(() => {
+    if (!revealMemoId || !nodes.some((node) => node.id === revealMemoId)) return;
+    const group = groups.find((item) => item.memos.some((memo) => memo.id === revealMemoId));
+    if (!group) return;
+    if (!expandedGroups.has(group.key)) {
+      onExpandedGroupsChange(new Set([...expandedGroups, group.key]));
+      return;
+    }
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`deadline-memo-${revealMemoId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      onMemoRevealed?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedGroups, groups, nodes, onExpandedGroupsChange, onMemoRevealed, revealMemoId]);
   const hidden = useMemo(
     () => hiddenDeadlineSummary(nodes, currentDate, visibleGroupIds, todayGranularity),
     [currentDate, nodes, todayGranularity, visibleGroupIds],
@@ -412,6 +431,17 @@ export function DeadlineView({
       }),
     [currentDate, expandedGroups, groups, quickAdd, quickTitleOpen, sourceGroupByMemoId, todayGranularity],
   );
+  const listRef = useRef<ElementRef<typeof DraggableFlatList<DeadlineRow>>>(null);
+  useEffect(() => {
+    if (Platform.OS === 'web' || !revealMemoId || !nodes.some((node) => node.id === revealMemoId)) return;
+    const index = rows.findIndex((row) => row.id === revealMemoId);
+    if (index < 0) return;
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+      onMemoRevealed?.();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [nodes, onMemoRevealed, revealMemoId, rows]);
   const setExpanded = (groupKey: DeadlineGroupKey, value: boolean) => {
     const next = new Set(expandedGroups);
     if (value) next.add(groupKey);
@@ -516,9 +546,10 @@ export function DeadlineView({
   const memoMeta = (memo: MemoNode) => {
     if (!routineCategoryForMemo(nodes, memo))
       return `${formatDueLabel(memo) ?? (memo.dueAt ? memo.dueAt.toLocaleString() : "期限なし")} · ${categoryPath(nodes, memo.parentId)}`;
-    const occurrence = routineOccurrenceDueAt(nodes, memo, currentDate);
-    return `🔁 ${repeatRuleLabel(memo.repeatRule)} · ${occurrence ? "今日分" : "本日の発生なし"} · ${categoryPath(nodes, memo.parentId)}`;
+    const occurrence = memo.routineOccurrenceKey ? memo.dueAt : routineOccurrenceDueAt(nodes, memo, currentDate);
+    return `🔁 ${repeatRuleLabel(memo.repeatRule)} · ${memo.routineOccurrenceKey ? `${memo.routineOccurrenceKey}分` : occurrence ? "今日分" : "本日の発生なし"} · ${categoryPath(nodes, memo.parentId)}`;
   };
+  const sourceMemo = (memo: MemoNode) => nodes.find((node): node is MemoNode => node.id === (memo.routineSourceId ?? memo.id) && node.type === 'memo') ?? memo;
   const renderRow = (item: DeadlineRow, isActive: boolean, drag: () => void) =>
     item.kind === "heading" ? (
       <View
@@ -626,10 +657,10 @@ export function DeadlineView({
               nativeID={`deadline-memo-${item.memo.id}`}
               onPress={() =>
                 selectionMode
-                  ? toggleSelected(item.memo.id)
-                  : onOpenMemo(item.memo)
+                  ? item.memo.routineOccurrenceKey ? undefined : toggleSelected(item.memo.id)
+                  : onOpenMemo(sourceMemo(item.memo))
               }
-              onLongPress={selectionMode ? undefined : drag}
+              onLongPress={selectionMode || item.memo.routineOccurrenceKey ? undefined : drag}
               delayLongPress={dragActivationDelay(Platform.OS === "web")}
               style={({ pressed }) => [
                 styles.row,
@@ -637,7 +668,7 @@ export function DeadlineView({
                 (pressed || isActive) && styles.pressed,
               ]}
             >
-              {selectionMode && (
+              {selectionMode && !item.memo.routineOccurrenceKey && (
                 <View
                   accessibilityRole="checkbox"
                   accessibilityState={{
@@ -684,7 +715,7 @@ export function DeadlineView({
                   selectionMode ? <Text style={styles.title} numberOfLines={1}>{routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}{item.memo.title}</Text> :
                   <View style={{ flexDirection: "row", alignItems: "center" }}>
                     <Text style={styles.title}>{routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}</Text>
-                    <MemoTitleTap onSingle={() => onOpenMemo(item.memo)} onDouble={() => mobileTitleEditor ? onQuickTitle(item.memo) : titleEdit.begin(item.memo.id, item.memo.title)} onLongPress={drag}>
+                    <MemoTitleTap onSingle={() => onOpenMemo(sourceMemo(item.memo))} onDouble={() => item.memo.routineOccurrenceKey ? onOpenMemo(sourceMemo(item.memo)) : mobileTitleEditor ? onQuickTitle(item.memo) : titleEdit.begin(item.memo.id, item.memo.title)} onLongPress={item.memo.routineOccurrenceKey ? () => {} : drag}>
                       <Text style={styles.title} numberOfLines={1}>{item.memo.title}</Text>
                     </MemoTitleTap>
                   </View>
@@ -698,7 +729,7 @@ export function DeadlineView({
                   title={item.memo.title}
                   completing={completingIds.has(item.memo.id)}
                   onComplete={() => onComplete(item.memo)}
-                  onMenu={() => onMenu(item.memo)}
+                  onMenu={() => onMenu(sourceMemo(item.memo))}
                 />
               )}
             </Pressable>
@@ -854,7 +885,7 @@ export function DeadlineView({
           showDropIndicator={(_active, target) => target.kind === "memo"}
           canDropAfter={(target) => target.kind === "memo"}
           keyFor={(row) => row.id}
-          canDrag={(row) => !selectionMode && row.kind === "memo"}
+          canDrag={(row) => !selectionMode && row.kind === "memo" && !row.memo.routineOccurrenceKey}
           contentContainerStyle={[
             styles.list,
             selectionMode && styles.selectionList,
@@ -911,6 +942,10 @@ export function DeadlineView({
     <View style={styles.container}>
       {toolbar}
       <DraggableFlatList
+        ref={listRef}
+        onScrollToIndexFailed={({ index, averageItemLength }) => {
+          listRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: true });
+        }}
         data={rows}
         ListHeaderComponent={nativePinnedNote || null}
         keyExtractor={(row) => row.id}
@@ -918,7 +953,7 @@ export function DeadlineView({
           const row = rows[index];
           moving.current =
             !selectionMode && row?.kind === "memo"
-              ? { id: row.memo.id, sourceGroup: row.groupKey }
+              && !row.memo.routineOccurrenceKey ? { id: row.memo.id, sourceGroup: row.groupKey }
               : null;
           setCandidate(index);
         }}
@@ -1070,14 +1105,14 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 8,
       backgroundColor: colors.surface,
     },
-    quickTitle: { minHeight: 38, color: colors.text, fontSize: 15 },
+    quickTitle: { minHeight: 38, color: colors.text, fontSize: 16 },
     quickDue: {
       minHeight: 38,
       paddingHorizontal: 8,
       borderRadius: 6,
       backgroundColor: colors.surfaceAlt,
       color: colors.text,
-      fontSize: 13,
+      fontSize: 16,
     },
     quickError: { color: colors.danger, fontSize: 11 },
     quickActions: {
@@ -1144,6 +1179,8 @@ const createStyles = (colors: ThemeColors) =>
     content: { flex: 1, paddingVertical: 7 },
     title: { color: colors.memoText, fontSize: 15 },
     inlineTitleInput: {
+      fontSize: 16,
+      userSelect: 'text',
       minHeight: 34,
       paddingRight: 36,
       paddingVertical: 4,

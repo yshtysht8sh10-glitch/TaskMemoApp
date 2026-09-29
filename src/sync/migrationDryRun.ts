@@ -40,7 +40,7 @@ export function planV1ToV2Migration(nodes: Node[], migrationId: string): Migrati
   }
   const issues: MigrationIssue[] = [...duplicates].map((nodeId) => ({ kind: "duplicate-id", nodeId, detail: "同じidのNodeが複数あります。" }));
   for (const node of nodes) if (node.parentId && !ids.has(node.parentId)) issues.push({ kind: "orphan-parent", nodeId: node.id, detail: `親Category ${node.parentId} がありません。` });
-  const known = new Set("id type parentId sortKey title createdAt updatedAt deletedAt deletionBatchId purgedAt categoryKind routineWeekday routineDayOfMonth routineMonth memoType deadlineSortKey body dueAt duePreset status completedAt routineHistory repeatRule".split(" "));
+  const known = new Set("id type parentId sortKey title createdAt updatedAt deletedAt deletionBatchId purgedAt categoryKind routineWeekday routineDayOfMonth routineMonth memoType deadlineSortKey body dueAt duePreset status completedAt routineHistory routineDueOverrides repeatRule".split(" "));
   const unknownFields = nodes.map(node => ({ nodeId: node.id, fields: Object.keys(node).filter(key => !known.has(key)) })).filter(item => item.fields.length);
   const normalizedNodes = normalizeNodeSortKeys(nodes);
   const changedFields: MigrationDryRun["changedFields"] = normalizedNodes

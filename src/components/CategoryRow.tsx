@@ -13,6 +13,7 @@ type Props = {
   isActive?: boolean;
   isDropInside?: boolean;
   showInsertBefore?: boolean;
+  showInsertAfter?: boolean;
   virtual?: boolean;
   allowAddMemo?: boolean;
   selectionMode?: boolean;
@@ -34,6 +35,7 @@ export function CategoryRow({
   isActive,
   isDropInside,
   showInsertBefore,
+  showInsertAfter,
   virtual,
   allowAddMemo = true,
   selectionMode = false,
@@ -72,6 +74,7 @@ export function CategoryRow({
           selectionState === "selected" && styles.selected,
           selectionState === "contained" && styles.contained,
           showInsertBefore && styles.insertBefore,
+          showInsertAfter && styles.insertAfter,
           isDropInside && styles.dropInside,
           (pressed || isActive) && styles.active,
         ]}
@@ -179,6 +182,7 @@ const createStyles = (colors: ThemeColors) =>
     checkmark: { color: colors.background, fontWeight: "800" },
     checkmarkContained: { color: colors.accent },
     insertBefore: { borderTopWidth: 2, borderTopColor: colors.accent },
+    insertAfter: { borderBottomWidth: 2, borderBottomColor: colors.accent },
     dropInside: {
       backgroundColor: colors.accentSoft,
       borderWidth: 1,
