@@ -1018,7 +1018,7 @@ const createStyles = (colors: ThemeColors) =>
       maxHeight: 110,
       paddingTop: 5,
       color: colors.text,
-      fontSize: 14,
+      fontSize: 16,
       textAlignVertical: "top",
     },
     toolbarArea: { backgroundColor: colors.background },
