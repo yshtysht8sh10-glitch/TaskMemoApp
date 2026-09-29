@@ -87,7 +87,7 @@ type Props = {
   onQuickAdd: (
     title: string,
     deadline: Pick<NodeDraft, "duePreset" | "dueAt">,
-  ) => void;
+  ) => boolean;
   onRenameMemo: (id: string, title: string) => void;
   onOpenMemo: (memo: MemoNode) => void;
   onQuickTitle: (memo: MemoNode) => void;
@@ -480,9 +480,10 @@ export function DeadlineView({
     try {
       const next = quickAddTitleNextStep(quickAdd, value);
       if (next.kind === "create") {
-        onQuickAdd(next.title, next.deadline);
-        setQuickAdd(null);
-        setQuickTitle("");
+        if (onQuickAdd(next.title, next.deadline)) {
+          setQuickAdd(null);
+          setQuickTitle("");
+        }
       } else {
         setQuickTitle(next.title);
       }
@@ -499,10 +500,10 @@ export function DeadlineView({
         : undefined;
       if (quickAdd.dueEditable && !editableDueAt)
         throw new Error("日時を YYYY/MM/DD HH:mm 形式で入力してください。");
-      onQuickAdd(
+      if (!onQuickAdd(
         quickTitle,
         deadlineDraftForCreateContext(quickAdd, editableDueAt),
-      );
+      )) return;
       setQuickAdd(null);
       setQuickTitleOpen(false);
       setQuickTitle("");

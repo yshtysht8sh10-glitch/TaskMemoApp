@@ -104,6 +104,7 @@ import {
   type CompletionHistoryItem,
 } from "@/domain/completionHistory";
 import { appAlert } from "@/utils/appAlert";
+import { memoCreationNotice, type MemoCreationNotice } from "@/utils/memoCreationFeedback";
 import { canStartSheetDismiss, sheetDismissRelease } from "@/utils/sheetDismissGesture";
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
@@ -235,7 +236,7 @@ export default function HomeScreen() {
     () => new Map(),
   );
   const [completionNotices, setCompletionNotices] = useState<
-    { token: string; id: string; title: string; occurrenceKey?: string }[]
+    ({ kind: "completed"; token: string; id: string; title: string; occurrenceKey?: string } | MemoCreationNotice)[]
   >([]);
   const [reminders, setReminders] = useState<ReminderPreferences>(
     DEFAULT_REMINDER_PREFERENCES,
@@ -367,6 +368,11 @@ export default function HomeScreen() {
       );
     }
   };
+  const showMemoCreated = (succeeded: boolean, id: string, title: string) => {
+    const notice = memoCreationNotice(succeeded, id, title, `${id}-${Date.now()}`);
+    if (notice) setCompletionNotices((current) => [...current, notice]);
+    return succeeded;
+  };
   const openMemoEditor = (memo: MemoNode) => setEditor({ type: "memo", node: memo, memoType: isIdea(memo) ? "idea" : "task", parentId: memo.parentId });
   const replaceNodes = (operation: (current: Node[]) => Node[]) => {
     try {
@@ -456,7 +462,7 @@ export default function HomeScreen() {
       const date = parseLocalDateKey(memo.routineOccurrenceKey);
       if (date) {
         apply('ルーティーン旧回を完了', (current) => toggleRoutineCompletion(current, memo.routineSourceId!, date, new Date()));
-        setCompletionNotices((current) => [...current, { token: `${memo.id}-${Date.now()}`, id: memo.routineSourceId!, title: memo.title, occurrenceKey: memo.routineOccurrenceKey }]);
+        setCompletionNotices((current) => [...current, { kind: "completed", token: `${memo.id}-${Date.now()}`, id: memo.routineSourceId!, title: memo.title, occurrenceKey: memo.routineOccurrenceKey }]);
       }
       return;
     }
@@ -473,7 +479,7 @@ export default function HomeScreen() {
     if (memo)
       setCompletionNotices((current) => [
         ...current,
-        { token: `${id}-${Date.now()}`, id, title: memo.title },
+        { kind: "completed", token: `${id}-${Date.now()}`, id, title: memo.title },
       ]);
   };
   const openCreate = (type: "memo" | "category", memoType?: MemoType) => {
@@ -767,14 +773,15 @@ export default function HomeScreen() {
             onExpandedGroupsChange={setDeadlineExpanded}
             onQuickAdd={(title, deadline) => {
               const id = `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-              apply("Memoをクイック追加", (current) =>
+              const succeeded = applyBatch("Memoをクイック追加", (current) =>
                 createNode(current, "memo", {
                   title,
                   parentId: null,
                   ...deadline,
                 }, new Date(), id),
               );
-              setRevealMemoId(id);
+              if (succeeded) setRevealMemoId(id);
+              return showMemoCreated(succeeded, id, title);
             }}
             onRenameMemo={(id, title) =>
               apply("Memoタイトルを変更", (current) =>
@@ -1123,13 +1130,16 @@ export default function HomeScreen() {
         onSave={(draft, close = true) => {
           const createdId = !editor?.node && editor?.type === 'memo'
             ? `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : null;
-          apply(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
+          const succeeded = applyBatch(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
             editor?.node
               ? updateNode(current, editor.node.id, draft)
               : createNode(current, editor!.type, draft, new Date(), createdId ?? undefined),
           );
-          if (createdId) setRevealMemoId(createdId);
-          if (close) setEditor(null);
+          if (createdId && succeeded) {
+            setRevealMemoId(createdId);
+            showMemoCreated(true, createdId, draft.title);
+          }
+          if (close && succeeded) setEditor(null);
         }}
       />
       <QuickTitleEditor
@@ -1416,7 +1426,7 @@ export default function HomeScreen() {
                 current.filter((item) => item.token !== notice.token),
               )
             }
-            onUndo={() => {
+            onUndo={notice.kind === "completed" ? () => {
               setExitingMemos((current) => {
                 const next = new Map(current);
                 next.delete(notice.id);
@@ -1428,7 +1438,7 @@ export default function HomeScreen() {
               setCompletionNotices((current) =>
                 current.filter((item) => item.token !== notice.token),
               );
-            }}
+            } : undefined}
           />
         ))}
       </View>
@@ -2445,9 +2455,9 @@ function SnackbarNotice({
   onExpire,
   onUndo,
 }: {
-  notice: { id: string; title: string };
+  notice: { kind: "completed" | "created"; id: string; title: string };
   onExpire: () => void;
-  onUndo: () => void;
+  onUndo?: () => void;
 }) {
   const styles = useStyles();
   const expireRef = useRef(onExpire);
@@ -2461,11 +2471,13 @@ function SnackbarNotice({
   return (
     <View style={styles.snackbar}>
       <Text style={styles.snackbarText}>
-        ✓ 「{notice.title}」を完了しました
+        ✓ 「{notice.title}」を{notice.kind === "created" ? "追加しました" : "完了しました"}
       </Text>
-      <Pressable onPress={onUndo} style={styles.snackbarUndo}>
-        <Text style={styles.snackbarUndoText}>元に戻す</Text>
-      </Pressable>
+      {onUndo && (
+        <Pressable onPress={onUndo} style={styles.snackbarUndo}>
+          <Text style={styles.snackbarUndoText}>元に戻す</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
