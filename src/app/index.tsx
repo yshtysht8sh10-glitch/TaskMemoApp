@@ -107,6 +107,7 @@ import { appAlert } from "@/utils/appAlert";
 import { memoCreationNotice, type MemoCreationNotice } from "@/utils/memoCreationFeedback";
 import { canStartSheetDismissFromTarget, sheetDismissRelease } from "@/utils/sheetDismissGesture";
 import { selectedChoiceStyle } from "@/utils/choiceStyle";
+import { installEditorDiagnostics, recordEditorDiagnostic } from "@/utils/editorDiagnostics";
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
@@ -177,6 +178,7 @@ const appBuildInfo = currentBuildInfo();
 
 export default function HomeScreen() {
   useWebFocusedInputVisibility();
+  useEffect(() => installEditorDiagnostics(), []);
   const { colors, resolved, mode, setMode } = useAppTheme();
   const styles = createStyles(colors);
   const [history, setHistory] = useState(() => createNodeHistory(mockNodes));
@@ -219,6 +221,15 @@ export default function HomeScreen() {
     () => !!initialExternalAiAuthorization(),
   );
   const [editor, setEditor] = useState<Editor>(null);
+  const changeEditor = (next: Editor, reason: string) => {
+    recordEditorDiagnostic('editor-state-change-request', { reason, nextOpen: !!next });
+    setEditor(next);
+  };
+  useEffect(() => {
+    recordEditorDiagnostic(editor ? 'editor-open' : 'editor-closed', {
+      kind: editor?.type ?? null,
+    });
+  }, [editor]);
   const [quickTitleTarget, setQuickTitleTarget] = useState<{ id: string; title: string } | null>(null);
   const [menuNode, setMenuNode] = useState<Node | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -374,7 +385,7 @@ export default function HomeScreen() {
     if (notice) setCompletionNotices((current) => [...current, notice]);
     return succeeded;
   };
-  const openMemoEditor = (memo: MemoNode) => setEditor({ type: "memo", node: memo, memoType: isIdea(memo) ? "idea" : "task", parentId: memo.parentId });
+  const openMemoEditor = (memo: MemoNode) => changeEditor({ type: "memo", node: memo, memoType: isIdea(memo) ? "idea" : "task", parentId: memo.parentId }, 'open-memo');
   const replaceNodes = (operation: (current: Node[]) => Node[]) => {
     try {
       if (sync.command("Nodeを完全削除", operation, false)) return;
@@ -490,7 +501,7 @@ export default function HomeScreen() {
   const openCreate = (type: "memo" | "category", memoType?: MemoType) => {
     setCreateOpen(false);
     setMenuNode(null);
-    setEditor({ type, memoType, parentId: createParentId });
+    changeEditor({ type, memoType, parentId: createParentId }, 'create-node');
   };
   const onDrop = (nodeId: string, candidate: DropCandidate) => {
     const traceId = currentTreeTraceId();
@@ -974,7 +985,7 @@ export default function HomeScreen() {
           onPress={() => {
             setCreateParentId(null);
             if (view === "deadline")
-              setEditor({ type: "memo", parentId: null });
+              changeEditor({ type: "memo", parentId: null }, 'create-memo');
             else setCreateOpen(true);
           }}
           accessibilityLabel="新規作成"
@@ -1010,7 +1021,7 @@ export default function HomeScreen() {
             label="編集"
             onPress={() => {
               if (menuNode)
-                setEditor({
+                changeEditor({
                   type: menuNode.type,
                   node: menuNode,
                   memoType:
@@ -1020,7 +1031,7 @@ export default function HomeScreen() {
                         : "task"
                       : undefined,
                   parentId: menuNode.parentId,
-                });
+                }, 'menu-open-editor');
               setMenuNode(null);
             }}
           />
@@ -1131,8 +1142,9 @@ export default function HomeScreen() {
             toggleRoutineCompletion(current, memoId, date, new Date()),
           )
         }
-        onClose={() => setEditor(null)}
+        onClose={(reason) => changeEditor(null, reason)}
         onSave={async (draft, close = true) => {
+          recordEditorDiagnostic('editor-save-begin', { close });
           const createdId = !editor?.node && editor?.type === 'memo'
             ? `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : null;
           const succeeded = await applyConfirmed(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
@@ -1140,11 +1152,12 @@ export default function HomeScreen() {
               ? updateNode(current, editor.node.id, draft)
               : createNode(current, editor!.type, draft, new Date(), createdId ?? undefined),
           );
+          recordEditorDiagnostic('editor-save-result', { close, succeeded });
           if (createdId && succeeded) {
             setRevealMemoId(createdId);
             showMemoCreated(true, createdId, draft.title);
           }
-          if (close && succeeded) setEditor(null);
+          if (close && succeeded) changeEditor(null, 'save-success-close');
           return succeeded;
         }}
       />
@@ -1390,6 +1403,12 @@ export default function HomeScreen() {
             <Text style={styles.buildInfoText}>Sync: {appBuildInfo.sync}</Text>
             <Text style={styles.buildInfoText}>Environment: {appBuildInfo.environment}</Text>
           </View>
+          {Platform.OS === "web" && (
+            <Action label="編集操作の診断ログを開始" onPress={() => {
+              installEditorDiagnostics(true);
+              setSettingsOpen(false);
+            }} />
+          )}
         </SettingsSection>
       </Sheet>
       <Sheet
@@ -1728,7 +1747,7 @@ function EditorModal({
   editor: Editor;
   nodes: Node[];
   onToggleRoutineHistory: (memoId: string, date: Date) => void;
-  onClose: () => void;
+  onClose: (reason: string) => void;
   onSave: (draft: {
     title: string;
     parentId: string | null;
@@ -1812,9 +1831,10 @@ function EditorModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memo?.title, memo?.body, memo?.duePreset, memo?.dueAt, memo?.status, memo?.repeatRule, signature]);
   const save = (close = true) => {
+    recordEditorDiagnostic('save-request', { close });
     if (!editor || savingRef.current) return;
     if (editor.node && signature === committedSignature.current) {
-      if (close) onClose();
+      if (close) onClose('unchanged-save-close');
       return;
     }
     if (!title.trim()) {
@@ -1905,16 +1925,24 @@ function EditorModal({
   // save reads the current render's validated draft; unrelated renders must not restart the debounce.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, editor?.node?.id]);
-  const dismiss = () => editor?.node ? save() : onClose();
+  const dismiss = (reason: string) => {
+    recordEditorDiagnostic('sheet-dismiss-request', { reason });
+    return editor?.node ? save() : onClose(reason);
+  };
   // PanResponder captures event callbacks; refs are read only when a gesture ends.
   // eslint-disable-next-line react-hooks/refs
   const dismissPanResponder = PanResponder.create({
-    onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-      canStartSheetDismissFromTarget(true, { scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy }),
+    onMoveShouldSetPanResponderCapture: (_event, gesture) => {
+      const capture = canStartSheetDismissFromTarget(true, { scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy });
+      if (capture) recordEditorDiagnostic('grabber-pan-capture', { dx: gesture.dx, dy: gesture.dy });
+      return capture;
+    },
     onPanResponderMove: (_event, gesture) => sheetTranslateY.setValue(Math.max(0, gesture.dy)),
     onPanResponderRelease: (_event, gesture) => {
-      if (sheetDismissRelease({ distance: Math.max(0, gesture.dy), velocity: gesture.vy, viewportHeight }) === 'commit-close') {
-        dismiss();
+      const outcome = sheetDismissRelease({ distance: Math.max(0, gesture.dy), velocity: gesture.vy, viewportHeight });
+      recordEditorDiagnostic('grabber-pan-release', { dy: gesture.dy, velocity: gesture.vy, outcome });
+      if (outcome === 'commit-close') {
+        dismiss('grabber-pan-release');
         sheetTranslateY.setValue(0);
       } else {
         Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true }).start();
@@ -1927,10 +1955,11 @@ function EditorModal({
       visible={!!editor}
       animationType="slide"
       transparent
-      onRequestClose={dismiss}
+      onRequestClose={() => dismiss('modal-request-close')}
     >
-      <Pressable style={styles.backdrop} onPress={dismiss} />
+      <Pressable nativeID="editor-backdrop" style={styles.backdrop} onPress={() => dismiss('backdrop-press')} />
       <Animated.View
+        nativeID="editor-sheet"
         style={[styles.editorSheet, { transform: [{ translateY: sheetTranslateY }] }]}
       >
       <SafeAreaView style={styles.modalPage}>
@@ -1940,14 +1969,18 @@ function EditorModal({
         >
           <ScrollView
             nativeID="editor-keyboard-scroll"
-            onScroll={(event) => setScrollAtTop(event.nativeEvent.contentOffset.y <= 0)}
+            onScroll={(event) => {
+              const offset = event.nativeEvent.contentOffset.y;
+              setScrollAtTop(offset <= 0);
+              recordEditorDiagnostic('editor-scroll', { contentOffsetY: offset });
+            }}
             scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.form}
           >
-            <View style={styles.grabberTouchArea} {...dismissPanResponder.panHandlers}>
+            <View nativeID="editor-grabber" style={styles.grabberTouchArea} {...dismissPanResponder.panHandlers}>
               <View style={styles.grabber} />
             </View>
             <Text style={styles.modalTitle}>
@@ -1978,6 +2011,7 @@ function EditorModal({
               <>
                 <Text style={styles.label}>自由記述</Text>
                 <TextInput
+                  nativeID="editor-body-input"
                   value={body}
                   accessibilityLabel="自由記述"
                   onChangeText={setBody}
@@ -2128,7 +2162,7 @@ function EditorModal({
               </>
             )}
             <View style={styles.formButtons}>
-              <Pressable onPress={dismiss} style={styles.secondary}>
+              <Pressable onPress={() => dismiss('close-button')} style={styles.secondary}>
                 <Text style={styles.buttonText}>{editor?.node ? "閉じる" : "キャンセル"}</Text>
               </Pressable>
               {!editor?.node && <Pressable onPress={() => save()} style={styles.primary}>
