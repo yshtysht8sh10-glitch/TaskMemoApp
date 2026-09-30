@@ -9,6 +9,10 @@ export function canStartSheetDismiss({ scrollOffset, dx, dy }: SheetDismissMove)
   return scrollOffset <= 0 && dy >= MIN_DRAG_DISTANCE && dy > Math.abs(dx);
 }
 
+export function canStartSheetDismissFromTarget(fromHandle: boolean, move: SheetDismissMove) {
+  return fromHandle && canStartSheetDismiss(move);
+}
+
 export function sheetDismissRelease({ distance, velocity, viewportHeight }: SheetDismissRelease): 'restore' | 'commit-close' {
   const threshold = Math.max(64, viewportHeight * DISMISS_VIEWPORT_RATIO);
   return distance >= threshold || velocity >= DISMISS_VELOCITY ? 'commit-close' : 'restore';

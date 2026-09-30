@@ -105,7 +105,8 @@ import {
 } from "@/domain/completionHistory";
 import { appAlert } from "@/utils/appAlert";
 import { memoCreationNotice, type MemoCreationNotice } from "@/utils/memoCreationFeedback";
-import { canStartSheetDismiss, sheetDismissRelease } from "@/utils/sheetDismissGesture";
+import { canStartSheetDismissFromTarget, sheetDismissRelease } from "@/utils/sheetDismissGesture";
+import { selectedChoiceStyle } from "@/utils/choiceStyle";
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
@@ -1909,7 +1910,7 @@ function EditorModal({
   // eslint-disable-next-line react-hooks/refs
   const dismissPanResponder = PanResponder.create({
     onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-      canStartSheetDismiss({ scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy }),
+      canStartSheetDismissFromTarget(true, { scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy }),
     onPanResponderMove: (_event, gesture) => sheetTranslateY.setValue(Math.max(0, gesture.dy)),
     onPanResponderRelease: (_event, gesture) => {
       if (sheetDismissRelease({ distance: Math.max(0, gesture.dy), velocity: gesture.vy, viewportHeight }) === 'commit-close') {
@@ -1926,13 +1927,11 @@ function EditorModal({
       visible={!!editor}
       animationType="slide"
       transparent
-      allowSwipeDismissal
       onRequestClose={dismiss}
     >
       <Pressable style={styles.backdrop} onPress={dismiss} />
       <Animated.View
         style={[styles.editorSheet, { transform: [{ translateY: sheetTranslateY }] }]}
-        {...(Platform.OS === "web" ? dismissPanResponder.panHandlers : {})}
       >
       <SafeAreaView style={styles.modalPage}>
         <KeyboardAvoidingView
@@ -1948,7 +1947,7 @@ function EditorModal({
             automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.form}
           >
-            <View style={styles.grabberTouchArea} {...(Platform.OS === "web" ? {} : dismissPanResponder.panHandlers)}>
+            <View style={styles.grabberTouchArea} {...dismissPanResponder.panHandlers}>
               <View style={styles.grabber} />
             </View>
             <Text style={styles.modalTitle}>
@@ -2110,7 +2109,7 @@ function EditorModal({
                               status === "active" && styles.chipOn,
                             ]}
                           >
-                            <Text style={styles.chipText}>未完了</Text>
+                            <Text style={[styles.chipText, status === "active" && styles.chipTextOn]}>未完了</Text>
                           </Pressable>
                           <Pressable
                             onPress={() => setStatus("completed")}
@@ -2119,7 +2118,7 @@ function EditorModal({
                               status === "completed" && styles.chipOn,
                             ]}
                           >
-                            <Text style={styles.chipText}>完了</Text>
+                            <Text style={[styles.chipText, status === "completed" && styles.chipTextOn]}>完了</Text>
                           </Pressable>
                         </View>
                       </>
@@ -2934,11 +2933,13 @@ const createStyles = (colors: ThemeColors) =>
       alignItems: "center",
       justifyContent: "center",
       borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.border,
       backgroundColor: colors.surfaceAlt,
     },
-    chipOn: { backgroundColor: colors.accentSoft },
+    chipOn: selectedChoiceStyle(colors).container,
     chipText: { color: colors.text },
-    chipTextOn: { color: colors.accent, fontWeight: "700" },
+    chipTextOn: selectedChoiceStyle(colors).label,
     lockedDue: {
       minHeight: 48,
       paddingHorizontal: 13,
