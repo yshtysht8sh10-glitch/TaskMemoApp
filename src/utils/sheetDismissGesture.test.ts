@@ -3,10 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { canStartSheetDismiss, canStartSheetDismissFromTarget, sheetDismissRelease } from './sheetDismissGesture';
 
 describe('sheet dismiss gesture', () => {
-  it('入力欄や選択ハンドルからの移動ではdismissせず、専用ハンドルからだけ開始する', () => {
-    const move = { scrollOffset: 0, dx: 0, dy: 120 };
+  it.each([
+    ['上部', 0],
+    ['中間', 120],
+    ['下部', 500],
+  ])('%sでも入力欄の選択ハンドルからdismissを開始しない', (_position, scrollOffset) => {
+    const move = { scrollOffset, dx: 0, dy: 120 };
     expect(canStartSheetDismissFromTarget(false, move)).toBe(false);
-    expect(canStartSheetDismissFromTarget(true, move)).toBe(true);
+  });
+
+  it('上部の専用ハンドルからは明示的なdismiss操作ができる', () => {
+    expect(canStartSheetDismissFromTarget(true, { scrollOffset: 0, dx: 0, dy: 120 })).toBe(true);
   });
   it('内部scroll途中ではdismissを開始しない', () => {
     expect(canStartSheetDismiss({ scrollOffset: 20, dx: 0, dy: 30 })).toBe(false);
