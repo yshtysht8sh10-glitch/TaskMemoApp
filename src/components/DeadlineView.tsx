@@ -87,8 +87,8 @@ type Props = {
   onQuickAdd: (
     title: string,
     deadline: Pick<NodeDraft, "duePreset" | "dueAt">,
-  ) => boolean;
-  onRenameMemo: (id: string, title: string) => void;
+  ) => Promise<boolean>;
+  onRenameMemo: (id: string, title: string) => Promise<boolean>;
   onOpenMemo: (memo: MemoNode) => void;
   onQuickTitle: (memo: MemoNode) => void;
   onComplete: (memo: MemoNode) => void;
@@ -475,23 +475,27 @@ export function DeadlineView({
     setQuickTitle("");
     setQuickError(null);
   };
-  const confirmQuickTitle = (value: string) => {
-    if (!quickAdd) return;
+  const confirmQuickTitle = async (value: string) => {
+    if (!quickAdd) return false;
     try {
       const next = quickAddTitleNextStep(quickAdd, value);
       if (next.kind === "create") {
-        if (onQuickAdd(next.title, next.deadline)) {
+        if (await onQuickAdd(next.title, next.deadline)) {
           setQuickAdd(null);
           setQuickTitle("");
+          return true;
         }
+        return false;
       } else {
         setQuickTitle(next.title);
+        return true;
       }
     } catch (error) {
       setQuickError(error instanceof Error ? error.message : "入力内容を確認してください。");
+      return false;
     }
   };
-  const submitQuickAdd = () => {
+  const submitQuickAdd = async () => {
     if (!quickAdd || !quickTitle.trim()) return;
     keepQuickAddOpen();
     try {
@@ -500,7 +504,7 @@ export function DeadlineView({
         : undefined;
       if (quickAdd.dueEditable && !editableDueAt)
         throw new Error("日時を YYYY/MM/DD HH:mm 形式で入力してください。");
-      if (!onQuickAdd(
+      if (!await onQuickAdd(
         quickTitle,
         deadlineDraftForCreateContext(quickAdd, editableDueAt),
       )) return;

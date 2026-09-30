@@ -50,6 +50,12 @@ export type ReceiptReadEvent = {
   returnedDocumentCount: number | null;
   retryDelayMs: number | null;
   timeoutDelayMs: number | null;
+  performanceElapsedMs: number;
+  timeoutTimerSetAt: string | null;
+  timeoutScheduledAt: string | null;
+  timeoutFiredAt: string | null;
+  browserOnline: boolean | null;
+  pageVisibility: string | null;
   at: string;
 };
 
@@ -299,22 +305,35 @@ export function createFirebaseSyncAdapter(
           let documents: Map<string, Record<string, unknown>> | null = null;
           for (let attempt = 1; attempt <= RECEIPT_MAX_ATTEMPTS; attempt++) {
             const started = Date.now();
+            const startedPerformance = monotonicNow();
             let timedOut = false;
             let timer: ReturnType<typeof setTimeout> | undefined;
             let timeoutDelayMs: number | null = null;
+            let timeoutTimerSetAt: string | null = null;
+            let timeoutScheduledAt: string | null = null;
+            let timeoutFiredAt: string | null = null;
             const event = (phase: ReceiptReadEvent["phase"], returnedDocumentCount: number | null = null, retryDelayMs: number | null = null) => {
               try { options.onReceiptRead?.({ batch: batchNumber, firstOperationIndex: offset, operationCount: batch.length,
                 attempt, phase, durationMs: Math.max(0, Date.now() - started), returnedDocumentCount, retryDelayMs,
-                timeoutDelayMs, at: new Date().toISOString() }); }
+                timeoutDelayMs, performanceElapsedMs: Math.max(0, monotonicNow() - startedPerformance),
+                timeoutTimerSetAt, timeoutScheduledAt, timeoutFiredAt,
+                browserOnline: typeof navigator === "undefined" || typeof navigator.onLine !== "boolean" ? null : navigator.onLine,
+                pageVisibility: typeof document === "undefined" ? null : document.visibilityState,
+                at: new Date().toISOString() }); }
               catch { /* Diagnostic callbacks must not affect recovery. */ }
             };
             try {
               const timeoutMs = options.receiptLookupTimeoutMs ?? 10_000;
               const timeoutPromise = timeoutMs && timeoutMs > 0 ? new Promise<never>((_, reject) => {
-                const deadline = Date.now() + timeoutMs;
+                const setAt = Date.now();
+                const deadline = setAt + timeoutMs;
+                timeoutTimerSetAt = new Date(setAt).toISOString();
+                timeoutScheduledAt = new Date(deadline).toISOString();
                 timer = setTimeout(() => {
                   timedOut = true;
-                  timeoutDelayMs = Math.max(0, Date.now() - deadline);
+                  const firedAt = Date.now();
+                  timeoutFiredAt = new Date(firedAt).toISOString();
+                  timeoutDelayMs = Math.max(0, firedAt - deadline);
                   reject({ kind: "temporary", code: "receipt-timeout", message: "Firebase receipt read timed out; recovery stopped." });
                 }, timeoutMs);
               }) : null;

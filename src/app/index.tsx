@@ -406,6 +406,10 @@ export default function HomeScreen() {
       return false;
     }
   };
+  const applyConfirmed = async (label: string, operation: (current: Node[]) => Node[]) =>
+    sync.protocol === 2
+      ? sync.commandConfirmed(label, operation)
+      : applyBatch(label, operation);
   const changePinnedNote = (body: string) => {
     setPinnedNoteUpdatedAt(new Date());
     setPinnedNote(body);
@@ -704,7 +708,7 @@ export default function HomeScreen() {
               setCreateOpen(true);
             }}
             onRenameMemo={(id, title) =>
-              apply("Memoタイトルを変更", (current) =>
+              applyConfirmed("Memoタイトルを変更", (current) =>
                 updateNode(current, id, { title }),
               )
             }
@@ -771,9 +775,9 @@ export default function HomeScreen() {
             }}
             expandedGroups={deadlineExpanded}
             onExpandedGroupsChange={setDeadlineExpanded}
-            onQuickAdd={(title, deadline) => {
+            onQuickAdd={async (title, deadline) => {
               const id = `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-              const succeeded = applyBatch("Memoをクイック追加", (current) =>
+              const succeeded = await applyConfirmed("Memoをクイック追加", (current) =>
                 createNode(current, "memo", {
                   title,
                   parentId: null,
@@ -784,7 +788,7 @@ export default function HomeScreen() {
               return showMemoCreated(succeeded, id, title);
             }}
             onRenameMemo={(id, title) =>
-              apply("Memoタイトルを変更", (current) =>
+              applyConfirmed("Memoタイトルを変更", (current) =>
                 updateNode(current, id, { title }),
               )
             }
@@ -1127,10 +1131,10 @@ export default function HomeScreen() {
           )
         }
         onClose={() => setEditor(null)}
-        onSave={(draft, close = true) => {
+        onSave={async (draft, close = true) => {
           const createdId = !editor?.node && editor?.type === 'memo'
             ? `memo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : null;
-          const succeeded = applyBatch(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
+          const succeeded = await applyConfirmed(editor?.node ? "Nodeを編集" : "Nodeを作成", (current) =>
             editor?.node
               ? updateNode(current, editor.node.id, draft)
               : createNode(current, editor!.type, draft, new Date(), createdId ?? undefined),
@@ -1140,12 +1144,13 @@ export default function HomeScreen() {
             showMemoCreated(true, createdId, draft.title);
           }
           if (close && succeeded) setEditor(null);
+          return succeeded;
         }}
       />
       <QuickTitleEditor
         target={quickTitleTarget}
         onClose={() => setQuickTitleTarget(null)}
-        onSave={(id, title) => apply("Memoタイトルを変更", (current) => updateNode(current, id, { title }))}
+        onSave={(id, title) => applyConfirmed("Memoタイトルを変更", (current) => updateNode(current, id, { title }))}
       />
       <MovePanel
         node={movingNode}
@@ -1732,7 +1737,7 @@ function EditorModal({
     status?: "active" | "completed";
     repeatRule?: RepeatRule | null;
     memoType?: MemoType;
-  }, close?: boolean) => void;
+  }, close?: boolean) => Promise<boolean>;
 }) {
   const styles = useStyles();
   const { colors } = useAppTheme();
@@ -1782,6 +1787,7 @@ function EditorModal({
   const signature = JSON.stringify([title, body, preset, custom, status, repeatFrequency, repeatInterval, repeatStartsOn, routineTime]);
   const initialSignature = useRef(signature);
   const committedSignature = useRef(signature);
+  const savingRef = useRef(false);
   useEffect(() => {
     if (!memo || signature !== committedSignature.current) return;
     const nextTitle = memo.title;
@@ -1805,7 +1811,7 @@ function EditorModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memo?.title, memo?.body, memo?.duePreset, memo?.dueAt, memo?.status, memo?.repeatRule, signature]);
   const save = (close = true) => {
-    if (!editor) return;
+    if (!editor || savingRef.current) return;
     if (editor.node && signature === committedSignature.current) {
       if (close) onClose();
       return;
@@ -1814,9 +1820,13 @@ function EditorModal({
       if (close) appAlert("入力エラー", "タイトルは必須です。");
       return;
     }
-    const commit = (draft: Parameters<typeof onSave>[0]) => {
-      committedSignature.current = signature;
-      onSave(draft, close);
+    const commit = async (draft: Parameters<typeof onSave>[0]) => {
+      savingRef.current = true;
+      try {
+        if (await onSave(draft, close)) committedSignature.current = signature;
+      } finally {
+        savingRef.current = false;
+      }
     };
     if (idea)
       return commit({

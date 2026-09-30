@@ -108,6 +108,43 @@ describe("read-only Firebase receipt audit", () => {
     } finally { state.queryReleases.forEach((release) => release()); state.blockedQueryCount = 0; vi.useRealTimers(); }
   });
 
+  it("audits 75 receipts once after two timeouts, then ignores both late responses", async () => {
+    state.documents.clear(); state.writes = 0; state.queryReads = 0; state.blockedQueryCount = 0; state.queryReleases = [];
+    const operations = Array.from({ length: 75 }, (_, index) => operation(index + 1));
+    for (const id of [25, 75]) state.documents.set(path(id), receipt(operation(id)));
+    vi.useFakeTimers();
+    const events: { batch: number; attempt: number; phase: string; durationMs: number; timeoutDelayMs: number | null;
+      timeoutScheduledAt: string | null; timeoutFiredAt: string | null; performanceElapsedMs: number;
+      browserOnline: boolean | null; pageVisibility: string | null }[] = [];
+    try {
+      const batch = createFirebaseSyncAdapter({ app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production", {
+        receiptLookupTimeoutMs: 10,
+        onReceiptBatch: ({ phase, batch }) => { if (phase === "start" && batch === 2) state.blockedQueryCount = 2; },
+        onReceiptRead: event => events.push(event),
+      });
+      const audit = batch.auditOutbox!(operations);
+      await vi.advanceTimersByTimeAsync(1_530);
+      expect(await audit).toEqual({ received: 2, missing: 73, receivedOperationIndexes: [24, 74] });
+      expect(state.queryReads).toBe(6);
+      expect(events.filter(event => event.batch === 2 && event.phase === "timeout")).toHaveLength(2);
+      expect(events).toContainEqual(expect.objectContaining({ batch: 2, attempt: 3, phase: "retry-success" }));
+      expect(events.filter(event => event.phase === "timeout")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ timeoutDelayMs: 0, timeoutScheduledAt: expect.any(String), timeoutFiredAt: expect.any(String), performanceElapsedMs: expect.any(Number) }),
+      ]));
+      expect(events.find(event => event.phase === "timeout")).toMatchObject({ browserOnline: null, pageVisibility: null });
+      await vi.advanceTimersByTimeAsync(18_000);
+      state.queryReleases[1]();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(11_000);
+      state.queryReleases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(event => event.batch === 2 && event.phase === "late-resolve")).toHaveLength(2);
+      expect(events.find(event => event.batch === 2 && event.attempt === 2 && event.phase === "late-resolve")?.durationMs).toBeGreaterThanOrEqual(19_000);
+      expect(events.find(event => event.batch === 2 && event.attempt === 1 && event.phase === "late-resolve")?.durationMs).toBeGreaterThanOrEqual(30_000);
+      expect(state.writes).toBe(0);
+    } finally { state.queryReleases.forEach(release => release()); state.blockedQueryCount = 0; vi.useRealTimers(); }
+  });
+
   it("stops after three timed-out chunk reads and never treats unknown receipts as missing", async () => {
     state.documents.clear(); state.writes = 0; state.queryReads = 0; state.blockedQuery = true; state.queryReleases = [];
     vi.useFakeTimers();

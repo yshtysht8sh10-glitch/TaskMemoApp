@@ -153,6 +153,19 @@ export class TaskMemoV2SyncController {
     return operations;
   }
 
+  /** Confirm the durable local write; cloud upload continues independently. */
+  async commandLocal(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
+    const operations = await this.store.command(label, type, transform, options);
+    if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
+    this.onChange();
+    void this.flush().then(() => this.onChange()).catch((reason) => {
+      const problem = classify(reason);
+      this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });
+      this.onChange();
+    });
+    return operations;
+  }
+
   async undo(now?: Date) {
     const operations = await this.store.undo(now);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });

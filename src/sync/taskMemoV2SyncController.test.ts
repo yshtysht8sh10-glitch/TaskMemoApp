@@ -25,6 +25,19 @@ const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sort
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it("confirms local persistence without waiting for a stalled upload and rejects a failed write", async () => {
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [memo()], { deviceId: "device-a" });
+    const adapter = new ListenerAdapter();
+    const controller = new TaskMemoV2SyncController(store, adapter);
+    await controller.start();
+    adapter.upload = async () => new Promise(() => undefined);
+    await controller.commandLocal("edit", "update", nodes => nodes.map(node => ({ ...node, title: "B" })));
+    expect(store.nodes[0].title).toBe("B");
+    persistence.writeJournal = async () => { throw new DOMException("quota", "QuotaExceededError"); };
+    await expect(controller.commandLocal("edit", "update", nodes => nodes.map(node => ({ ...node, title: "C" })))).rejects.toThrow("quota");
+    expect(store.nodes[0].title).toBe("B");
+  });
   it("stop prevents every subsequent upload after the in-flight operation settles", async () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: "device-a" });
     await store.command("create", "create", () => [{ ...memo(), sortKey: "a0" }, { ...memo(), id: "memo-b", sortKey: "a1" }, { ...memo(), id: "memo-c", sortKey: "a2" }]);

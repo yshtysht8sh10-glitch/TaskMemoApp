@@ -27,6 +27,7 @@ import { subscribeToWebOnline } from "./webOnlineListener";
 import { normalizeLegacyRanks } from "../services/nodeStorage";
 import type { PinnedNote } from "../services/pinnedNoteStorage";
 import { appAlert } from "../utils/appAlert";
+import { confirmedSave } from "../utils/confirmedSave";
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery" | "self-repairing";
 
@@ -304,6 +305,29 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     });
     return true;
   };
+  const commandConfirmed = async (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => {
+    if (repairRunningRef.current) {
+      appAlert("保存できません", "同期自己修復中です。完了後に再試行してください。");
+      return false;
+    }
+    const controller = controllerRef.current;
+    if (!controller) {
+      setError("V2同期へのログイン・初期化が完了するまで編集できません。");
+      appAlert("保存できません", "V2同期へのログイン・初期化が完了するまで編集できません。入力内容を保持したまま再試行してください。");
+      return false;
+    }
+    const succeeded = await confirmedSave(
+      () => controller.commandLocal(label, inferSyncOperationType(label), operation, { recordHistory }),
+      (reason) => {
+        const detail = message(reason);
+        const quota = reason && typeof reason === "object" && "name" in reason && reason.name === "QuotaExceededError";
+        setStatus("error"); setError(detail);
+        appAlert("保存エラー", `${quota ? "端末の保存容量が不足しています。" : "変更を端末に保存できませんでした。"}入力内容を保持したまま再試行してください。\n${detail}`);
+      },
+    );
+    if (succeeded) publish();
+    return succeeded;
+  };
   const repairSync = async (diagnosticOnly = false) => {
     const persistence = persistenceRef.current, adapter = adapterRef.current, store = storeRef.current;
     if (repairRunningRef.current || !localRecoveryModeRef.current || !persistence || !adapter || !store) return;
@@ -362,6 +386,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     selfRepairProgress, repairSync,
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),
+    commandConfirmed,
     updatePinnedNote: (body: string) => run((controller) => controller.updatePinnedNote(body)),
     updateIdeasEnabled: (value: boolean, type: "update" | "import" = "update") => run((controller) => controller.updateIdeasEnabled(value, type)),
     adoptLegacyPinnedNoteCandidate: (candidate: LegacyPinnedNoteCandidate) => run((controller) => controller.adoptLegacyPinnedNoteCandidate(candidate)),
@@ -380,5 +405,5 @@ export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory:
     onHistory({ ...next, nodes: normalizeLegacyRanks(next.nodes) });
   }, !useV2);
   const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2, initialPinnedNote, onPinnedNote, initialIdeasEnabled, onIdeasEnabled);
-  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, legacyPinnedNoteCandidates: [] as LegacyPinnedNoteCandidate[], command: () => false, updatePinnedNote: () => false, updateIdeasEnabled: () => false, adoptLegacyPinnedNoteCandidate: () => false, discardLegacyPinnedNoteCandidate: () => false, importLegacyPinnedNoteCandidates: () => false, undo: () => false, redo: () => false };
+  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, legacyPinnedNoteCandidates: [] as LegacyPinnedNoteCandidate[], command: () => false, commandConfirmed: async () => false, updatePinnedNote: () => false, updateIdeasEnabled: () => false, adoptLegacyPinnedNoteCandidate: () => false, discardLegacyPinnedNoteCandidate: () => false, importLegacyPinnedNoteCandidates: () => false, undo: () => false, redo: () => false };
 }

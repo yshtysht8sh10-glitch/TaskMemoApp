@@ -25,6 +25,51 @@ describe("IndexedDB V2 migration", () => {
   let factory: IDBFactory;
   beforeEach(() => { storage.clear(); factory = new IDBFactory(); });
 
+  it("normal startup preserves Application, Journal, Outbox, Undo/Redo and profile across failed migration and restarts", async () => {
+    const legacy = new TaskMemoV2ApplicationJournal("account");
+    const at = new Date("2026-09-26T00:00:00.000Z");
+    const memo: MemoNode = { id: "memo", type: "memo", parentId: null, sortKey: "a0", title: "before", body: "", dueAt: null,
+      duePreset: "none", status: "active", completedAt: null, createdAt: at, updatedAt: at, deletedAt: null };
+    const seed = await TaskMemoV2ApplicationStore.open(legacy, [memo], { deviceId: "device-a" });
+    await seed.setPinnedNoteDraft("profile body", at);
+    await seed.setIdeasEnabled(true);
+    const committed = (await legacy.loadCommitted())!;
+    await seed.command("edit", "update", nodes => nodes.map(node => node.id === "memo" ? { ...node, title: "after" } : node));
+    await seed.undo();
+    const journal = (await legacy.loadCommitted())!;
+    await legacy.writeCommitted(committed);
+    await legacy.writeJournal(journal);
+    const original = new Map(storage);
+
+    const transaction = FakeIDBDatabase.prototype.transaction;
+    const failure = vi.spyOn(FakeIDBDatabase.prototype, "transaction").mockImplementation(function (this: IDBDatabase, names, mode, options) {
+      if (mode === "readwrite") throw new DOMException("quota", "QuotaExceededError");
+      return transaction.call(this, names, mode, options);
+    });
+    try {
+      await expect(IndexedDbTaskMemoApplicationJournal.open("account", factory)).rejects.toThrow("quota");
+      expect(storage).toEqual(original);
+    } finally { failure.mockRestore(); }
+
+    let persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    expect(await persistence.loadCommitted()).toBe(committed);
+    expect(await persistence.loadJournal()).toBe(journal);
+    persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    const recovered = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
+    expect(recovered.nodes.find(node => node.id === "memo")?.title).toBe("before");
+    expect(recovered.pinnedNote.body).toBe("profile body");
+    expect(recovered.ideasEnabled).toBe(true);
+    expect(recovered.outbox).toEqual(JSON.parse(journal).sync.outbox);
+    expect(recovered.historyDepths).toEqual({ past: 1, future: 1 });
+    const restarted = await TaskMemoV2ApplicationStore.open(await IndexedDbTaskMemoApplicationJournal.open("account", factory), [], { deviceId: "ignored" });
+    expect(restarted.nodes).toEqual(recovered.nodes);
+    expect(restarted.outbox).toEqual(recovered.outbox);
+    expect(restarted.historyDepths).toEqual(recovered.historyDepths);
+    expect(restarted.pinnedNote).toEqual(recovered.pinnedNote);
+    expect(restarted.ideasEnabled).toBe(true);
+    expect(storage).toEqual(original);
+  });
+
   it("atomically restores the journal as local-only application and archives both original snapshots", async () => {
     const legacy = new TaskMemoV2ApplicationJournal("account");
     const committed = envelope(150, 969);

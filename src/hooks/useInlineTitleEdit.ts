@@ -5,7 +5,7 @@ import { titleClickAction } from "@/utils/inlineTitleEdit";
 type EditSource = { id: string; title: string };
 
 export function useInlineTitleEdit(
-  onSave: (id: string, title: string) => void,
+  onSave: (id: string, title: string) => Promise<boolean> | boolean,
 ) {
   const [source, setSource] = useState<EditSource | null>(null);
   const [draft, setDraft] = useState("");
@@ -13,6 +13,7 @@ export function useInlineTitleEdit(
   const sourceRef = useRef<EditSource | null>(null);
   const draftRef = useRef("");
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savingRef = useRef(false);
   const nativeID = source ? `inline-title-${source.id}` : "inline-title-idle";
 
   const clearBlurTimer = () => {
@@ -27,14 +28,24 @@ export function useInlineTitleEdit(
     sourceRef.current = null;
     setSource(null);
   };
-  const submit = () => {
+  const submit = async () => {
     clearBlurTimer();
+    if (savingRef.current) return;
     const current = sourceRef.current;
     const next = draftRef.current.trim();
     if (!current || !next) return cancel();
-    sourceRef.current = null;
-    if (next !== current.title) onSaveRef.current(current.id, next);
-    setSource(null);
+    if (next !== current.title) {
+      savingRef.current = true;
+      try {
+        if (!await onSaveRef.current(current.id, next)) return;
+      } finally {
+        savingRef.current = false;
+      }
+    }
+    if (sourceRef.current === current) {
+      sourceRef.current = null;
+      setSource(null);
+    }
   };
   const begin = (id: string, title: string) => {
     clearBlurTimer();
