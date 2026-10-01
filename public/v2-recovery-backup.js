@@ -42,8 +42,7 @@
     const pairs = [];
     for (const [scope, application] of committed)
       if (journals.has(scope)) pairs.push({ application, journal: journals.get(scope) });
-    if (!pairs.length) throw new Error('同じアカウントのV2 applicationとjournalの両方を確認できません。元データは変更していません。');
-    return pairs;
+    return { pairs, committed: [...committed.values()], journals: [...journals.values()] };
   }
 
   async function digest(value) {
@@ -104,7 +103,7 @@
     status.textContent = '読み取り中…';
     try {
       const entries = readSnapshot(window.localStorage);
-      const pairs = summary(entries);
+      const { pairs, committed, journals } = summary(entries);
       const indexedDb = await readIndexedDbSnapshot();
       const archive = JSON.stringify({
         format: 'taskmemo-v2-recovery-v2',
@@ -123,7 +122,7 @@
       prepared = { file, sha256 };
       shareButton.disabled = false;
       downloadButton.disabled = false;
-      const pairSummary = pairs.map((pair, index) => `組${index + 1}: application ${pair.application.nodes} Node / ${pair.application.outbox} outbox、journal ${pair.journal.nodes} Node / ${pair.journal.outbox} outbox`).join('\n');
+      const pairSummary = `旧V2 application: ${committed.map(item => item.nodes + ' Node / ' + item.outbox + ' outbox').join('、') || 'なし'}\n旧V2 journal: ${journals.map(item => item.nodes + ' Node / ' + item.outbox + ' outbox').join('、') || 'なし'}`;
       const idbSummary = indexedDb.records.map((record, index) => {
         const committed = record.committed ? JSON.parse(record.committed) : null;
         const journal = record.journal ? JSON.parse(record.journal) : null;

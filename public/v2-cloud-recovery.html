@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TaskMemo Web復旧</title><script defer src="/v2-cloud-recovery.js"></script></head>
+<body style="font-family:sans-serif;max-width:760px;margin:32px auto;padding:0 16px;line-height:1.6">
+<h1>TaskMemo Web復旧</h1>
+<p>作成済みバックアップとクラウド比較に基づく復旧計画を読み込みます。このページはTaskMemo本体とFirebase同期を起動しません。</p>
+<label>復旧計画JSON <input id="plan" type="file" accept=".json,application/json"></label>
+<p><button id="inspect" type="button">保存状態を再確認</button></p>
+<p><button id="apply" type="button" disabled>確認済み計画でWebローカルを復旧</button></p>
+<pre id="status" role="status" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+</body></html>

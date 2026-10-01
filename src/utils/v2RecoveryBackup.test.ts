@@ -79,8 +79,8 @@ it('exports exact application, journal, outbox, history and legacy values withou
   const values = { [applicationKey]: application, [journalKey]: journal, '@taskmemo/nodes/v1': 'SECRET_LEGACY', 'firebase:authUser': 'SECRET_AUTH' };
   const fixture = launch(values);
   await fixture.handlers.get('prepare')!();
-  expect(fixture.status.textContent).toMatch(/application 1 Node \/ 1 outbox/);
-  expect(fixture.status.textContent).toMatch(/journal 2 Node \/ 2 outbox/);
+  expect(fixture.status.textContent).toMatch(/application: 1 Node \/ 1 outbox/);
+  expect(fixture.status.textContent).toMatch(/journal: 2 Node \/ 2 outbox/);
   for (const secret of ['SECRET_UID', 'SECRET_TITLE', 'SECRET_OP', 'SECRET_UNDO', 'SECRET_LEGACY', 'SECRET_AUTH']) expect(fixture.status.textContent).not.toContain(secret);
   fixture.handlers.get('share')!();
   expect(fixture.share).toHaveBeenCalledOnce();
@@ -97,10 +97,15 @@ it('exports exact application, journal, outbox, history and legacy values withou
   expect(fixture.writes).not.toHaveBeenCalled();
 });
 
-it('refuses to report success without a matching V2 application and journal pair', async () => {
-  const fixture = launch({ '@taskmemo/sync-v2/taskmemo-application/v2/project%2FPRIVATE': JSON.stringify({ version: 2, domain: {}, sync: { outbox: [] } }) });
+it('preserves a lone V2 application when its journal is absent', async () => {
+  const raw = JSON.stringify({ version: 2, domain: { one: {} }, sync: { outbox: [] } });
+  const key = '@taskmemo/sync-v2/taskmemo-application/v2/project%2FPRIVATE';
+  const fixture = launch({ [key]: raw });
   await fixture.handlers.get('prepare')!();
-  expect(fixture.status.textContent).toMatch(/両方を確認できません/);
-  expect(fixture.buttons.share.disabled).toBe(true);
+  expect(fixture.status.textContent).toContain('旧V2 application: 1 Node / 0 outbox');
+  expect(fixture.status.textContent).toContain('旧V2 journal: なし');
+  expect(fixture.buttons.share.disabled).toBe(false);
+  fixture.handlers.get('share')!();
+  expect(JSON.parse(await fixture.share.mock.calls[0][0].files[0].text()).entries).toEqual([{ key, value: raw }]);
   expect(fixture.writes).not.toHaveBeenCalled();
 });
