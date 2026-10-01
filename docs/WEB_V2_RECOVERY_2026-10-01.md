@@ -35,3 +35,5 @@ The changed content includes four records whose legacy revisions are higher than
 ## Prevention
 
 The V2 controller is constructed only after persistence hydration and migration checks succeed. It sends durable outbox operations, not a whole-list snapshot. `assertSafeNodeTransition` also rejects a large unrequested drop before outbox operations are created. Explicit deletion commands remain distinct from a transient empty loading state. Keep the legacy fingerprint stop condition: it is a safety signal that should lead to comparison and backup, not to clearing storage.
+
+During verification, two Web tabs sharing the persisted `deviceId` exposed a separate listener problem: a tab ignored the other tab's Cloud operation merely because the device ID matched. The listener now treats an operation as its own echo only when its exact operation ID is still in that tab's outbox, and advances the local sequence past an observed same-device operation. Concurrent edits from two tabs still require a separate atomic compare-and-swap design; avoid simultaneous editing in multiple Web tabs until that is implemented.

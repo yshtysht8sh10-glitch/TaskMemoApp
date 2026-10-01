@@ -269,11 +269,13 @@ export class TaskMemoV2ApplicationStore {
     return this.serialize(async () => {
       if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
       const current = this.envelope.profile.features;
-      const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
+      const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
+      const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
       const winner = selfEcho ? current.synced : chooseVersionedFeatures(current.synced ?? undefined, incoming);
       const features = winner ? { localIdeasEnabled: winner.value.ideasEnabled, synced: winner, migrationPending: false } : current;
       const localMutation = !same(features, current);
-      await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, features }, sync: {
+      await this.commit({ ...this.envelope, nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
+        profile: { ...this.envelope.profile, features }, sync: {
         outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
         seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
       } });
@@ -333,11 +335,13 @@ export class TaskMemoV2ApplicationStore {
     return this.serialize(async () => {
       if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
       const current = this.envelope.profile.pinnedNote;
-      const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
+      const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
+      const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
       const winner = selfEcho ? current.synced : chooseVersionedPinnedNote(current.synced ?? undefined, incoming);
       const pinnedNote = { ...current, synced: winner ?? current.synced, localBody: current.dirtySince ? current.localBody : (winner?.value.body ?? current.localBody) };
       const localMutation = !same(pinnedNote, current);
-      await this.commit({ ...this.envelope, profile: { ...this.envelope.profile, pinnedNote }, sync: {
+      await this.commit({ ...this.envelope, nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
+        profile: { ...this.envelope.profile, pinnedNote }, sync: {
         outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
         seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
       } });
@@ -347,11 +351,13 @@ export class TaskMemoV2ApplicationStore {
   }
   private async receiveSerialized(incoming: VersionedNode) {
     if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
-    const selfEcho = incoming.lastDeviceId === this.envelope.deviceId;
+    const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
+    const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
     const current = this.envelope.domain[incoming.value.id];
     const winner = selfEcho ? current : chooseVersionedNode(current, incoming);
     let next: Envelope = {
       ...this.envelope,
+      nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
       domain: winner ? { ...this.envelope.domain, [incoming.value.id]: winner } : this.envelope.domain,
       history: this.envelope.history,
       sync: {

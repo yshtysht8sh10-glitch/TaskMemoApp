@@ -32,8 +32,9 @@ async function launch(changedLegacy = false) {
   const status = { textContent: '' };
   const apply = { disabled: true, addEventListener: (_: string, handler: () => Promise<void>) => handlers.set('apply', handler) };
   const inspect = { addEventListener: (_: string, handler: () => Promise<void>) => handlers.set('inspect', handler) };
+  const cloud = { addEventListener: (_: string, handler: () => Promise<void>) => handlers.set('cloud', handler) };
   const input = { files: [{ text: async () => JSON.stringify(plan) }] };
-  runInNewContext(script, { document: { getElementById: (id: string) => ({ status, apply, inspect, plan: input })[id as 'status'] },
+  runInNewContext(script, { document: { getElementById: (id: string) => ({ status, apply, inspect, cloud, plan: input })[id as 'status'] },
     indexedDB, localStorage, crypto: webcrypto, TextEncoder, Date, JSON });
   const read = async () => {
     const opened = indexedDB.open('taskmemo-v2-local-application');

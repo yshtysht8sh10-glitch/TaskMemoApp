@@ -21,6 +21,16 @@ const initialMemo = (): MemoNode => ({ id: "memo-a", type: "memo", memoType: "ta
 const unrelatedMemo = (): MemoNode => ({ ...initialMemo(), id: "memo-b", sortKey: "b0", title: "B", routineHistory: {} });
 
 describe("TaskMemo V2 application store", () => {
+  it("accepts another tab's Cloud operation that shares the persisted deviceId", async () => {
+    const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [initialMemo()], { deviceId: 'shared-device' });
+    const current = store.versionedNode('memo-a')!;
+    const incoming = { ...current, value: { ...current.value, title: 'from other tab' }, revision: current.revision + 1,
+      lastOpId: 'shared-device:2', lastDeviceId: 'shared-device', lastLocalSeq: 2 };
+    expect(await store.receive(incoming)).toBe('remote');
+    expect(store.nodes[0].title).toBe('from other tab');
+    const operations = await store.command('編集', 'update', nodes => nodes.map(node => ({ ...node, title: 'next local edit' })));
+    expect(operations[0].localSeq).toBeGreaterThan(2);
+  });
   it("does not silently rewrite Journal sortKeys while opening local recovery mode", async () => {
     const persistence = new MemoryPersistence();
     const store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: "old" });
