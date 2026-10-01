@@ -31,6 +31,21 @@ describe("TaskMemo V2 application store", () => {
     const operations = await store.command('編集', 'update', nodes => nodes.map(node => ({ ...node, title: 'next local edit' })));
     expect(operations[0].localSeq).toBeGreaterThan(2);
   });
+  it("reapplies a seen Cloud operation when another tab left the local record stale", async () => {
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: 'shared-device' });
+    const old = store.versionedNode('memo-a')!;
+    const incoming = { ...old, value: { ...old.value, title: 'Cloud revision two' }, revision: old.revision + 2,
+      lastOpId: 'shared-device:3', lastDeviceId: 'shared-device', lastLocalSeq: 3 };
+    await store.receive(incoming);
+    const stale = JSON.parse(persistence.committed!);
+    stale.domain['memo-a'] = old;
+    persistence.committed = JSON.stringify(stale);
+    const reopened = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'ignored' });
+    expect(reopened.nodes[0].title).toBe('A');
+    expect(await reopened.receive(incoming)).toBe('remote');
+    expect(reopened.nodes[0].title).toBe('Cloud revision two');
+  });
   it("does not silently rewrite Journal sortKeys while opening local recovery mode", async () => {
     const persistence = new MemoryPersistence();
     const store = await TaskMemoV2ApplicationStore.open(persistence, [initialMemo()], { deviceId: "old" });

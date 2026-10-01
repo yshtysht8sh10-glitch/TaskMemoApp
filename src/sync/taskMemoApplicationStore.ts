@@ -267,8 +267,9 @@ export class TaskMemoV2ApplicationStore {
 
   async receiveFeatures(incoming: VersionedFeatures) {
     return this.serialize(async () => {
-      if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
       const current = this.envelope.profile.features;
+      if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId) &&
+          (current.synced?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
       const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
       const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
       const winner = selfEcho ? current.synced : chooseVersionedFeatures(current.synced ?? undefined, incoming);
@@ -333,8 +334,9 @@ export class TaskMemoV2ApplicationStore {
 
   async receivePinnedNote(incoming: VersionedPinnedNote) {
     return this.serialize(async () => {
-      if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
       const current = this.envelope.profile.pinnedNote;
+      if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId) &&
+          (current.synced?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
       const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
       const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
       const winner = selfEcho ? current.synced : chooseVersionedPinnedNote(current.synced ?? undefined, incoming);
@@ -350,10 +352,11 @@ export class TaskMemoV2ApplicationStore {
     });
   }
   private async receiveSerialized(incoming: VersionedNode) {
-    if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId)) return "duplicate" as const;
+    const current = this.envelope.domain[incoming.value.id];
+    if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId) &&
+        (current?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
     const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
     const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
-    const current = this.envelope.domain[incoming.value.id];
     const winner = selfEcho ? current : chooseVersionedNode(current, incoming);
     let next: Envelope = {
       ...this.envelope,
