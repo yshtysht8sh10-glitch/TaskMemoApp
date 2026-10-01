@@ -1777,6 +1777,7 @@ function EditorModal({
         visibleOffsetTop: viewport?.offsetTop ?? 0,
         windowScrollY: window.scrollY,
       });
+      recordEditorDiagnostic('taskmemo-viewport-frame-request', { frame, stack: new Error().stack });
       // WebKit can blur the input in the same scroll task. Move the sheet
       // synchronously before React's next render, then keep React in sync.
       const sheet = document.getElementById('editor-sheet');
@@ -1785,6 +1786,7 @@ function EditorModal({
         sheet.style.bottom = frame ? 'auto' : '';
         sheet.style.height = frame ? `${frame.height}px` : '';
       }
+      recordEditorDiagnostic('taskmemo-viewport-frame-applied', { frame });
       setVisibleFrame(frame);
     };
     update();

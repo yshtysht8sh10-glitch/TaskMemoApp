@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
 import { keyboardDiagnosticsEnabled as diagnosticsEnabled, mountDiagnosticCopyPanel } from '../utils/diagnosticClipboard';
+import { recordEditorDiagnostic } from '../utils/editorDiagnostics';
 
 import {
   focusedInputScrollOffset,
@@ -179,6 +180,9 @@ function revealFocusedInput(
   // Never use a predicted input position from before restoring the page.
   if (window.scrollY !== baselineWindowScrollY) {
     recordKeyboardDiagnostic('page-scroll-detected', { baselineWindowScrollY });
+    recordEditorDiagnostic('taskmemo-window-scrollTo', {
+      from: window.scrollY, to: baselineWindowScrollY, stack: new Error().stack,
+    });
     window.scrollTo(window.scrollX, baselineWindowScrollY);
     recordKeyboardDiagnostic('page-scroll-restored', { baselineWindowScrollY });
   }
@@ -215,6 +219,10 @@ function revealFocusedInput(
       ) || 0;
       scrollContainer.style.paddingBottom = `${currentPadding + plan.extraBottomSpace}px`;
     }
+    recordEditorDiagnostic('taskmemo-internal-scroll-write', {
+      from: scrollContainer.scrollTop, to: plan.targetScrollTop, offset,
+      stack: new Error().stack,
+    });
     scrollContainer.scrollTop = plan.targetScrollTop;
   };
   applyOffset(requestedOffset);
@@ -327,6 +335,9 @@ export function useWebFocusedInputVisibility() {
         adjustedContainers.forEach((original, container) => {
           if (container.isConnected) {
             container.style.paddingBottom = original.paddingBottom;
+            recordEditorDiagnostic('taskmemo-internal-scroll-restore', {
+              from: container.scrollTop, to: original.scrollTop, stack: new Error().stack,
+            });
             container.scrollTop = original.scrollTop;
           }
         });

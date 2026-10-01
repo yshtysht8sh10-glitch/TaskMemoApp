@@ -68,8 +68,10 @@ export function installEditorDiagnostics(force = false) {
     return () => document.removeEventListener(name, listener, true);
   });
   const viewportListener = () => recordEditorDiagnostic('visualViewport-change');
+  const windowScrollListener = () => recordEditorDiagnostic('window-scroll-event');
   window.visualViewport?.addEventListener('resize', viewportListener);
   window.visualViewport?.addEventListener('scroll', viewportListener);
+  window.addEventListener('scroll', windowScrollListener);
   const copyPanel = mountDiagnosticCopyPanel(
     '?keyboardDiagnostics=1',
     () => JSON.stringify({ version: 1, build: 'editor-diagnostics', entries }, null, 2),
@@ -81,6 +83,7 @@ export function installEditorDiagnostics(force = false) {
     listeners.forEach((remove) => remove());
     window.visualViewport?.removeEventListener('resize', viewportListener);
     window.visualViewport?.removeEventListener('scroll', viewportListener);
+    window.removeEventListener('scroll', windowScrollListener);
     copyPanel();
     enabled = false;
     active = false;
