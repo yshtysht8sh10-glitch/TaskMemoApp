@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { User } from 'firebase/auth';
 import type { TaskMemoSyncStatus } from '@/hooks/useTaskMemoSync';
 import type { TaskMemoEnvironment } from '@/services/firebaseConfig';
@@ -17,6 +17,10 @@ export function SyncAccountPanel({ protocol, devNetwork, configured, environment
     {devNetwork && <Pressable accessibilityRole="button" onPress={() => run(devNetwork.toggle)} style={styles.secondary}><Text>{devNetwork.paused ? 'Emulator通信を再開' : 'Emulator通信を停止'}</Text></Pressable>}
     {!configured ? <Text style={styles.error}>{configurationError ?? 'Firebase設定がありません。クラウド同期を無効化しました。'}</Text> : user ? <><Text style={styles.email}>{user.email}</Text><Text style={styles.help}>{environment === 'development' ? 'V2 revision / durable outboxで同期しています。競合順序は端末時計に依存しません。' : 'このアカウントでWeb/AndroidのNodeを共有します。'}</Text><Pressable disabled={busy} style={styles.secondary} onPress={() => run(onSignOut)}><Text style={styles.secondaryText}>ログアウト</Text></Pressable></> : <><TextInput autoCapitalize="none" autoCorrect={false} keyboardType="email-address" value={email} onChangeText={setEmail} placeholder="メールアドレス" style={styles.input} /><TextInput secureTextEntry value={password} onChangeText={setPassword} placeholder="パスワード（6文字以上）" style={styles.input} /><View style={styles.buttons}><Pressable disabled={busy || !email || password.length < 6} style={[styles.primary, (busy || !email || password.length < 6) && styles.disabled]} onPress={() => run(() => onSignIn(email, password))}><Text style={styles.primaryText}>ログイン</Text></Pressable><Pressable disabled={busy || !email || password.length < 6} style={[styles.secondary, (busy || !email || password.length < 6) && styles.disabled]} onPress={() => run(() => onSignUp(email, password))}><Text style={styles.secondaryText}>新規登録</Text></Pressable></View><Text style={styles.help}>ログイン後、端末の変更をdurable outboxから安全に同期します。</Text></>}
     {error && <Text style={styles.error}>{error}</Text>}
+    {Platform.OS === 'web' && error?.includes('移行後に旧localStorageが変更') &&
+      <Pressable accessibilityRole="link" onPress={() => window.open('/v2-recovery-backup', '_blank', 'noopener')} style={styles.secondary}>
+        <Text style={styles.secondaryText}>保存データを退避・復旧する</Text>
+      </Pressable>}
   </View>;
 }
 

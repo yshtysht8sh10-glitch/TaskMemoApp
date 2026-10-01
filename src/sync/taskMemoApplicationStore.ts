@@ -2,6 +2,7 @@ import type { NodeHistory } from "../domain/nodeHistory";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
 import { recordSortKeyPass } from "./sortKeyDiagnostics";
 import type { Node } from "../models/node";
+import { assertSafeNodeTransition } from "./destructiveSyncGuard";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
@@ -153,6 +154,7 @@ export class TaskMemoV2ApplicationStore {
     const before = this.nodes;
     const after = transform(before);
     if (same(encodeNodes(before), encodeNodes(after))) return [];
+    assertSafeNodeTransition(before, after, type);
     return this.applyCommand(type, after, label, options.recordHistory !== false && type !== "purge", this.now());
   }
 
