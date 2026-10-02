@@ -28,6 +28,8 @@ import {
   type TodayGranularity,
 } from "@/domain/deadlineView";
 import type { NodeDraft } from "@/domain/nodeOperations";
+import { beforeIdForInsertion } from "@/domain/insertionPosition";
+import { nativeDeadlineGroupForPlaceholder, nativeDeadlineInsertion } from "@/domain/nativeDeadlineDrop";
 import type { MemoNode, Node } from "@/models/node";
 import { formatDateTimeInput, parseLocalDateTime } from "@/utils/dueDates";
 import { formatDueLabel } from "@/utils/formatDueLabel";
@@ -533,9 +535,7 @@ export function DeadlineView({
     }, 0);
   };
   const setCandidate = (index: number) => {
-    const groupKey = rows[index]?.groupKey;
-    const group = sourceGroups.find((item) => item.key === groupKey);
-    const next = group?.create && !group.create.editable ? group.key : null;
+    const next = nativeDeadlineGroupForPlaceholder(rows, index, sourceGroups);
     targetRef.current = next;
     setTargetGroup(next);
   };
@@ -545,8 +545,13 @@ export function DeadlineView({
     moving.current = null;
     targetRef.current = null;
     setTargetGroup(null);
-    if (active && target && target !== active.sourceGroup)
-      onDueDrop(active.id, target);
+    const insertion = nativeDeadlineInsertion(active, target);
+    if (insertion) {
+      const orderedIds = sourceGroups.find((group) => group.key === insertion.groupKey)
+        ?.memos.map((memo) => memo.id) ?? [];
+      onDueDrop(insertion.id, insertion.groupKey,
+        beforeIdForInsertion(orderedIds, insertion.id, insertion.position));
+    }
   };
   const memoMeta = (memo: MemoNode) => {
     if (!routineCategoryForMemo(nodes, memo))
