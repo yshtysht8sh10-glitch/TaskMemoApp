@@ -76,6 +76,12 @@ function scrollableAncestor(element: HTMLElement) {
   return null;
 }
 
+function isEditorInput(element: Element | null) {
+  return isTextEntry(element) && element.closest('#editor-keyboard-scroll') instanceof HTMLElement;
+}
+
+type AdjustedContainer = { paddingBottom: string; scrollTop: number; restoreScroll: boolean };
+
 function keyboardDiagnosticsEnabled() {
   return diagnosticsEnabled(window.location.search);
 }
@@ -163,7 +169,7 @@ function logKeyboardGeometry(
 }
 
 function revealFocusedInput(
-  adjustedContainers: Map<HTMLElement, { paddingBottom: string; scrollTop: number }>,
+  adjustedContainers: Map<HTMLElement, AdjustedContainer>,
   baselineWindowScrollY: number,
 ) {
   const element = document.activeElement;
@@ -177,8 +183,15 @@ function revealFocusedInput(
     recordKeyboardDiagnostic('correction-skip', { reason: 'no-internal-scroll-container' });
     return;
   }
-  // Never use a predicted input position from before restoring the page.
-  if (window.scrollY !== baselineWindowScrollY) {
+  const editorInput = isEditorInput(element);
+  const selection = element as HTMLInputElement | HTMLTextAreaElement;
+  if (editorInput && selection.selectionStart !== selection.selectionEnd) {
+    recordKeyboardDiagnostic('correction-skip', { reason: 'editor-range-selection' });
+    return;
+  }
+  // The editor lets Safari own page pan/caret positioning. Returning the page
+  // to its pre-focus position would visibly undo Safari's keyboard movement.
+  if (!editorInput && window.scrollY !== baselineWindowScrollY) {
     recordKeyboardDiagnostic('page-scroll-detected', { baselineWindowScrollY });
     recordEditorDiagnostic('taskmemo-window-scrollTo', {
       from: window.scrollY, to: baselineWindowScrollY, stack: new Error().stack,
@@ -211,6 +224,7 @@ function revealFocusedInput(
       adjustedContainers.set(scrollContainer, {
         paddingBottom: scrollContainer.style.paddingBottom,
         scrollTop: scrollContainer.scrollTop,
+        restoreScroll: !editorInput,
       });
     const plan = focusedInputScrollPlan(scrollContainer, offset);
     if (plan.extraBottomSpace > 0) {
@@ -225,10 +239,12 @@ function revealFocusedInput(
     });
     scrollContainer.scrollTop = plan.targetScrollTop;
   };
-  applyOffset(requestedOffset);
+  // Safari also owns selection-handle panning above the viewport. Only reveal
+  // content obscured below the keyboard; never counter-pan the editor upward.
+  applyOffset(editorInput ? Math.max(0, requestedOffset) : requestedOffset);
   const residualOffset = focusedInputScrollOffset(element.getBoundingClientRect(), availableViewport());
   recordKeyboardDiagnostic('before-residual-correction', { residualOffset });
-  applyOffset(residualOffset);
+  applyOffset(editorInput ? Math.max(0, residualOffset) : residualOffset);
   const finalViewport = availableViewport();
   const finalBounds = element.getBoundingClientRect();
   const containerBounds = scrollContainer.getBoundingClientRect();
@@ -314,7 +330,7 @@ export function useWebFocusedInputVisibility() {
       recordKeyboardDiagnostic('installed');
       diagnosticListeners.push(() => { delete diagnosticWindow.taskMemoKeyboardDiagnostics; });
     }
-    const adjustedContainers = new Map<HTMLElement, { paddingBottom: string; scrollTop: number }>();
+    const adjustedContainers = new Map<HTMLElement, AdjustedContainer>();
     let baselineWindowScrollY = window.scrollY;
     let pendingFocus: { scrollY: number; reference: ReturnType<typeof viewportSample> } | null = null;
     let frame: number | null = null;
@@ -335,10 +351,12 @@ export function useWebFocusedInputVisibility() {
         adjustedContainers.forEach((original, container) => {
           if (container.isConnected) {
             container.style.paddingBottom = original.paddingBottom;
-            recordEditorDiagnostic('taskmemo-internal-scroll-restore', {
-              from: container.scrollTop, to: original.scrollTop, stack: new Error().stack,
-            });
-            container.scrollTop = original.scrollTop;
+            if (original.restoreScroll) {
+              recordEditorDiagnostic('taskmemo-internal-scroll-restore', {
+                from: container.scrollTop, to: original.scrollTop, stack: new Error().stack,
+              });
+              container.scrollTop = original.scrollTop;
+            }
           }
         });
         adjustedContainers.clear();
@@ -352,14 +370,18 @@ export function useWebFocusedInputVisibility() {
     const scheduleReveal = () => {
       recordKeyboardDiagnostic('schedule', { cancelFrame: frame !== null, cancelTimerCount: timers.size });
       if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
       timers.forEach(clearTimeout);
       timers.clear();
-      frame = requestAnimationFrame(() => {
+      const editorInput = isEditorInput(document.activeElement);
+      if (!editorInput) frame = requestAnimationFrame(() => {
         recordKeyboardDiagnostic('correction-rAF');
         runCorrection();
         frame = null;
       });
-      KEYBOARD_SETTLE_DELAYS.forEach((delay) => {
+      // Debounce the editor until keyboard resize/pan events have settled.
+      // Early rAF/80ms corrections race with Safari's own reveal animation.
+      (editorInput ? [280] : KEYBOARD_SETTLE_DELAYS).forEach((delay) => {
         const timer = setTimeout(() => {
           timers.delete(timer);
           recordKeyboardDiagnostic('correction-timer', { delay });

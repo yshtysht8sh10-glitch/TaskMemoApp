@@ -1961,6 +1961,7 @@ function EditorModal({
       <Pressable nativeID="editor-backdrop" style={styles.backdrop} onPress={() => dismiss('backdrop-press')} />
       <Animated.View
         nativeID="editor-sheet"
+        tabIndex={Platform.OS === "web" ? -1 : undefined}
         style={[styles.editorSheet,
           { transform: [{ translateY: sheetTranslateY }] }]}
       >
@@ -2007,7 +2008,6 @@ function EditorModal({
               onChangeText={setTitle}
               placeholderTextColor={colors.textSecondary}
               style={styles.input}
-              autoFocus
             />
             {editor?.type === "memo" && (
               <>

@@ -120,6 +120,59 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it('lets Safari pan the editor without restoring the page or scrolling during keyboard animation', async () => {
+  const b = browser();
+  b.input.closest = (selector) => selector === '#editor-keyboard-scroll' ? b.list : null;
+  b.list.clientHeight = 714;
+  b.list.getBoundingClientRect.mockImplementation(() => rect(97 - b.win.scrollY, 714));
+  b.input.getBoundingClientRect.mockImplementation(() => rect(343 - b.list.scrollTop - b.win.scrollY, 130));
+  b.list.scrollTop = 0;
+  b.list.writes.length = 0;
+  b.focus();
+  Object.assign(b.vv, { height: 408, offsetTop: 0 });
+  b.vv.dispatchEvent(new Event('resize'));
+  await vi.advanceTimersByTimeAsync(80);
+  expect(b.list.writes).toHaveLength(0);
+  b.win.scrollY = 205;
+  b.vv.offsetTop = 204.65625;
+  b.vv.dispatchEvent(new Event('scroll'));
+  await vi.advanceTimersByTimeAsync(300);
+  expect(b.win.scrollTo).not.toHaveBeenCalled();
+  expect(b.list.writes).toHaveLength(0);
+  expect(b.doc.activeElement).toBe(b.input);
+});
+
+it('reveals an editor input once after settling without restoring its scroll on dismissal', async () => {
+  const b = browser();
+  b.input.closest = (selector) => selector === '#editor-keyboard-scroll' ? b.list : null;
+  b.focus();
+  b.keyboard();
+  b.win.scrollY = 0;
+  await vi.advanceTimersByTimeAsync(80);
+  expect(b.list.writes).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(220);
+  expect(b.list.writes).toHaveLength(1);
+  expect(b.input.getBoundingClientRect().bottom).toBeLessThanOrEqual(349);
+  const revealed = b.list.scrollTop;
+  Object.assign(b.vv, { height: 674, width: 402, scale: 1 });
+  b.win.innerHeight = 674;
+  b.html.clientHeight = 674;
+  b.vv.dispatchEvent(new Event('resize'));
+  await vi.advanceTimersByTimeAsync(300);
+  expect(b.list.scrollTop).toBe(revealed);
+});
+
+it('leaves editor range selection and handle panning to the browser', async () => {
+  const b = browser();
+  b.input.closest = (selector) => selector === '#editor-keyboard-scroll' ? b.list : null;
+  Object.assign(b.input, { selectionStart: 0, selectionEnd: 8 });
+  b.focus();
+  b.keyboard();
+  await vi.advanceTimersByTimeAsync(300);
+  expect(b.list.writes).toHaveLength(0);
+  expect(b.win.scrollTo).not.toHaveBeenCalled();
+});
+
 it('replays Brave focus → both viewports shrink → page pan → list scroll → measured input visibility', async () => {
   const b = browser();
   b.focus(b.card); // observed card focus before the inline input mounts
