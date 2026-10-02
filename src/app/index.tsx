@@ -3,7 +3,6 @@ import {
   Animated,
   KeyboardAvoidingView,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -105,7 +104,7 @@ import {
 } from "@/domain/completionHistory";
 import { appAlert } from "@/utils/appAlert";
 import { memoCreationNotice, type MemoCreationNotice } from "@/utils/memoCreationFeedback";
-import { canStartSheetDismissFromTarget, sheetDismissRelease } from "@/utils/sheetDismissGesture";
+import { SheetDismissHeader } from "@/components/SheetDismissHeader";
 import { selectedChoiceStyle } from "@/utils/choiceStyle";
 import { installEditorDiagnostics, recordEditorDiagnostic } from "@/utils/editorDiagnostics";
 import { editorKeyboardDismissMode } from "@/utils/editorScroll";
@@ -1704,6 +1703,8 @@ function Sheet({
   children: React.ReactNode;
 }) {
   const styles = useStyles();
+  const { height: viewportHeight } = useWindowDimensions();
+  const [sheetTranslateY] = useState(() => new Animated.Value(0));
   return (
     <Modal
       visible={visible}
@@ -1716,9 +1717,12 @@ function Sheet({
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
-        <Pressable style={styles.backdrop} onPress={onClose}>
-          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.sheetTitle}>{title}</Text>
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+          <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}>
+            <SheetDismissHeader translateY={sheetTranslateY} viewportHeight={viewportHeight} onDismiss={onClose}>
+              <Text style={styles.sheetTitle}>{title}</Text>
+            </SheetDismissHeader>
             <ScrollView
               style={styles.sheetContent}
               contentContainerStyle={styles.sheetScrollContent}
@@ -1731,8 +1735,8 @@ function Sheet({
               {children}
             </ScrollView>
             <Action label="キャンセル" onPress={onClose} />
-          </Pressable>
-        </Pressable>
+          </Animated.View>
+        </View>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -1763,7 +1767,6 @@ function EditorModal({
   const styles = useStyles();
   const { colors } = useAppTheme();
   const { height: viewportHeight } = useWindowDimensions();
-  const [scrollAtTop, setScrollAtTop] = useState(true);
   const [sheetTranslateY] = useState(() => new Animated.Value(0));
   const initialMemo = editor?.node?.type === "memo" ? editor.node : null;
   const memo = initialMemo
@@ -1930,27 +1933,6 @@ function EditorModal({
     recordEditorDiagnostic('sheet-dismiss-request', { reason });
     return editor?.node ? save() : onClose(reason);
   };
-  // PanResponder captures event callbacks; refs are read only when a gesture ends.
-  // eslint-disable-next-line react-hooks/refs
-  const dismissPanResponder = PanResponder.create({
-    onMoveShouldSetPanResponderCapture: (_event, gesture) => {
-      const capture = canStartSheetDismissFromTarget(true, { scrollOffset: scrollAtTop ? 0 : 1, dx: gesture.dx, dy: gesture.dy });
-      if (capture) recordEditorDiagnostic('grabber-pan-capture', { dx: gesture.dx, dy: gesture.dy });
-      return capture;
-    },
-    onPanResponderMove: (_event, gesture) => sheetTranslateY.setValue(Math.max(0, gesture.dy)),
-    onPanResponderRelease: (_event, gesture) => {
-      const outcome = sheetDismissRelease({ distance: Math.max(0, gesture.dy), velocity: gesture.vy, viewportHeight });
-      recordEditorDiagnostic('grabber-pan-release', { dy: gesture.dy, velocity: gesture.vy, outcome });
-      if (outcome === 'commit-close') {
-        dismiss('grabber-pan-release');
-        sheetTranslateY.setValue(0);
-      } else {
-        Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true }).start();
-      }
-    },
-    onPanResponderTerminate: () => Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true }).start(),
-  });
   return (
     <Modal
       visible={!!editor}
@@ -1970,11 +1952,13 @@ function EditorModal({
           style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
+          <SheetDismissHeader nativeID="editor-grabber" translateY={sheetTranslateY} viewportHeight={viewportHeight} onDismiss={() => dismiss('grabber-pan-release')}>
+            <Text style={styles.modalTitle}>{editor?.node ? "編集" : "新規作成"}</Text>
+          </SheetDismissHeader>
           <ScrollView
             nativeID="editor-keyboard-scroll"
             onScroll={(event) => {
               const offset = event.nativeEvent.contentOffset.y;
-              setScrollAtTop(offset <= 0);
               recordEditorDiagnostic('editor-scroll', { contentOffsetY: offset });
             }}
             scrollEventThrottle={16}
@@ -1983,12 +1967,6 @@ function EditorModal({
             automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.form}
           >
-            <View nativeID="editor-grabber" style={styles.grabberTouchArea} {...dismissPanResponder.panHandlers}>
-              <View style={styles.grabber} />
-            </View>
-            <Text style={styles.modalTitle}>
-              {editor?.node ? "編集" : "新規作成"}
-            </Text>
             {editor?.type === "memo" && (
               <Text style={styles.destination}>
                 追加先: {categoryPath(nodes, editor.parentId)} ·{" "}

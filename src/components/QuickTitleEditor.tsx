@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useAppTheme } from "@/theme/theme";
-import { quickTitleExit } from "@/utils/memoTap";
+import { confirmedQuickTitleExit } from "@/utils/confirmedQuickTitleExit";
 import { quickTitleSourceLabel } from "@/utils/quickAddTitle";
 
 type Target = { id: string; title: string } | null;
@@ -41,27 +41,11 @@ export function QuickTitleEditor({ target, contextLabel, onClose, onSave }: {
       window.visualViewport?.removeEventListener("scroll", update);
     };
   }, [target]);
-  const close = async (save: boolean) => {
-    if (closing.current || !target) return;
-    const result = quickTitleExit(draftRef.current, save);
-    if (result.kind === "invalid") { setError(true); return; }
-    closing.current = true;
-    if (blurTimer.current) clearTimeout(blurTimer.current);
-    if (result.kind === "save" && result.title !== target.title) {
-      try {
-        if (await onSave(target.id, result.title) === false) {
-          closing.current = false;
-          setError(true);
-          return;
-        }
-      } catch {
-        closing.current = false;
-        setError(true);
-        return;
-      }
-    }
-    onClose(result.kind === "save");
-  };
+  const close = (save: boolean) => confirmedQuickTitleExit({
+    lock: closing, draft: draftRef.current, save, target, onSave, onClose,
+    onError: () => setError(true),
+    clearPending: () => { if (blurTimer.current) clearTimeout(blurTimer.current); },
+  });
   useEffect(() => {
     if (!target || Platform.OS === "web") return;
     const listener = Keyboard.addListener("keyboardDidHide", () => {
@@ -95,9 +79,6 @@ export function QuickTitleEditor({ target, contextLabel, onClose, onSave }: {
           style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
         />
         {error && <Text accessibilityRole="alert" style={{ color: colors.danger }}>入力内容を確認し、保存を再試行してください</Text>}
-        <Pressable accessibilityLabel="タイトル編集を確定" onPressIn={() => { cancelIntent.current = true; }} onPress={() => close(true)} style={styles.button}>
-          <Text style={[styles.buttonText, { color: colors.accent }]}>✓</Text>
-        </Pressable>
         <Pressable accessibilityLabel="タイトル編集をキャンセル" onPressIn={() => { cancelIntent.current = true; }} onPress={() => close(false)} style={styles.button}>
           <Text style={[styles.buttonText, { color: colors.textSecondary }]}>×</Text>
         </Pressable>
