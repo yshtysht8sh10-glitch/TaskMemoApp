@@ -33,3 +33,10 @@ it('the dedicated header owns touch gestures without browser scrolling', () => {
   expect(header).toContain('onPanResponderTerminate: restore');
   expect(header).toContain('gesture.dy > Math.abs(gesture.dx)');
 });
+
+it('dismissal waits for exit animation instead of resetting the drag position', () => {
+  const header = readFileSync('src/components/SheetDismissHeader.tsx', 'utf8');
+  expect(header).not.toContain('translateY.setValue(0)');
+  expect(header).toContain('Animated.timing(translateY');
+  expect(header).toContain('transition.exit(');
+});

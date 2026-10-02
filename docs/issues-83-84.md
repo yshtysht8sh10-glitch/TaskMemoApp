@@ -21,3 +21,15 @@ Focused tests include header placement, Web touch ownership, quick title overlap
 - Verify edits are saved when dismissing; failed saving must leave the sheet open.
 
 Keep #83 and #84 open until user iPhone acceptance.
+
+## #84 exit animation follow-up (2026-10-02)
+
+Latest iPhone feedback reported an abrupt disappearance midway through dismissal. The header previously invoked onDismiss at release and reset translateY to zero immediately: settings changed visible=false, while editor saved and then cleared its editor state. Neither waited for the sheet to leave the screen.
+
+The shared transition now keeps the current Animated.Value and animates it down to at least the viewport height. Remaining distance and release speed determine a bounded 160–320ms ease-out. Only finished=true invokes dismissal; interrupted animation restores without dismissal. Concurrent release events are ignored through exit and pending save. Cleanup invalidates stale completion callbacks. Save validation/failure returns false and restores the still-open sheet with its draft retained.
+
+Swipe exit disables the enclosing Modal's built-in fade/slide so there is no second transition or reset after the explicit slide. Settings resets its translation onShow for reopening; its header is keyed by visibility so transition state cannot leak into the next opening. Existing opening animations and non-swipe dismissal paths remain available.
+
+Regression red run: actual header contract failed specifically on its immediate translateY.setValue(0). Transition tests cover delayed dismissal, interruption, duplicate releases, async save failure/retry and unmount cleanup. #81 scroll, viewport, diagnostics, focus and keyboard policy tests remain required.
+
+iPhone acceptance remains pending: verify both sheets flow continuously from drag to release and offscreen exit, restore for short gestures, reopen normally, retain edits on failed save, and preserve body cursor/selection and keyboard scrolling. Keep #84 OPEN.

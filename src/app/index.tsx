@@ -1704,12 +1704,14 @@ function Sheet({
 }) {
   const styles = useStyles();
   const { height: viewportHeight } = useWindowDimensions();
+  const [swipeClosing, setSwipeClosing] = useState(false);
   const [sheetTranslateY] = useState(() => new Animated.Value(0));
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType={swipeClosing ? "none" : "fade"}
+      onShow={() => { sheetTranslateY.setValue(0); setSwipeClosing(false); }}
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
@@ -1720,7 +1722,7 @@ function Sheet({
         <View style={styles.backdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
           <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}>
-            <SheetDismissHeader translateY={sheetTranslateY} viewportHeight={viewportHeight} onDismiss={onClose}>
+            <SheetDismissHeader key={String(visible)} onExitStart={() => setSwipeClosing(true)} translateY={sheetTranslateY} viewportHeight={viewportHeight} onDismiss={onClose}>
               <Text style={styles.sheetTitle}>{title}</Text>
             </SheetDismissHeader>
             <ScrollView
@@ -1767,6 +1769,7 @@ function EditorModal({
   const styles = useStyles();
   const { colors } = useAppTheme();
   const { height: viewportHeight } = useWindowDimensions();
+  const [swipeClosing, setSwipeClosing] = useState(false);
   const [sheetTranslateY] = useState(() => new Animated.Value(0));
   const initialMemo = editor?.node?.type === "memo" ? editor.node : null;
   const memo = initialMemo
@@ -1836,19 +1839,21 @@ function EditorModal({
   }, [memo?.title, memo?.body, memo?.duePreset, memo?.dueAt, memo?.status, memo?.repeatRule, signature]);
   const save = (close = true) => {
     recordEditorDiagnostic('save-request', { close });
-    if (!editor || savingRef.current) return;
+    if (!editor || savingRef.current) return false;
     if (editor.node && signature === committedSignature.current) {
       if (close) onClose('unchanged-save-close');
-      return;
+      return true;
     }
     if (!title.trim()) {
       if (close) appAlert("入力エラー", "タイトルは必須です。");
-      return;
+      return false;
     }
     const commit = async (draft: Parameters<typeof onSave>[0]) => {
       savingRef.current = true;
       try {
-        if (await onSave(draft, close)) committedSignature.current = signature;
+        const succeeded = await onSave(draft, close);
+        if (succeeded) committedSignature.current = signature;
+        return succeeded;
       } finally {
         savingRef.current = false;
       }
@@ -1870,13 +1875,14 @@ function EditorModal({
         repeatFrequency === "none"
           ? null
           : { frequency: repeatFrequency, interval, startsOn: repeatStartsOn };
-      if (repeatRule && !isValidRepeatRule(repeatRule))
-        return close ? appAlert(
-          "入力エラー",
-          "間隔は1以上の整数、開始日は YYYY-MM-DD 形式で入力してください。",
-        ) : undefined;
-      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(routineTime))
-        return close ? appAlert('入力エラー', '基本時刻を確認してください。') : undefined;
+      if (repeatRule && !isValidRepeatRule(repeatRule)) {
+        if (close) appAlert("入力エラー", "間隔は1以上の整数、開始日は YYYY-MM-DD 形式で入力してください。");
+        return false;
+      }
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(routineTime)) {
+        if (close) appAlert('入力エラー', '基本時刻を確認してください。');
+        return false;
+      }
       const [hour, minute] = routineTime.split(':').map(Number);
       const baseDueAt = new Date();
       baseDueAt.setHours(hour, minute, 0, 0);
@@ -1897,22 +1903,20 @@ function EditorModal({
         : dueDateForPreset(preset);
     if (preset === "custom" && !dueContext) {
       dueAt = parseLocalDateTime(custom);
-      if (!dueAt)
-        return close ? appAlert(
-          "入力エラー",
-          "日時を YYYY/MM/DD HH:mm 形式で入力してください。",
-        ) : undefined;
+      if (!dueAt) {
+        if (close) appAlert("入力エラー", "日時を YYYY/MM/DD HH:mm 形式で入力してください。");
+        return false;
+      }
     }
     if (
       dueContext?.dueEditable &&
       deadlineGroupForDueAt(dueAt, new Date(), dueContext.granularity) !==
         dueContext.targetGroup
-    )
-      return close ? appAlert(
-        "入力エラー",
-        `「${dueContext.label}」に入る期限を指定してください。`,
-      ) : undefined;
-    commit({
+    ) {
+      if (close) appAlert("入力エラー", `「${dueContext.label}」に入る期限を指定してください。`);
+      return false;
+    }
+    return commit({
       title,
       parentId: editor.parentId,
       body,
@@ -1931,12 +1935,14 @@ function EditorModal({
   }, [signature, editor?.node?.id]);
   const dismiss = (reason: string) => {
     recordEditorDiagnostic('sheet-dismiss-request', { reason });
-    return editor?.node ? save() : onClose(reason);
+    if (editor?.node) return save();
+    onClose(reason);
+    return true;
   };
   return (
     <Modal
       visible={!!editor}
-      animationType="slide"
+      animationType={swipeClosing ? "none" : "slide"}
       transparent
       onRequestClose={() => dismiss('modal-request-close')}
     >
@@ -1952,7 +1958,7 @@ function EditorModal({
           style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          <SheetDismissHeader nativeID="editor-grabber" translateY={sheetTranslateY} viewportHeight={viewportHeight} onDismiss={() => dismiss('grabber-pan-release')}>
+          <SheetDismissHeader onExitStart={() => setSwipeClosing(true)} nativeID="editor-grabber" translateY={sheetTranslateY} viewportHeight={viewportHeight} onDismiss={() => dismiss('grabber-pan-release')}>
             <Text style={styles.modalTitle}>{editor?.node ? "編集" : "新規作成"}</Text>
           </SheetDismissHeader>
           <ScrollView
