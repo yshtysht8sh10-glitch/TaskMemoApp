@@ -108,7 +108,7 @@ import { memoCreationNotice, type MemoCreationNotice } from "@/utils/memoCreatio
 import { canStartSheetDismissFromTarget, sheetDismissRelease } from "@/utils/sheetDismissGesture";
 import { selectedChoiceStyle } from "@/utils/choiceStyle";
 import { installEditorDiagnostics, recordEditorDiagnostic } from "@/utils/editorDiagnostics";
-import { editorVisibleFrame } from "@/utils/editorViewport";
+import { editorKeyboardDismissMode } from "@/utils/editorScroll";
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
@@ -1764,42 +1764,7 @@ function EditorModal({
   const { colors } = useAppTheme();
   const { height: viewportHeight } = useWindowDimensions();
   const [scrollAtTop, setScrollAtTop] = useState(true);
-  const [visibleFrame, setVisibleFrame] = useState<ReturnType<typeof editorVisibleFrame>>(null);
   const [sheetTranslateY] = useState(() => new Animated.Value(0));
-  useEffect(() => {
-    if (Platform.OS !== 'web' || !editor || typeof window === 'undefined') return;
-    const viewport = window.visualViewport;
-    const layoutHeight = Math.max(window.innerHeight, document.documentElement.clientHeight);
-    const update = () => {
-      const frame = editorVisibleFrame({
-        layoutHeight,
-        visibleHeight: viewport?.height ?? window.innerHeight,
-        visibleOffsetTop: viewport?.offsetTop ?? 0,
-        windowScrollY: window.scrollY,
-      });
-      recordEditorDiagnostic('taskmemo-viewport-frame-request', { frame, stack: new Error().stack });
-      // WebKit can blur the input in the same scroll task. Move the sheet
-      // synchronously before React's next render, then keep React in sync.
-      const sheet = document.getElementById('editor-sheet');
-      if (sheet instanceof HTMLElement) {
-        sheet.style.top = frame ? `${frame.top}px` : '';
-        sheet.style.bottom = frame ? 'auto' : '';
-        sheet.style.height = frame ? `${frame.height}px` : '';
-      }
-      recordEditorDiagnostic('taskmemo-viewport-frame-applied', { frame });
-      setVisibleFrame(frame);
-    };
-    update();
-    viewport?.addEventListener('resize', update);
-    viewport?.addEventListener('scroll', update);
-    window.addEventListener('scroll', update);
-    return () => {
-      viewport?.removeEventListener('resize', update);
-      viewport?.removeEventListener('scroll', update);
-      window.removeEventListener('scroll', update);
-      setVisibleFrame(null);
-    };
-  }, [editor]);
   const initialMemo = editor?.node?.type === "memo" ? editor.node : null;
   const memo = initialMemo
     ? (nodes.find(
@@ -1997,7 +1962,6 @@ function EditorModal({
       <Animated.View
         nativeID="editor-sheet"
         style={[styles.editorSheet,
-          visibleFrame && { top: visibleFrame.top, bottom: 'auto', height: visibleFrame.height },
           { transform: [{ translateY: sheetTranslateY }] }]}
       >
       <SafeAreaView style={styles.modalPage}>
@@ -2014,7 +1978,7 @@ function EditorModal({
             }}
             scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            keyboardDismissMode={editorKeyboardDismissMode(Platform.OS)}
             automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.form}
           >
