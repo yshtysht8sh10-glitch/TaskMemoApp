@@ -16,7 +16,7 @@ function elements(name: string) {
   return result;
 }
 it('opens every editor input without requesting focus', () => {
-  const inputs = elements('TextInput');
+  const inputs = elements('FormTextInput');
   expect(inputs.length).toBeGreaterThan(1);
   for (const input of inputs) {
     expect(input.attributes.properties.some((prop) => ts.isJsxAttribute(prop) && prop.name.getText(file) === 'autoFocus')).toBe(false);

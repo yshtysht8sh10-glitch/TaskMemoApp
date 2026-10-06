@@ -8,6 +8,7 @@ import { canonicalSyncValue } from "./syncSelfRepair";
 import { recordActorReceipt, recordNormalUploadBlockedByRepair, recordNormalWriteDuringRepair, recordRepairComparison, recordRepairLock, recordRepairLockWait, recordRepairSnapshot, recordSyncActivity, selfRepairDiagnosticsActive } from "./selfRepairDiagnostics";
 
 type AdapterOptions = {
+  ensureAccountReady?: () => Promise<void>;
   emulator?: boolean;
   onReceiptBatch?: (event: { phase: "start" | "complete"; batch: number; completed: number; total: number; lastCompletedOperationIndex: number }) => void;
   onReceiptLookup?: (event: ReceiptLookupEvent) => void;
@@ -459,7 +460,11 @@ export function createFirebaseSyncAdapter(
         const global = await getDocFromServer(doc(db, "syncControl", "current"));
         if (global.data()?.schemaVersion !== 1 || global.data()?.writesEnabled !== true)
           throw { code: "permission-denied", message: "同期はmaintenance中です。" };
-        const gate = await getDocFromServer(doc(db, "users", uid, "syncMetadataV2", "compatibility"));
+        let gate = await getDocFromServer(doc(db, "users", uid, "syncMetadataV2", "compatibility"));
+        if (!gate.exists() && options.ensureAccountReady) {
+          await options.ensureAccountReady();
+          gate = await getDocFromServer(doc(db, "users", uid, "syncMetadataV2", "compatibility"));
+        }
         try { validateCompatibilityGate(gate.exists() ? gate.data() : undefined); }
         catch (error) { throw { code: "permission-denied", message: String(error) }; }
       } catch (reason) {
@@ -506,6 +511,8 @@ export function createFirebaseSyncAdapter(
             return data.acknowledgement as SyncAcknowledgement;
           }
           const targetSnapshot = await transaction.get(targetRef);
+          if (operation.ownership && !sameOperation(targetSnapshot.exists() ? targetSnapshot.data().record : null, operation.ownership.expectedCurrent))
+            throw { kind: 'permanent', code: 'failed-precondition', message: '取り込み確認後にアカウントが変更されました。再確認してください。' };
           if (expectedCurrent !== undefined &&
               !sameOperation(targetSnapshot.exists() ? targetSnapshot.data().record : null, expectedCurrent))
             throw { code: "invalid-argument", recoveryReason: "predicted-base-mismatch",

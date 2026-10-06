@@ -12,6 +12,7 @@ module.exports = ({ config }) => ({
     ...config.extra,
     taskMemoBuild: {
       commit: resolveBuildCommit(),
+      ...(process.env.EXPO_PUBLIC_BUILD_ID ? { releaseId: process.env.EXPO_PUBLIC_BUILD_ID } : {}),
       environment: process.env.EXPO_PUBLIC_TASKMEMO_ENV || 'development',
       syncProtocol: process.env.EXPO_PUBLIC_SYNC_V2_ENABLED === 'true' ? 'V2' : 'V1',
     },

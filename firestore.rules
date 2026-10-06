@@ -1,51 +1,192 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function owns(userId) {
+    function ownsUser(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
-    function lockPath(userId) {
+
+    function protocolSelected(userId, protocol) {
+      let gate = get(/databases/$(database)/documents/users/$(userId)/syncMetadataV2/compatibility).data;
+      return gate.schemaVersion == 1
+        && ((protocol == 1 && gate.minimumSyncProtocol == 1
+          && gate.v1WritesAllowed == true && gate.v2Enabled == false)
+        || (protocol == 2 && gate.minimumSyncProtocol == 2
+          && gate.v1WritesAllowed == false && gate.v2Enabled == true));
+    }
+
+    function protocolWritable(userId, protocol) {
+      let global = get(/databases/$(database)/documents/syncControl/current).data;
+      return global.schemaVersion == 1 && global.writesEnabled == true && protocolSelected(userId, protocol);
+    }
+    function repairLockPath(userId) {
       return /databases/$(database)/documents/users/$(userId)/syncMetadataV2/repairLock;
     }
     function repairActive(userId) {
-      return exists(lockPath(userId)) && get(lockPath(userId)).data.expiresAt > request.time;
+      return exists(repairLockPath(userId)) && get(repairLockPath(userId)).data.expiresAt > request.time;
     }
-    function repairWrite(userId, collectionId) {
-      return repairActive(userId) && request.resource != null &&
-        get(lockPath(userId)).data.owner is string &&
-        ((collectionId == 'nodesV2' || collectionId == 'profileV2') &&
-          request.resource.data.record.lastDeviceId == get(lockPath(userId)).data.owner ||
-         collectionId == 'syncOperationsV2' &&
-          request.resource.data.operation.deviceId == get(lockPath(userId)).data.owner);
+    function repairRecordAllowed(userId) {
+      return !repairActive(userId) || request.resource.data.record.lastDeviceId == get(repairLockPath(userId)).data.owner;
     }
-    function validRepairLock(userId) {
-      return request.resource != null && request.resource.data.keys().hasAll(['owner', 'expiresAt']) &&
-        request.resource.data.owner is string &&
-        request.resource.data.owner.matches('^sync-self-repair-.*') &&
-        request.resource.data.expiresAt is timestamp &&
-        request.resource.data.expiresAt > request.time + duration.value(30, 's') &&
-        request.resource.data.expiresAt < request.time + duration.value(2, 'm') &&
-        (!exists(lockPath(userId)) || get(lockPath(userId)).data.expiresAt <= request.time ||
-          get(lockPath(userId)).data.owner == request.resource.data.owner);
+    function repairOperationAllowed(userId) {
+      return !repairActive(userId) || request.resource.data.operation.deviceId == get(repairLockPath(userId)).data.owner;
     }
-    // V2 adapter.connect() reads this gate after taking the repair lease.
-    // The gate is server-managed and must remain read-only to clients.
+
     match /syncControl/current {
       allow read: if request.auth != null;
       allow write: if false;
     }
+    match /syncControl/onboarding { allow read, write: if false; }
+    match /accountProvisioningV2/{uid} { allow read, write: if false; }
+    match /accountLifecycleV2/{uid} { allow read, write: if false; }
+
+    function validVersionedRecord(nodeId) {
+      let record = request.resource.data.record;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'record', 'serverUpdatedAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && record is map
+        && record.keys().hasAll(['value', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq', 'operationType'])
+        && record.value is map
+        && record.value.id == nodeId
+        && record.revision is int && record.revision >= 0
+        && record.lastOpId is string && record.lastOpId.size() > 0
+        && record.lastDeviceId is string && record.lastDeviceId.size() > 0
+        && record.lastLocalSeq is int && record.lastLocalSeq >= 0
+        && record.operationType is string;
+    }
+
+    function validPinnedNoteRecord() {
+      let record = request.resource.data.record;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'record', 'serverUpdatedAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && record is map
+        && record.keys().hasAll(['value', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq'])
+        && record.value is map
+        && record.value.body is string
+        && record.revision is int && record.revision >= 0
+        && record.lastOpId is string && record.lastOpId.size() > 0
+        && record.lastDeviceId is string && record.lastDeviceId.size() > 0
+        && record.lastLocalSeq is int && record.lastLocalSeq >= 0;
+    }
+
+    function validFeaturesRecord() {
+      let record = request.resource.data.record;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'record'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'record', 'serverUpdatedAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && record is map
+        && record.keys().hasAll(['value', 'revision', 'lastOpId', 'lastDeviceId', 'lastLocalSeq'])
+        && record.value is map
+        && record.value.keys().hasOnly(['ideasEnabled'])
+        && record.value.ideasEnabled is bool
+        && record.revision is int && record.revision >= 0
+        && record.lastOpId is string && record.lastOpId.size() > 0
+        && record.lastDeviceId is string && record.lastDeviceId.size() > 0
+        && record.lastLocalSeq is int && record.lastLocalSeq >= 0;
+    }
+
+    function validOperation(opId) {
+      let operation = request.resource.data.operation;
+      let acknowledgement = request.resource.data.acknowledgement;
+      return request.resource.data.keys().hasAll(['ownerUid', 'schemaVersion', 'operation', 'acknowledgement'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'schemaVersion', 'producerType', 'operation', 'acknowledgement', 'serverReceivedAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.schemaVersion == 2
+        && operation is map
+        && operation.keys().hasAll(['opId', 'deviceId', 'localSeq', 'targetNodeId', 'type', 'baseRevision', 'payload', 'createdAt', 'status', 'attemptCount'])
+        && operation.opId == opId
+        && operation.deviceId is string && operation.deviceId.size() > 0
+        && operation.localSeq is int && operation.localSeq > 0
+        && operation.targetNodeId is string && operation.targetNodeId.size() > 0
+        && operation.baseRevision is int && operation.baseRevision >= 0
+        && operation.payload is map
+        && ((operation.targetType == 'pinnedNote'
+          && operation.targetNodeId == 'pinnedNote'
+          && operation.payload.pinnedNote is map
+          && operation.payload.pinnedNote.body is string)
+        || (operation.targetType == 'features'
+          && operation.targetNodeId == 'features'
+          && operation.payload.features is map
+          && operation.payload.features.keys().hasOnly(['ideasEnabled'])
+          && operation.payload.features.ideasEnabled is bool)
+        || ((!operation.keys().hasAny(['targetType']) || operation.targetType == 'node')
+          && operation.payload.node is map
+          && operation.payload.node.id == operation.targetNodeId))
+        && acknowledgement is map && acknowledgement.opId == opId;
+    }
+
+    // Existing v1 client remains available only to the authenticated owner.
+    match /users/{userId}/nodes/{nodeId} {
+      allow read: if ownsUser(userId) && protocolSelected(userId, 1);
+      allow write: if ownsUser(userId) && protocolWritable(userId, 1) && !repairActive(userId);
+    }
+    match /users/{userId}/externalAiAuditLogs/{logId} {
+      allow read: if ownsUser(userId);
+      allow write: if false;
+    }
+    match /users/{userId}/syncMetadataV2/{documentId} {
+      allow read: if ownsUser(userId);
+      allow write: if false;
+    }
     match /users/{userId}/syncMetadataV2/repairLock {
-      allow read: if owns(userId);
-      allow create, update: if owns(userId) && validRepairLock(userId);
-      allow delete: if owns(userId) && resource.data.owner is string &&
-        resource.data.owner.matches('^sync-self-repair-.*');
+      allow read: if ownsUser(userId);
+      allow create, update: if ownsUser(userId) && request.resource.data.owner is string
+        && request.resource.data.owner.matches('^sync-self-repair-.*')
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time + duration.value(30, 's')
+        && request.resource.data.expiresAt < request.time + duration.value(2, 'm')
+        && (!exists(repairLockPath(userId)) || get(repairLockPath(userId)).data.expiresAt <= request.time
+          || get(repairLockPath(userId)).data.owner == request.resource.data.owner);
+      allow delete: if ownsUser(userId) && resource.data.owner is string
+        && resource.data.owner.matches('^sync-self-repair-.*');
     }
-    match /users/{userId}/{collectionId}/{documentId} {
-      allow read: if owns(userId);
-      allow write: if owns(userId) && !(collectionId == 'syncMetadataV2' && documentId == 'repairLock') && (
-        !repairActive(userId) ||
-        repairWrite(userId, collectionId));
+
+    match /users/{userId}/nodesV2/{nodeId} {
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validVersionedRecord(nodeId) && repairRecordAllowed(userId);
+      allow update: if ownsUser(userId)
+        && protocolWritable(userId, 2)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validVersionedRecord(nodeId) && repairRecordAllowed(userId)
+        && request.resource.data.record.revision >= resource.data.record.revision;
+      allow delete: if false;
     }
+    match /users/{userId}/profileV2/pinnedNote {
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validPinnedNoteRecord() && repairRecordAllowed(userId);
+      allow update: if ownsUser(userId)
+        && protocolWritable(userId, 2)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validPinnedNoteRecord() && repairRecordAllowed(userId)
+        && request.resource.data.record.revision >= resource.data.record.revision;
+      allow delete: if false;
+    }
+    match /users/{userId}/profileV2/features {
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validFeaturesRecord() && repairRecordAllowed(userId);
+      allow update: if ownsUser(userId)
+        && protocolWritable(userId, 2)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validFeaturesRecord() && repairRecordAllowed(userId)
+        && request.resource.data.record.revision >= resource.data.record.revision;
+      allow delete: if false;
+    }
+    match /users/{userId}/syncOperationsV2/{opId} {
+      allow read: if ownsUser(userId) && protocolSelected(userId, 2);
+      allow create: if ownsUser(userId) && protocolWritable(userId, 2) && validOperation(opId) && repairOperationAllowed(userId);
+      // Operation receipts are immutable; this preserves the opId idempotency boundary.
+      allow update, delete: if false;
+    }
+    // Functions use Admin SDK and must validate gate, UID, request identity and
+    // revision inside their transaction. Client SDK access is never allowed.
+    match /users/{userId}/externalAiRequestsV2/{requestId} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

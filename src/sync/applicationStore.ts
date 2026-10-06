@@ -7,6 +7,8 @@ export interface ApplicationJournalPersistence {
   writeJournal(value: string): Promise<void>;
   writeCommitted(value: string): Promise<void>;
   clearJournal(): Promise<void>;
+  /** One atomic envelope replacement, with no replayable WAL on failure. */
+  writeAtomic?(expectedCommitted: string | null, value: string): Promise<void>;
 }
 
 type HistoryEntry = { targetNodeId: string; before: SyncNodeValue; after: SyncNodeValue };

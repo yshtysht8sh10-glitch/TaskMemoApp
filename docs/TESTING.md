@@ -25,6 +25,22 @@
 
 ## テストの層
 
+Ownership sortKey統合: `src/sync/ownershipSortKeys.test.ts` と `ownershipApplication.test.ts` は
+独立scopeの正常rank衝突、最小キー変更、metadata/原本保持、1 History、atomic失敗、remote競合、partial再開を検証。
+匿名化実機条件は `src/sync/fixtures/iphoneOwnershipRanks.ts` に置き、非提供contentはsyntheticと明記。
+契約は `docs/OWNERSHIP_SORTKEY_INTEGRATION.md`。
+診断scriptのテストは `npx vitest run scripts/analyze-ownership-ranks.test.mjs`（全体npm testにも含む）。
+
+`src/sync/firebaseOnboardingConnect.test.ts` は実SDK adapterのconnect境界をmock server readで確認する。
+trusted callbackのawait/server再取得、callable失敗の伝播、callbackなしのgate不在再現、read failure時の非provisioningを検証。
+iPhone実機の実行bundle/attestationをこのunit testで証明したとは扱わない。
+
+Functions Cloud配備時の回帰：`functions/src/onboarding/deploymentDependencies.test.ts` は、
+Functions entrypointが共通Domainから読み込む `fractional-indexing` をruntime dependencyとして含むことを確認する。
+親workspaceのnode_modulesで隠れていた不足は、2026-10-04 DEV Cloud Run起動失敗で判明した。
+このテストの失敗→dependency追加→Functions check/全体/Emulator成功→DEV再配備を確認。
+実FirebaseのAuth/App Check/Rules/IAM疎通はunit testの代替ではなく、DEV配備記録に結果を残す。
+
 - Domain unit: Node操作、期限判定、Routine、選択集合など、UIに依存しない規則。
 - State transition: ドラッグ、インライン編集、入力欄可視化などの状態遷移を純粋関数へ分離して検証。
 - Regression scenario: ユーザーの連続操作や複数端末同期を、複数モジュールをまたぐシナリオとして検証。
@@ -44,6 +60,8 @@
 | import / export | `src/services/nodeBackup.test.ts` | 全フィールド、Task / Idea、Routine、tombstoneを含むJSON round-tripと入力検証 |
 | 入力・操作 | `src/utils/inlineTitleEdit.test.ts`, `focusedInputVisibility.test.ts`, `dragActivation.test.ts` | 確定/取消、keyboard viewport補正、ドラッグ開始条件 |
 | 外部AI | `src/services/taskMemoApplicationService.test.ts` | tool入力検証、Node操作への変換、失敗時の扱い |
+| Text Format #59 | `src/textFormat/textFormat.test.ts`, `src/sync/textEditApplication.test.ts` | pipe syntax、pure validation、session/ref、tree/list差分、metadata保護、1保存History、Outbox、原子的保存失敗、production-derived fixture |
+| Text UI #59 Phase 5–6 | `src/textFormat/textWorkspace.test.ts` | @root/@routine、Routine整合性、Occurrence除外、読取Viewのcheckbox/投影、セル変更、新規/削除、invalid dirty editの破棄 |
 
 テストを追加するときは、UIコンポーネント内へ複雑な判定を閉じ込めず、既存設計に自然なら純粋な状態遷移へ切り出します。ただし、表示崩れや実ブラウザ固有動作までunit testで保証したことにはしません。
 
@@ -96,6 +114,9 @@ git diff --check
 npm run web:export
 ```
 
+Text Format変更時は追加で `npx tsx scripts/generate-text-format-docs.ts --check` を実行し、
+syntax定義と `docs/TEXT_FORMAT_REFERENCE.md` の同期を確認する。
+
 Cloud Functionsへ影響する場合は追加で実行します。
 
 ```powershell
@@ -114,3 +135,54 @@ npm run functions:test
 - Backup: 現在データのexport/importと、旧バックアップの読込。
 
 自動テストが成功しても、該当する手動項目を未確認のまま「実機確認済み」と記載しません。
+
+## #85 common Local V2
+
+production onboarding: `npm run test:onboarding:emulator` は固定demo projectのAuth/Functions/Firestoreで
+登録からgate/receipt/initial ownership/V2送信を実行する。live projectで実行しない。
+通常testのskipとは別に13統合ケースを実行済み。client自己承認拒否、atomic failure、response loss/retry、
+restart、A/B分離、停止gate/legacy/非空/未知inventoryの拒否を検証する。
+
+新規Account初回ownershipの回帰は `src/sync/initialOwnership.test.ts`、UI判定は
+`src/sync/ownershipPresentation.test.ts`、login/logout接続は `useTaskMemoSync.native.test.ts`。
+空の判定にはserver由来の全Node/profile/receiptとAccount Localの双方を用いる。
+profile-only、Account-only選択後の変更、source変更、最後の確認後の同ID remote race、
+atomic失敗、response loss/restartを検証する。Firestore Emulatorでは新規取り込みreceipt冪等と
+未設定compatibility gate拒否を確認する。gateのclient補完や本番deployをテスト手順に含めない。
+
+`ownership* / localApplication / localV2Application / legacyMigrationRecovery / useTaskMemoSync.native`
+が所有者分離・移行・atomic失敗・部分成功・logout・未ログインtextを検証する。
+`docs/fixtures/local-v1-inactive-legacy.json`はDEVで実際に拒否された削除済みlexical rankの匿名化例。
+有効Nodeのrank条件を変更せず、原本・未知field・非表示Nodeを保持することを検証する。
+Firestoreのstrict race/receipt冪等は`firebaseEmulatorV2.e2e.test.ts`。
+実Firebaseを使わず、`demo-taskmemo-v2` / Firestore port 8180へ限定する。
+PowerShellで`TASKMEMO_EMULATOR_E2E=1`を子プロセス環境へ設定し、
+`firebase-tools emulators:exec --config firebase.emulator.json --project demo-taskmemo-v2 --only firestore`
+から`node node_modules/vitest/vitest.mjs run src/sync/firebaseEmulatorV2.e2e.test.ts`を実行する。
+実装仕様、保存key、復旧経路、手動確認範囲は`docs/LOCAL_V2_IMPLEMENTATION.md`。
+
+## #59 共通フォームtypography（2026-10-06）
+
+[FORM_TYPOGRAPHY.md](FORM_TYPOGRAPHY.md) が適用境界と実機条件、
+[DEV_FORM_TYPOGRAPHY_RELEASE.md](DEV_FORM_TYPOGRAPHY_RELEASE.md) がDEV配信証跡。
+RN Webのcaller override、ref/event保持、Native非変更を回帰確認する。
+WebKitのfocus zoom/IMEはSafari・standalone PWAの実機ゲートとして別途確認する。
+
+## #90 Routine管理領域
+
+[ROUTINE_ROOT_V2.md](ROUTINE_ROOT_V2.md) に責務と実機手順を記載。
+routineRootApplication.test.ts は初期化/metadata/atomic失敗/History/ownership/再起動/scope切替を検証。
+firebaseEmulatorV2.e2e.test.ts は2端末同時prepare、root1件、applied/superseded receipt各1件、gate不変を検証する。
+Emulatorは demo-taskmemo-v2 のみ。実機PASSまでIssueをCloseしない。
+
+## #59 Spec ID traceability（2026-10-06）
+
+[原子的仕様matrix](TEXT_WORKSPACE_TRACEABILITY.md)と`text-workspace-specs.json`をテストの対応台帳とする。仕様追加・変更はSpec IDを先に登録し、各IDに専用test registrationを1つ割り当てる。既存IDを再利用・改番しない。parameterized入力variantsは同一仕様の例として記録する。
+
+`traceability.test.ts`はfull suiteに含まれ、未対応/欠落/重複/skip登録、生成matrixのstale状態を失敗させる。`npx tsx scripts/text-workspace-traceability.ts --check`を独立に実行できる。full suiteのJSON reportは`--results <path>`で照合し、実行されていないIDやskipをPASSとしない。
+
+`textWorkspaceSpec.test.ts`のcross-feature fixtureは通常UIと同じDomain CommandとRoutineフォーム初期値・rule builderから作成する。手書きvalid repeatRule fixtureだけに依存しない。Tree/Listの実adapterを通し、strict prepareの0 errors / 0 changesを検証する。Local/Account再起動と無編集commit後もstorage/History/Outbox不変を確認する。
+
+`TextWorkspace.spec.test.tsx`はReact DOM/jsdomで実コンポーネントをmountし、保存/破棄/確認/候補/コピー/エラーイベントを実行する。React Native primitive、theme、Clipboardはmock。OS keyboard/IME/viewport/clipboard permission、実Firebaseはmatrixの実機のみ行を確認する。jsdomとその型はdevDependenciesのみ。
+
+実行例: `npx vitest run --reporter=default --reporter=json --outputFile.json=artifacts/private/text-workspace-full.json` → `npx tsx scripts/text-workspace-traceability.ts --results artifacts/private/text-workspace-full.json`。

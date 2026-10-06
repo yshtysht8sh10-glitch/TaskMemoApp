@@ -6,7 +6,9 @@
     "@expo/ui": "~57.0.18",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.22",
+    "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.18",
+    "expo-crypto": "~57.0.3",
     "expo-dev-client": "~57.0.19",
     "expo-device": "~57.0.2",
     "expo-document-picker": "~57.0.2",
@@ -38,10 +40,13 @@
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.0",
+    "@types/jsdom": "^30.0.0",
     "@types/react": "~19.2.2",
+    "@types/react-dom": "~19.2.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
     "fake-indexeddb": "6.2.5",
+    "jsdom": "^29.1.1",
     "patch-package": "^8.0.1",
     "tsx": "^4.23.13",
     "typescript": "~6.0.3",
@@ -87,7 +92,8 @@
     "test": "vitest run",
     "functions:build": "npm --prefix functions run build",
     "functions:test": "npm --prefix functions test",
-    "verify": "tsc --noEmit && npm run lint && npm test && npm run functions:build && npm run functions:test"
+    "verify": "tsc --noEmit && npm run lint && npm test && npm run functions:build && npm run functions:test",
+    "test:onboarding:emulator": "npm --prefix functions run build && npx firebase-tools emulators:exec --config firebase.onboarding.emulator.json --project demo-taskmemo-onboarding --only auth,firestore,functions \"node scripts/run-onboarding-emulator-tests.mjs\""
   },
   "private": true
 }

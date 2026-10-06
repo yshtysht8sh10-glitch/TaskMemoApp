@@ -1,0 +1,1622 @@
+[
+  {
+    "id": "TW-FMT-001",
+    "requirement": "1 Nodeをpipe区切りの1行としてparseする",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-FMT-001] parses the Issue pipe example and hierarchy",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ERR-001",
+    "requirement": "errorに行・セル・理由とsource位置を持つ",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-ERR-001] exposes source cells for live errors / highlights",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-002",
+    "requirement": "JSON文字列セルでdelimiterと改行を表現する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-FMT-002] supports JSON strings and explicit escaped separators",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-003",
+    "requirement": "不正な列数・escape・ref形式・tabを拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-FMT-003] rejects invalid syntax: %s",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VAL-001",
+    "requirement": "空タイトルはsemantic error",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-VAL-001] classifies an empty title as semantic validation, not a missing delimiter",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-001",
+    "requirement": "曖昧な自然言語・存在しない日時を拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DUE-001] rejects invalid dates: %s",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-002",
+    "requirement": "定義済みの相対期限だけを解決する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DUE-002] resolves only declared relative deadline %s",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-003",
+    "requirement": "sessionの固定timezoneと年で期限を解決する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DUE-003] uses the frozen session timezone/year and calendar boundaries",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-004",
+    "requirement": "DST不在・重複時刻を拒否しoffset指定を受理する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DUE-004] rejects DST gaps/ambiguity and accepts an explicit offset",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SER-001",
+    "requirement": "Tree/Listの無編集planは0 errors / 0 changes",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-SER-001] no-edit %s round-trip is exactly zero, including old preset and metadata",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-001",
+    "requirement": "Tree入口順を保持し階層と矛盾する順を拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-TREE-001] preserves explicit entrance tree ordering including unassigned root Memos",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SER-002",
+    "requirement": "CRLF・末尾改行・前後空白をlossless保持する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-SER-002] preserves exact strings including pipe, CRLF, trailing newline, leading whitespace",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ID-001",
+    "requirement": "同名Nodeもrefで特定し限定patchする",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-ID-001] patches one same-name Node by ref without touching sibling metadata",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ID-002",
+    "requirement": "refなし新規行に決定的なfresh IDを割り当てる",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-ID-002] adds a new Node with deterministic fresh identity",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-002",
+    "requirement": "Treeのindent変更で既存MemoをID維持してrootへ移す",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-TREE-002] moves an existing Memo to root without replacing its ID",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-003",
+    "requirement": "Tree兄弟順変更はdeadlineSortKeyを保持する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-TREE-003] reorders tree siblings, preserving deadline order",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-001",
+    "requirement": "List並べ替えはdeadlineSortKeyだけでparent/tree rankを保持する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-LIST-001] list reorder affects deadline ranks, not tree parents or ranks",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DEL-001",
+    "requirement": "一覧編集scope外のNodeを削除しない",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DEL-001] partial list deletion never touches unlisted Nodes or Categories",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-002",
+    "requirement": "期限group間の位置を親・rank変更として解釈しない",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-LIST-002] projection group positions never become parents, and different groups do not reorder each other",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-003",
+    "requirement": "一覧新規Nodeはindentに関係なくnewParentIdを使う",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-LIST-003] list creation uses explicit newParentId independently of indentation",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-004",
+    "requirement": "newParentIdは既存Nodeのnull parentを上書きしない",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-LIST-004] list newParentId never reparents an existing root Memo during no-edit save",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DEL-002",
+    "requirement": "欠落した対象refだけをsoft deleteする",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DEL-002] soft deletes only missing visible refs, protecting hidden tombstones",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-004",
+    "requirement": "子を残した親削除は階層error",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-TREE-004] rejects deletion of a parent while retaining its children",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DEL-003",
+    "requirement": "Category subtree削除だけdeletionBatchIdを共有する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-DEL-003] groups category subtree deletions but not independent Memo deletions for trash restore",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-REF-001",
+    "requirement": "duplicate/unknown/lost refは全planを拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-REF-001] rejects %s refs without partial changes",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CON-001",
+    "requirement": "baseline revision変更は競合error",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-CON-001] stops on any remote value / revision / new Node change",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VAL-002",
+    "requirement": "semantic errorが残るplanから部分patchを出さない",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-VAL-002] requires all semantic errors to be fixed, never emits partial patches",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-001",
+    "requirement": "Routine完了はsession日の実績を変更する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-RTN-001] supports frozen-day Routine completion and preserves overrides / status",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-002",
+    "requirement": "Routine完了取消は当日のnull実績tombstone",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-RTN-002] cancels Routine occurrence with null and retains unrelated history",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-003",
+    "requirement": "Routine移動時に実績完了と通常statusを混同しない",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-RTN-003] does not confuse Routine occurrence completion with status during a move",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-004",
+    "requirement": "拡張repeatRule selectorを保持し置換を拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-RTN-004] retains expanded repeatRule selectors on unrelated edits and rejects rule replacement",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TYPE-001",
+    "requirement": "データを失わないTask/Idea変換だけ許可する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-TYPE-001] allows non-destructive Task/Idea conversion while retaining deadlineSortKey",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TYPE-002",
+    "requirement": "破壊的type変換を拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-TYPE-002] rejects destructive type conversions and system root deletion",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-004",
+    "requirement": "後方省略セルでは既存値とfield absenceを保持する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-FMT-004] keeps metadata/absence even when optional cells are omitted",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ID-003",
+    "requirement": "新規IDのdeleted/purged ID衝突を拒否する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-ID-003] rejects fresh ID collisions with deleted/purged Nodes",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RANK-001",
+    "requirement": "無編集legacy rankを正規化せずrank操作時は安全停止する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-RANK-001] does not normalize an unchanged legacy invalid sortKey",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-GUARD-001",
+    "requirement": "大量削除planには全削除IDと確認要求を持つ",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-GUARD-001] handles large deletion with a complete explicit plan",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FIX-001",
+    "requirement": "本番由来fixtureをTree/List無編集で保持する",
+    "file": "src/textFormat/textFormat.test.ts",
+    "test": "[TW-FIX-001] production-derived fixture %s round-trip is completely zero",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SYS-001",
+    "requirement": "@root/@routineはNode/refを持たないシステム領域",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-SYS-001] serializes reserved headers without root Node refs; no-edit is zero changes",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-005",
+    "requirement": "Routine化は所属変更と有効rule明示の両方が必要",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-RTN-005] moves Task into Routine only with explicit valid rule and keeps unknown/history/overrides",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-006",
+    "requirement": "所属変更だけのRoutine化を拒否する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-RTN-006] rejects membership-only Routineization atomically",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-007",
+    "requirement": "Routine解除は領域外移動とrule削除の両方でのみ成立",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-RTN-007] removes Routine only with both move out and omitted rule, preserving history/overrides",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SYS-002",
+    "requirement": "予約領域の重複・indent・不正配下を拒否する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-SYS-002] rejects ambiguous/system misuse: %s",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-005",
+    "requirement": "Listのシステム領域入力とRoutine構造変更を拒否する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-LIST-005] rejects list region headers and preserves affiliation despite indentation",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SYS-003",
+    "requirement": "空Domainの予約語からNodeを生成しない",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-SYS-003] supports empty Domain without creating reserved Nodes",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SYS-004",
+    "requirement": "Routine backing root不在の通常Taskは@rootに属する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-SYS-004] keeps ordinary root Tasks in @root when the Domain has no Routine backing root",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-008",
+    "requirement": "object prototype名をRoutine aliasとして受理しない",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-RTN-008] rejects inherited object names as Routine aliases: %s",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FIX-002",
+    "requirement": "本番由来fixtureをシステム領域付きで無編集保持する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-FIX-002] production-derived reserved-region round-trip retains exact deadlines and every envelope",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-009",
+    "requirement": "同frequency/intervalの短縮形でも既存startsOnを保持する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-RTN-009] a matching short Routine form retains the existing anchor exactly",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RANK-002",
+    "requirement": "hidden backing rootと新規root Nodeのrankを衝突させない",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-RANK-002] new root ranks do not collide with the hidden Routine backing node",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FIX-003",
+    "requirement": "本番由来の実一覧projectionは0 errors / 0 changes",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-FIX-003] production-derived current list projection is a zero-change plan including excluded Routine metadata",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-OCC-001",
+    "requirement": "当日source-ID行とoverdue virtual行を一覧writeから除外する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-OCC-001] excludes today source-ID Routine AND overdue virtual occurrences from list writes, keeps them in reading",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-001",
+    "requirement": "Tree Viewは現在見えている階層と人間向け見出しを使う",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-VIEW-001] uses current visible tree hierarchy/order with human-readable unassigned/Routine",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HL-001",
+    "requirement": "baselineとの比較で変更セルだけを識別する",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-HL-001] highlights changed cells over syntax; new/deleted have separate identities",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CLOSE-001",
+    "requirement": "invalid dirty編集は保存不可でも破棄して脱出できる",
+    "file": "src/textFormat/textWorkspace.test.ts",
+    "test": "[TW-CLOSE-001] permits escape from invalid dirty edits; save is only a valid-edit choice",
+    "level": "unit",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LOCAL-001",
+    "requirement": "未ログインでも共通Local V2で編集保存できる",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-LOCAL-001] local core without Firebase supports %s save/restart/History/Undo/Redo and preserves failed/discarded edits",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SCOPE-001",
+    "requirement": "Account storeは他scopeのOutboxを暗黙採用しない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-SCOPE-001] account-scoped open does not implicitly adopt another local scope or its pending Outbox",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SYS-005",
+    "requirement": "Routine backing rootはテキスト保存で変更しない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-SYS-005] UI reserved-region save keeps the backing root untouched and Undo/Redo groups Routineization",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HIST-001",
+    "requirement": "複数Nodeの1保存を1 History entryにする",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-HIST-001] commits mixed changes as one History entry and per-Node Outbox operations",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HIST-002",
+    "requirement": "Undo/Redoは保存全体を再起動後も戻す/再適用する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-HIST-002] Undo/Redo replays the whole text save and persists across restart",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HIST-003",
+    "requirement": "新規NodeのUndo/Redoは同じIDでsoft delete/復元する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-HIST-003] Undo of creation soft deletes the same ID; Redo restores it",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HIST-004",
+    "requirement": "Routine完了Undo/Redoは定義statusを変えず実績を復元する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-HIST-004] Undo of Routine completion restores occurrence metadata, not definition status",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-GUARD-002",
+    "requirement": "削除ID集合とfingerprint一致を確認し既存guardを維持する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-GUARD-002] requires exact reviewed deletion IDs/fingerprint and keeps the ordinary guard",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ATOMIC-001",
+    "requirement": "errorが1件でもDomain/History/Outbox/storageを更新しない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-ATOMIC-001] never commits any partial edits when syntax/semantic errors exist",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CON-002",
+    "requirement": "serialized commit区間内でremote競合を再検証する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-CON-002] revalidates a remote change inside the serialized commit boundary",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CON-003",
+    "requirement": "改変plan/baselineと破棄済みsessionをcommitしない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-CON-003] rejects modified plans, baselines, confirmations and discarded sessions",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-005",
+    "requirement": "commit/restart時に相対期限を再計算しない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-DUE-005] does not recalculate relative deadlines at commit or after restart",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ATOMIC-002",
+    "requirement": "atomic失敗は再起動後も全状態不変",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-ATOMIC-002] atomic save failure leaves Domain/History/Outbox/storage unchanged even after restart",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ATOMIC-003",
+    "requirement": "stale persisted envelopeのCAS競合を拒否する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-ATOMIC-003] refuses storage without atomic capability and stale persisted envelopes",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ATOMIC-004",
+    "requirement": "atomic非対応storageでWAL fallbackしない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-ATOMIC-004] requires atomic storage capability instead of falling back to a replayable WAL",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-001",
+    "requirement": "未編集deleted/purged/unknownとfield absenceを保持する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-META-001] preserves deleted/purged/unknown fields and untouched raw field absence",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SYNC-001",
+    "requirement": "既存revision server/ack経路でOutboxを収束させる",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-SYNC-001] Outbox converges through the existing revision server and acknowledgements",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HIST-005",
+    "requirement": "対象1件のremote競合でも保存全体のUndoを停止する",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-HIST-005] blocks the whole text Undo when one target changes remotely",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FIX-004",
+    "requirement": "本番fixtureの無編集commitはHistory/Outbox/writeを生成しない",
+    "file": "src/sync/textEditApplication.test.ts",
+    "test": "[TW-FIX-004] production fixture $view regions=$systemRegions no-edit creates no History/Outbox/write",
+    "level": "integration",
+    "coverage": "existing",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-005",
+    "requirement": "plain escapeでpipe/backslash/newline/CR/tabを復号する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-FMT-005] plain escapeでpipe/backslash/newline/CR/tabを復号する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-006",
+    "requirement": "空行を無視する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-FMT-006] 空行を無視する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-007",
+    "requirement": "存在する空bodyセルは本文を明示削除する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-FMT-007] 存在する空bodyセルは本文を明示削除する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-008",
+    "requirement": "新規Node省略列のdefaultを適用する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-FMT-008] 新規Node省略列のdefaultを適用する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-FMT-009",
+    "requirement": "通常Markdown見出しやcommentを拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-FMT-009] 通常Markdown見出しやcommentを拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VAL-003",
+    "requirement": "Ideaへの期限設定を拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VAL-003] Ideaへの期限設定を拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VAL-004",
+    "requirement": "不正completion値を拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VAL-004] 不正completion値を拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VAL-005",
+    "requirement": "CategoryへのMemo属性を拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VAL-005] CategoryへのMemo属性を拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VAL-006",
+    "requirement": "不正Routine interval/startsOnを拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VAL-006] 不正Routine interval/startsOnを拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-REF-002",
+    "requirement": "duplicate refだけを直接拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-REF-002] duplicate refだけを直接拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-REF-003",
+    "requirement": "unknown refだけを直接拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-REF-003] unknown refだけを直接拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-REF-004",
+    "requirement": "ref欠落とrefなし新規化の併存を直接拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-REF-004] ref欠落とrefなし新規化の併存を直接拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-005",
+    "requirement": "Memoを親にするindentを拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-TREE-005] Memoを親にするindentを拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-006",
+    "requirement": "2-space階層の飛び越しを拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-TREE-006] 2-space階層の飛び越しを拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-007",
+    "requirement": "孤立したDomainのsession開始を拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-TREE-007] 孤立したDomainのsession開始を拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TREE-008",
+    "requirement": "循環Domainのsession開始を拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-TREE-008] 循環Domainのsession開始を拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-006",
+    "requirement": "indentだけの変更はparentId/Routine所属を変更しない",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-LIST-006] indentだけの変更はparentId/Routine所属を変更しない",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-007",
+    "requirement": "一覧の新規Categoryを拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-LIST-007] 一覧の新規Categoryを拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-008",
+    "requirement": "一覧編集の表示順とgroupをsessionに保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-LIST-008] 一覧編集の表示順とgroupをsessionに保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-LIST-009",
+    "requirement": "非表示groupを一覧編集対象に含めない",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-LIST-009] 非表示groupを一覧編集対象に含めない",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-006",
+    "requirement": "絶対年月日/時刻/秒/ミリ秒/ISOの各正式値を受理する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-DUE-006] 絶対年月日/時刻/秒/ミリ秒/ISOの各正式値を受理する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-007",
+    "requirement": "古いtodayのdueAtとduePresetを無編集保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-DUE-007] 古いtodayのdueAtとduePresetを無編集保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DUE-008",
+    "requirement": "相対表示が現在dueAtと一致する場合だけ相対値をserializeする",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-DUE-008] 相対表示が現在dueAtと一致する場合だけ相対値をserializeする",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-OCC-002",
+    "requirement": "仮想Occurrence付きbaselineをsessionで拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-OCC-002] 仮想Occurrence付きbaselineをsessionで拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-OCC-003",
+    "requirement": "virtual IDをrefとして貼り付けても保存不可",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-OCC-003] virtual IDをrefとして貼り付けても保存不可",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-OCC-004",
+    "requirement": "除外Routine行は一覧削除対象にならない",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-OCC-004] 除外Routine行は一覧削除対象にならない",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HL-002",
+    "requirement": "新規行は変更既存セルと別の状態",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-HL-002] 新規行は変更既存セルと別の状態",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HL-003",
+    "requirement": "削除予定行のrefを別に返す",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-HL-003] 削除予定行のrefを別に返す",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HL-004",
+    "requirement": "所属/順変更をセル変更と別に識別する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-HL-004] 所属/順変更をセル変更と別に識別する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-HL-005",
+    "requirement": "全7列の候補はsyntax定義に由来する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-HL-005] 全7列の候補はsyntax定義に由来する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CLOSE-002",
+    "requirement": "valid dirtyの選択肢は続ける/保存/破棄",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-CLOSE-002] valid dirtyの選択肢は続ける/保存/破棄",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CLOSE-003",
+    "requirement": "unchangedはerror有無に関係なく閉じる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-CLOSE-003] unchangedはerror有無に関係なく閉じる",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CLOSE-004",
+    "requirement": "破棄はDomain rollbackせずsessionだけ無効化する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-CLOSE-004] 破棄はDomain rollbackせずsessionだけ無効化する",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-GUARD-003",
+    "requirement": "大量変更50件で確認が必要",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-GUARD-003] 大量変更50件で確認が必要",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-GUARD-004",
+    "requirement": "20件scopeの30%以上で確認が必要",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-GUARD-004] 20件scopeの30%以上で確認が必要",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-GUARD-005",
+    "requirement": "少数更新のみは確認不要",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-GUARD-005] 少数更新のみは確認不要",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-GUARD-006",
+    "requirement": "全ての単独削除でも確認が必要",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-GUARD-006] 全ての単独削除でも確認が必要",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-002",
+    "requirement": "改名でID/createdAtを保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-002] 改名でID/createdAtを保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-003",
+    "requirement": "改名で未知fieldを保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-003] 改名で未知fieldを保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-004",
+    "requirement": "改名でdeadlineSortKeyを保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-004] 改名でdeadlineSortKeyを保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-005",
+    "requirement": "改名でroutineHistoryを保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-005] 改名でroutineHistoryを保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-006",
+    "requirement": "改名でroutineDueOverridesを保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-006] 改名でroutineDueOverridesを保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-007",
+    "requirement": "未移動NodeのsortKeyを保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-007] 未移動NodeのsortKeyを保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CON-004",
+    "requirement": "remote valueだけの変化も競合停止する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-CON-004] remote valueだけの変化も競合停止する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CON-005",
+    "requirement": "remote Node追加でも競合停止する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-CON-005] remote Node追加でも競合停止する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-010",
+    "requirement": "ruleだけ削除して@routineに残す変更を拒否する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-RTN-010] ruleだけ削除して@routineに残す変更を拒否する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-011",
+    "requirement": "Routine alias全4種を受理する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-RTN-011] Routine alias全4種を受理する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RTN-012",
+    "requirement": "Routine completionは固定timezoneの日付へ適用する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-RTN-012] Routine completionは固定timezoneの日付へ適用する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-002",
+    "requirement": "List Viewはgroup順とNode順を保持する",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-002] List Viewはgroup順とNode順を保持する",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-003",
+    "requirement": "Viewの初期表示はタイトルのみ",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-003] Viewの初期表示はタイトルのみ",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-004",
+    "requirement": "締め切り項目を単独ON/OFFできる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-004] 締め切り項目を単独ON/OFFできる",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-005",
+    "requirement": "本文項目を単独ON/OFFできる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-005] 本文項目を単独ON/OFFできる",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-006",
+    "requirement": "Task/Idea項目を単独ON/OFFできる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-006] Task/Idea項目を単独ON/OFFできる",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-007",
+    "requirement": "完了項目を単独ON/OFFできる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-007] 完了項目を単独ON/OFFできる",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-008",
+    "requirement": "カテゴリ項目を単独ON/OFFできる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-008] カテゴリ項目を単独ON/OFFできる",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-009",
+    "requirement": "Routine項目を単独ON/OFFできる",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-009] Routine項目を単独ON/OFFできる",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-010",
+    "requirement": "項目名は初期OFFでONにした時だけラベルを出す",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-010] 項目名は初期OFFでONにした時だけラベルを出す",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-011",
+    "requirement": "追加情報はタイトル直下の箇条書き",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-011] 追加情報はタイトル直下の箇条書き",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-012",
+    "requirement": "生成物にref/ID/rank/revision/編集syntaxを露出しない",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-012] 生成物にref/ID/rank/revision/編集syntaxを露出しない",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-013",
+    "requirement": "snapshot生成/読取出力でDomainを変更しない",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-013] snapshot生成/読取出力でDomainを変更しない",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-VIEW-014",
+    "requirement": "ユーザー本文のID風文字列を勝手に改変しない",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-VIEW-014] ユーザー本文のID風文字列を勝手に改変しない",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-INV-001",
+    "requirement": "通常UIのCategory/Task/Idea/完了/Routine日週月年/削除をTree無編集で0 errors/0 changes",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-INV-001] 通常UIのCategory/Task/Idea/完了/Routine日週月年/削除をTree無編集で0 errors/0 changes",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-INV-002",
+    "requirement": "通常UIの実一覧projectionをList無編集で0 errors/0 changes",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-INV-002] 通常UIの実一覧projectionをList無編集で0 errors/0 changes",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-INV-003",
+    "requirement": "通常UI操作後のLocal/Account再起動でも両入口無編集で0 errors/0 changes",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-INV-003] 通常UI操作後のLocal/Account再起動でも両入口無編集で0 errors/0 changes",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-001",
+    "requirement": "一覧とTreeの双方に編集/View入口を表示する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-001] 一覧とTreeの双方に編集/View入口を表示する",
+    "level": "source-contract",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-002",
+    "requirement": "editorはserializeしたDomainを初回表示する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-002] editorはserializeしたDomainを初回表示する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-003",
+    "requirement": "列名と非色の記号で全7列を識別する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-003] 列名と非色の記号で全7列を識別する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-004",
+    "requirement": "system領域は通常列より強い枠/記号/ラベルを表示する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-004] system領域は通常列より強い枠/記号/ラベルを表示する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-005",
+    "requirement": "変更セルはsyntax色より優先する赤文字/下線",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-005] 変更セルはsyntax色より優先する赤文字/下線",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-006",
+    "requirement": "errorは変更文字と区別した背景/枠/警告/行セル理由",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-006] errorは変更文字と区別した背景/枠/警告/行セル理由",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-007",
+    "requirement": "新規/削除予定の表示は通常変更と別の記号",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-007] 新規/削除予定の表示は通常変更と別の記号",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-008",
+    "requirement": "180ms validationは入力欄の文字bufferを修正しない",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-008] 180ms validationは入力欄の文字bufferを修正しない",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-009",
+    "requirement": "strict saveはlive debounce待ちでも最新入力を検証する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-009] strict saveはlive debounce待ちでも最新入力を検証する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-010",
+    "requirement": "commit失敗時は入力を保持し画面を閉じない",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-010] commit失敗時は入力を保持し画面を閉じない",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-011",
+    "requirement": "保存は永続化成功後にのみ閉じる",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-011] 保存は永続化成功後にのみ閉じる",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-012",
+    "requirement": "確認中は入力を固定し本文が変われば再確認",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-012] 確認中は入力を固定し本文が変われば再確認",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-013",
+    "requirement": "Read Only Viewは入力不可で6checkboxとlabel初期OFF",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-013] Read Only Viewは入力不可で6checkboxとlabel初期OFF",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-014",
+    "requirement": "コピーは現在の出力全文を使用する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-014] コピーは現在の出力全文を使用する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-015",
+    "requirement": "clipboard失敗時に成功表示しない",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-015] clipboard失敗時に成功表示しない",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-016",
+    "requirement": "reload未保存警告をdirty時だけ登録する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-016] reload未保存警告をdirty時だけ登録する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-017",
+    "requirement": "UIはApplication境界だけを使用する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-017] UIはApplication境界だけを使用する",
+    "level": "source-contract",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-018",
+    "requirement": "候補選択はセル全体を置換する",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-018] 候補選択はセル全体を置換する",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-019",
+    "requirement": "Web入力16px以上とnative typography不変",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-019] Web入力16px以上とnative typography不変",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-020",
+    "requirement": "zoom禁止viewportを使わない",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-020] zoom禁止viewportを使わない",
+    "level": "source-contract",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-DEVICE-001",
+    "requirement": "Safari/PWAの実キーボードでauto zoomせず主要ボタンに到達",
+    "level": "device",
+    "coverage": "manual",
+    "status": "device-only",
+    "reason": "実端末viewport/keyboardはjsdomで再現不可",
+    "steps": "Safari/PWA各1回、focus→日本語入力→保存/閉じるへ到達。既存実機PASSのReleaseを記録"
+  },
+  {
+    "id": "TW-DEVICE-002",
+    "requirement": "IME/caret/selection/文字Ctrl+Z/貼付の標準入力",
+    "level": "device",
+    "coverage": "manual",
+    "status": "device-only",
+    "reason": "OSのIME/selection実装はmock inputで保証不可",
+    "steps": "日本語変換→改行→カーソル選択→貼付→文字UndoをSafari/PWAで各1回"
+  },
+  {
+    "id": "TW-DEVICE-003",
+    "requirement": "実クリップボード/コピー先アプリで全文一致",
+    "level": "device",
+    "coverage": "manual",
+    "status": "device-only",
+    "reason": "権限とOS clipboardは実機境界",
+    "steps": "6項目ONの出力をコピー→メモ帳貼付して全文照合"
+  },
+  {
+    "id": "TW-DEVICE-004",
+    "requirement": "実Firebase複数端末同期/通信断/ownership/scope変更",
+    "level": "device",
+    "coverage": "manual",
+    "status": "device-only",
+    "reason": "Emulatorは本物のAuth/AppCheck/端末raceの代替不可",
+    "steps": "DEVのみ、A保存→B受信→B変更→A競合→offline保存→再接続。匿名取り込み/logout/loginも各1回"
+  },
+  {
+    "id": "TW-DEVICE-005",
+    "requirement": "Android native戻る/keyboard/Intl/AsyncStorage単一writer",
+    "level": "device",
+    "coverage": "manual",
+    "status": "device-only",
+    "reason": "iPhone/Webではnative実装を証明不可",
+    "steps": "Android実機で戻る/入力/保存/再起動/Undoとsession timezoneを確認"
+  },
+  {
+    "id": "TW-TRACE-001",
+    "requirement": "every automated Spec ID has exactly one enabled direct test registration",
+    "file": "src/textFormat/traceability.test.ts",
+    "test": "[TW-TRACE-001] every automated Spec ID has exactly one enabled direct test registration",
+    "level": "meta-test",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TRACE-002",
+    "requirement": "generated matrix matches the specification registry",
+    "file": "src/textFormat/traceability.test.ts",
+    "test": "[TW-TRACE-002] generated matrix matches the specification registry",
+    "level": "meta-test",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TRACE-003",
+    "requirement": "coverage guard rejects missing duplicate disabled unknown and planned mappings",
+    "file": "src/textFormat/traceability.test.ts",
+    "test": "[TW-TRACE-003] coverage guard rejects missing duplicate disabled unknown and planned mappings",
+    "level": "meta-test",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-TRACE-004",
+    "requirement": "executed-results guard refuses skipped failed and unexecuted specifications",
+    "file": "src/textFormat/traceability.test.ts",
+    "test": "[TW-TRACE-004] executed-results guard refuses skipped failed and unexecuted specifications",
+    "level": "meta-test",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-021",
+    "requirement": "Invalid dirty edit closes through discard without any commit",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-021] Invalid dirty edit closes through discard without any commit",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-022",
+    "requirement": "Valid dirty edit offers save and commits before closing",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-022] Valid dirty edit offers save and commits before closing",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-023",
+    "requirement": "Unchanged editor closes without prepare or commit",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-023] Unchanged editor closes without prepare or commit",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-024",
+    "requirement": "Continue editing retains an invalid draft and writable input",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-024] Continue editing retains an invalid draft and writable input",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-025",
+    "requirement": "Cancel destructive confirmation preserves the draft without commit",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-025] Cancel destructive confirmation preserves the draft without commit",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SCOPE-002",
+    "requirement": "A session from another ownership scope cannot commit",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-SCOPE-002] A session from another ownership scope cannot commit",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-CON-006",
+    "requirement": "A changed confirmation fingerprint cannot commit",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-CON-006] A changed confirmation fingerprint cannot commit",
+    "level": "integration",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-RANK-003",
+    "requirement": "Duplicate sibling ranks stop rank mutation without implicit repair",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-RANK-003] Duplicate sibling ranks stop rank mutation without implicit repair",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-META-008",
+    "requirement": "Unrelated changes preserve legacy dayPart metadata",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-META-008] Unrelated changes preserve legacy dayPart metadata",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-SER-003",
+    "requirement": "Edit serializer generates short refs without internal IDs/revisions",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-SER-003] Edit serializer generates short refs without internal IDs/revisions",
+    "level": "unit",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-INV-004",
+    "requirement": "Ordinary EditorModal actually uses the recurrence form boundaries exercised by the cross-feature fixture",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-INV-004] Ordinary EditorModal actually uses the recurrence form boundaries exercised by the cross-feature fixture",
+    "level": "source-contract",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-ARCH-001",
+    "requirement": "Parser validator serializer planner and presentation are independent of React persistence and Firebase imports",
+    "file": "src/textFormat/textWorkspaceSpec.test.ts",
+    "test": "[TW-ARCH-001] Parser validator serializer planner and presentation are independent of React persistence and Firebase imports",
+    "level": "source-contract",
+    "coverage": "new",
+    "status": "automated"
+  },
+  {
+    "id": "TW-UI-026",
+    "requirement": "Editor and system-region highlighting use the existing Light and Dark theme palettes with non-color labels",
+    "file": "src/components/TextWorkspace.spec.test.tsx",
+    "test": "[TW-UI-026] Editor and system-region highlighting use the existing Light and Dark theme palettes with non-color labels",
+    "level": "component",
+    "coverage": "new",
+    "status": "automated"
+  }
+]

@@ -1,4 +1,11 @@
+import { isRoutineRoot, ROUTINE_ROOT_ID, findRoutineRoot } from '../domain/routineRoot';
 import type { FeaturesValue, PinnedNoteValue, SyncAcknowledgement, SyncNodeValue, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
+import { canonical } from '../textFormat/syntax';
+
+export function assertOwnershipCurrent(operation: SyncOperation, current: VersionedNode | VersionedPinnedNote | VersionedFeatures | null | undefined) {
+  if (operation.ownership && canonical(current ?? null) !== canonical(operation.ownership.expectedCurrent))
+    throw new Error('取り込み確認後にremoteが変わりました。最新状態で再確認してください。');
+}
 
 const deletionRank = (node: SyncNodeValue) => node.purgedAt ? 2 : node.deletedAt ? 1 : 0;
 
@@ -29,6 +36,16 @@ export function chooseVersionedNode(current: VersionedNode | undefined, candidat
 
 export function applyRevisionOperation(current: VersionedNode | undefined, operation: SyncOperation): SyncAcknowledgement {
   const candidate = candidateForOperation(operation);
+  // The reserved system create is insert-only. Concurrent initializers preserve
+  // the server winner (including unknown metadata), without another Node ID.
+  if (operation.type === 'create' && operation.targetNodeId === ROUTINE_ROOT_ID && isRoutineRoot(candidate.value)) {
+    findRoutineRoot([candidate.value]);
+    if (current) {
+      if (!isRoutineRoot(current.value)) throw new Error('Routine予約IDが別Nodeで使われています。');
+      findRoutineRoot([current.value]);
+      return { opId: operation.opId, revision: current.revision, result: 'superseded', record: current };
+    }
+  }
   const winner = chooseVersionedNode(current, candidate);
   return {
     opId: operation.opId,
@@ -95,6 +112,7 @@ export class InMemoryRevisionServer {
   apply(operation: SyncOperation) {
     const previous = this.operations.get(operation.opId);
     if (previous) return previous;
+    assertOwnershipCurrent(operation, operation.targetType === 'pinnedNote' ? this.pinnedNote : operation.targetType === 'features' ? this.features : this.nodes.get(operation.targetNodeId));
     const acknowledgement = operation.targetType === "pinnedNote"
       ? applyPinnedNoteOperation(this.pinnedNote, operation)
       : operation.targetType === "features"

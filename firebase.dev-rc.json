@@ -1,5 +1,6 @@
 {
   "firestore": { "rules": "firestore.dev.rules" },
+  "functions": { "source": "functions", "runtime": "nodejs22" },
   "hosting": {
     "site": "taskmemoapp-dev",
     "public": "dist",

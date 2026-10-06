@@ -1,3 +1,4 @@
+import { webFormTypography } from '../theme/formTypography';
 import React from 'react';
 import { View } from 'react-native';
 import { useAppTheme } from '@/theme/theme';
@@ -12,7 +13,7 @@ export function DateTimeField({ value, onChange }: { value: string; onChange: (v
     const parsed = parseLocalDateTime(`${nextDate} ${nextTime}`);
     if (parsed) onChange(formatDateTimeInput(parsed));
   };
-  const style: React.CSSProperties = { minHeight: 48, flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${colors.border}`, borderRadius: 11, background: colors.surface, color: colors.text, fontSize: 16 };
+  const style: React.CSSProperties = { minHeight: 48, flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${colors.border}`, borderRadius: 11, background: colors.surface, color: colors.text, ...webFormTypography };
   return <View style={{ flexDirection: 'row', gap: 8 }}>
     <input type="date" aria-label="日付" value={dateValue} onChange={(event) => update(event.target.value, timeValue)} style={style} />
     <input type="time" aria-label="時刻" value={timeValue} onChange={(event) => update(dateValue, event.target.value)} style={style} />

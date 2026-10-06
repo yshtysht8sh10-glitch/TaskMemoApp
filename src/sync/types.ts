@@ -21,6 +21,8 @@ export type SyncOperationType =
 export type SyncOperationStatus = "pending" | "retrying" | "failed";
 
 export type SyncOperation = {
+  /** Ownership adoption only; normal account synchronization never uses it. */
+  ownership?: { reconcileId: string; expectedCurrent: VersionedNode | VersionedPinnedNote | VersionedFeatures | null };
   opId: string;
   deviceId: string;
   localSeq: number;

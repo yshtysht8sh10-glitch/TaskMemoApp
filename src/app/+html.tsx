@@ -15,9 +15,10 @@ export default function RootHtml({ children }: { children: ReactNode }) {
         <meta name="apple-mobile-web-app-title" content="TaskMemo" />
         <link rel="manifest" href="/manifest.webmanifest" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <link rel="stylesheet" href="/form-typography.css" />
         <ScrollViewStyleReset />
         {headNodes}
-        <style dangerouslySetInnerHTML={{ __html: 'html,body{height:100%;height:100dvh}body{margin:0;background:#F4F7FB;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}#root{height:100%;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}*{box-sizing:border-box}input,textarea,button{font-size:16px}' }} />
+        <style dangerouslySetInnerHTML={{ __html: 'html,body{height:100%;height:100dvh}body{margin:0;background:#F4F7FB;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}#root{height:100%;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}*{box-sizing:border-box}button{font-size:16px}' }} />
       </head>
       <body {...bodyAttributes}>
         {children}

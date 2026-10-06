@@ -4,6 +4,7 @@ export type TaskMemoBuildInfo = {
   fullCommit: string;
   sync: string;
   environment: string;
+  releaseId?: string;
 };
 
 export type ExpoConfigLike = {
@@ -13,6 +14,7 @@ export type ExpoConfigLike = {
       commit?: string;
       environment?: string;
       syncProtocol?: string;
+      releaseId?: string;
     };
   };
 } | null;
@@ -26,6 +28,7 @@ export function buildInfoFromExpoConfig(config: ExpoConfigLike): TaskMemoBuildIn
     fullCommit,
     sync: embedded?.syncProtocol || "unknown",
     environment: embedded?.environment || "unknown",
+    ...(embedded?.releaseId ? { releaseId: embedded.releaseId } : {}),
   };
 }
 

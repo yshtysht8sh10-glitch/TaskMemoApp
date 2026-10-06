@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { buildInfoFromExpoConfig, compactBuildLabel } from './buildInfoValue';
 
 describe('buildInfoFromExpoConfig', () => {
+  it('distinguishes uncommitted deployments built from the same commit', () => {
+    expect(buildInfoFromExpoConfig({ extra: { taskMemoBuild: { commit: 'abcd', releaseId: 'issue85-order-20261006' } } }).releaseId).toBe('issue85-order-20261006');
+  });
   it('build時に埋め込まれたversion/commit/sync/environmentを表示用へ変換する', () => {
     expect(buildInfoFromExpoConfig({
       version: '1.2.3',

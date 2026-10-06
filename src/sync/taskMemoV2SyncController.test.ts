@@ -7,8 +7,9 @@ import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
 import { nodeToV2Value } from "./nodeV2Codec";
 import type { SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
+import { serializeText } from '../textFormat/session';
 
-class MemoryPersistence implements ApplicationJournalPersistence { value: string | null = null; journal: string | null = null; loadCommitted = async () => this.value; loadJournal = async () => this.journal; writeJournal = async (v: string) => { this.journal = v; }; writeCommitted = async (v: string) => { this.value = v; }; clearJournal = async () => { this.journal = null; }; }
+class MemoryPersistence implements ApplicationJournalPersistence { writeAtomic?: ApplicationJournalPersistence['writeAtomic']; value: string | null = null; journal: string | null = null; loadCommitted = async () => this.value; loadJournal = async () => this.journal; writeJournal = async (v: string) => { this.journal = v; }; writeCommitted = async (v: string) => { this.value = v; }; clearJournal = async () => { this.journal = null; }; }
 class ListenerAdapter implements SyncAdapter {
   auditOutbox?: SyncAdapter["auditOutbox"];
   server = new InMemoryRevisionServer(); listeners = new Set<(record: VersionedNode) => void | Promise<void>>(); pinnedListeners = new Set<(record: VersionedPinnedNote) => void | Promise<void>>(); featureListeners = new Set<(record: VersionedFeatures) => void | Promise<void>>(); online = true; uploads: SyncOperation[] = []; initialIds = ["memo-a"];
@@ -25,6 +26,28 @@ const memo = (): MemoNode => ({ id: "memo-a", type: "memo", parentId: null, sort
 const provisionedRoutineRoot = (): CategoryNode => ({ id: "system-routine", type: "category", categoryKind: "routineRoot", parentId: null, sortKey: "zzzz", title: "ルーティーン", createdAt: new Date("2026-09-19T00:00:00.000Z"), updatedAt: new Date("2026-09-19T00:00:00.000Z"), deletedAt: null });
 
 describe("V2 listener controller", () => {
+  it('text save commits locally, flushes the existing Outbox, and reports failed upload without undoing the save', async () => {
+    const persistence = new MemoryPersistence();
+    persistence.writeAtomic = async (expected, value) => {
+      if (persistence.value !== expected || persistence.journal) throw new Error('CAS');
+      persistence.value = value;
+    };
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [memo()], { deviceId: 'text-device' });
+    const adapter = new ListenerAdapter(), controller = new TaskMemoV2SyncController(store, adapter);
+    await controller.start();
+    const session = controller.beginTextEdit({ scope: 'account', view: 'list', timeZone: 'Asia/Tokyo' });
+    const plan = controller.prepareTextEdit(session, serializeText(session).replace('| A |', '| text edit |'));
+    const ops = await controller.saveTextEdit(plan, { fingerprint: plan.fingerprint, deletedIds: plan.deletedIds });
+    expect(ops).toHaveLength(1); expect(store.historyDepths.past).toBe(1);
+    await vi.waitFor(() => expect(store.outbox).toHaveLength(0));
+    expect(adapter.server.get('memo-a')?.value.title).toBe('text edit');
+    adapter.online = false;
+    const second = controller.beginTextEdit({ scope: 'account', view: 'list', timeZone: 'Asia/Tokyo' });
+    const pending = controller.prepareTextEdit(second, serializeText(second).replace('text edit', 'offline edit'));
+    await controller.saveTextEdit(pending, { fingerprint: pending.fingerprint, deletedIds: [] });
+    await vi.waitFor(() => expect(controller.state.phase).toBe('offline'));
+    expect(store.nodes[0].title).toBe('offline edit'); expect(store.outbox).toHaveLength(1); controller.stop();
+  });
   it("confirms local persistence without waiting for a stalled upload and rejects a failed write", async () => {
     const persistence = new MemoryPersistence();
     const store = await TaskMemoV2ApplicationStore.open(persistence, [memo()], { deviceId: "device-a" });

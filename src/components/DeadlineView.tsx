@@ -1,3 +1,5 @@
+import { FormTextInput } from './FormTextInput';
+import type { ListTextGroup } from '../textFormat/presentation';
 import { useEffect, useMemo, useRef, useState, type ElementRef } from "react";
 import {
   AppState,
@@ -6,7 +8,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -72,6 +73,8 @@ type DeadlineRow =
     };
 
 type Props = {
+  onTextEdit?: (groups: ListTextGroup[]) => void;
+  onTextView?: (groups: ListTextGroup[], now: Date) => void;
   nodes: Node[];
   visibleGroupIds: ReadonlySet<DeadlineGroupKey>;
   todayGranularity: TodayGranularity;
@@ -164,7 +167,7 @@ function WebPinnedNote({
       ]}
     >
       <Text style={styles.pinnedLabel}>常設メモ</Text>
-      <TextInput
+      <FormTextInput
         multiline
         value={body}
         onChangeText={onBodyChange}
@@ -218,6 +221,7 @@ function WebPinnedNote({
 }
 
 export function DeadlineView({
+  onTextEdit, onTextView,
   revealMemoId,
   onMemoRevealed,
   nodes,
@@ -605,7 +609,7 @@ export function DeadlineView({
       </View>
     ) : item.kind === "quickAdd" ? (
       <View nativeID="deadline-quick-add" style={styles.quickAdd}>
-        {mobileTitleEditor ? <Text style={styles.quickTitle}>{quickTitle}</Text> : <TextInput
+        {mobileTitleEditor ? <Text style={styles.quickTitle}>{quickTitle}</Text> : <FormTextInput
           autoFocus
           value={quickTitle}
           onChangeText={setQuickTitle}
@@ -618,7 +622,7 @@ export function DeadlineView({
           style={styles.quickTitle}
         />}
         {item.context.dueEditable && (
-          <TextInput
+          <FormTextInput
             autoFocus={mobileTitleEditor}
             value={quickDueAt}
             onChangeText={setQuickDueAt}
@@ -697,7 +701,7 @@ export function DeadlineView({
               <View style={styles.content}>
                 {titleEdit.activeId === item.memo.id ? (
                   <View nativeID={titleEdit.nativeID}>
-                    <TextInput
+                    <FormTextInput
                       autoFocus
                       value={titleEdit.draft}
                       onChangeText={titleEdit.changeDraft}
@@ -764,6 +768,8 @@ export function DeadlineView({
       )}
       {!selectionMode && (
         <>
+          {onTextEdit && <Pressable style={styles.tool} accessibilityRole="button" onPress={() => onTextEdit(groups)}><Text style={styles.toolText}>テキスト編集</Text></Pressable>}
+          {onTextView && <Pressable style={styles.tool} accessibilityRole="button" onPress={() => onTextView(groups, currentDate)}><Text style={styles.toolText}>テキストView</Text></Pressable>}
           <Pressable
             style={styles.tool}
             onPress={() =>
@@ -848,7 +854,7 @@ export function DeadlineView({
       ]}
     >
       <Text style={styles.pinnedLabel}>常設メモ</Text>
-      <TextInput
+      <FormTextInput
         multiline
         value={pinnedNote}
         onChangeText={onPinnedNoteChange}

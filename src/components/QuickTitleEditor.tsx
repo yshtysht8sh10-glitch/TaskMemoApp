@@ -1,5 +1,6 @@
+import { FormTextInput } from './FormTextInput';
 import { useEffect, useRef, useState } from "react";
-import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useAppTheme } from "@/theme/theme";
 import { confirmedQuickTitleExit } from "@/utils/confirmedQuickTitleExit";
 import { quickTitleSourceLabel } from "@/utils/quickAddTitle";
@@ -65,7 +66,7 @@ export function QuickTitleEditor({ target, contextLabel, onClose, onSave }: {
           <Text style={[styles.original, { color: colors.text }]} numberOfLines={2}>{target ? quickTitleSourceLabel(target, contextLabel) : ""}</Text>
         </View>
         <View style={styles.inputRow}>
-        <TextInput
+        <FormTextInput
           autoFocus
           value={draft}
           onChangeText={(value) => { draftRef.current = value; setDraft(value); setError(false); }}

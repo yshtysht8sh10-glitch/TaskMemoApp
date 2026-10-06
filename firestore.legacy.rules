@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owns(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    function lockPath(userId) {
+      return /databases/$(database)/documents/users/$(userId)/syncMetadataV2/repairLock;
+    }
+    function repairActive(userId) {
+      return exists(lockPath(userId)) && get(lockPath(userId)).data.expiresAt > request.time;
+    }
+    function repairWrite(userId, collectionId) {
+      return repairActive(userId) && request.resource != null &&
+        get(lockPath(userId)).data.owner is string &&
+        ((collectionId == 'nodesV2' || collectionId == 'profileV2') &&
+          request.resource.data.record.lastDeviceId == get(lockPath(userId)).data.owner ||
+         collectionId == 'syncOperationsV2' &&
+          request.resource.data.operation.deviceId == get(lockPath(userId)).data.owner);
+    }
+    function validRepairLock(userId) {
+      return request.resource != null && request.resource.data.keys().hasAll(['owner', 'expiresAt']) &&
+        request.resource.data.owner is string &&
+        request.resource.data.owner.matches('^sync-self-repair-.*') &&
+        request.resource.data.expiresAt is timestamp &&
+        request.resource.data.expiresAt > request.time + duration.value(30, 's') &&
+        request.resource.data.expiresAt < request.time + duration.value(2, 'm') &&
+        (!exists(lockPath(userId)) || get(lockPath(userId)).data.expiresAt <= request.time ||
+          get(lockPath(userId)).data.owner == request.resource.data.owner);
+    }
+    // V2 adapter.connect() reads this gate after taking the repair lease.
+    // The gate is server-managed and must remain read-only to clients.
+    match /syncControl/current {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /users/{userId}/syncMetadataV2/repairLock {
+      allow read: if owns(userId);
+      allow create, update: if owns(userId) && validRepairLock(userId);
+      allow delete: if owns(userId) && resource.data.owner is string &&
+        resource.data.owner.matches('^sync-self-repair-.*');
+    }
+    match /users/{userId}/{collectionId}/{documentId} {
+      allow read: if owns(userId);
+      allow write: if owns(userId) && !(collectionId == 'syncMetadataV2' && documentId == 'repairLock') && (
+        !repairActive(userId) ||
+        repairWrite(userId, collectionId));
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

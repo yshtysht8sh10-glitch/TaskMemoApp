@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 
 import type { Node } from "../models/node";
-import { createNodeHistory, reconcileSyncedNodeHistory, type NodeHistory } from "../domain/nodeHistory";
+import { type NodeHistory } from "../domain/nodeHistory";
 import { getFirebaseClient } from "../services/firebaseClient";
 import { firebaseConfiguration } from "../services/firebaseConfig";
-import { TaskMemoV2ApplicationJournal } from "../sync/applicationStorage";
+import { claimNativeScopeWriter, TaskMemoV2ApplicationJournal } from "../sync/applicationStorage";
 import { IndexedDbTaskMemoApplicationJournal } from "../sync/indexedDbApplicationStorage";
 import { shouldEnterLocalRecovery } from "../sync/localRecoveryRouting";
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
@@ -21,15 +21,21 @@ import { runSyncSelfRepair, type SyncSelfRepairProgress } from "../sync/syncSelf
 import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, recordNormalOperationGenerationBlockedByRepair, recordSyncActivity } from "../sync/selfRepairDiagnostics";
 import type { SyncAdapter, SyncPhase } from "../sync/types";
 import { inferSyncOperationType } from "../sync/operationType";
-import { isConfiguredV2SyncEnabled } from "../sync/featureFlag";
-import { useFirebaseSync, type FirebaseSyncStatus } from "./useFirebaseSync";
+import { type FirebaseSyncStatus } from "./useFirebaseSync";
 import { subscribeToWebOnline } from "./webOnlineListener";
-import { normalizeLegacyRanks } from "../services/nodeStorage";
+import { openCommonLocalApplication } from '../services/localV2Application';
+import { accountScope } from '../sync/ownership';
+import type { OwnershipPlan } from '../sync/ownershipReconcile';
+import { ownershipPresentation } from '../sync/ownershipPresentation';
+import { prepareFirebaseAccount } from '../services/firebaseOnboarding';
+import { canonical } from '../textFormat/syntax';
 import type { PinnedNote } from "../services/pinnedNoteStorage";
 import { appAlert } from "../utils/appAlert";
 import { confirmedSave } from "../utils/confirmedSave";
+import type { SessionOptions } from '../textFormat/session';
+import type { TextSession, TextPlan } from '../textFormat/syntax';
 
-export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery" | "self-repairing";
+export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery" | "self-repairing" | "ownership-review" | "ownership-importing" | "onboarding";
 
 const message = (reason: unknown) => reason instanceof Error ? reason.message :
   reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string"
@@ -56,6 +62,14 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const [error, setError] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(!configured);
   const [networkPaused, setNetworkPaused] = useState(false);
+  const [applicationState, setApplicationState] = useState<'opening' | 'ready' | 'error'>('opening');
+  const [ownershipReview, setOwnershipReview] = useState<OwnershipPlan | null>(null);
+  const [ownershipPendingCount, setOwnershipPendingCount] = useState(0);
+  const [ownershipRecovery, setOwnershipRecovery] = useState(false);
+  const activeScopeRef = useRef('');
+  const activeLocalRef = useRef(true);
+  const localApplicationRef = useRef<Awaited<ReturnType<typeof openCommonLocalApplication>> | null>(null);
+  const accountWriterRef = useRef<ReturnType<typeof claimNativeScopeWriter> | null>(null);
   const [legacyPinnedNoteCandidates, setLegacyPinnedNoteCandidates] = useState<LegacyPinnedNoteCandidate[]>([]);
   const [selfRepairProgress, setSelfRepairProgress] = useState<SyncSelfRepairProgress | null>(null);
   const onHistoryRef = useRef(onHistory);
@@ -92,7 +106,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     }
   }, [initialIdeasEnabled]);
 
-  const publish = () => {
+  const publish = useCallback(() => {
     const store = storeRef.current; const controller = controllerRef.current;
     if (store) onHistoryRef.current(store.history);
     if (store && store.pinnedNote.body !== publishedPinnedNoteRef.current) {
@@ -111,25 +125,50 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         setLegacyPinnedNoteCandidates(candidates);
       }
     }
-    if (controller) { setStatus(repairRunningRef.current ? "self-repairing" : localRecoveryModeRef.current ? "local-recovery" : controller.state.phase); setError(controller.state.lastError); }
-  };
+    let ownershipStatus: TaskMemoSyncStatus | undefined;
+    if (store && controller && !activeLocalRef.current && localApplicationRef.current) {
+      const presentation = ownershipPresentation(controller.ownershipAssessment, store.pendingOwnership?.state ?? null,
+        store.unreconciledIds(localApplicationRef.current.store.anonymousSnapshot(localApplicationRef.current.scope), activeScopeRef.current).length, controller.state.phase);
+      setOwnershipPendingCount(presentation.count);
+      setOwnershipRecovery(presentation.recovery);
+      ownershipStatus = presentation.status;
+    } else { setOwnershipPendingCount(0); setOwnershipRecovery(false); }
+    if (controller) { setStatus(activeLocalRef.current ? configured ? 'signed-out' : 'disabled' : repairRunningRef.current ? "self-repairing" : localRecoveryModeRef.current ? "local-recovery" : ownershipStatus ?? controller.state.phase); setError(controller.state.lastError); }
+  }, [configured]);
 
   useEffect(() => {
-    if (!configured || !ready) return;
-    const { auth, db } = getFirebaseClient();
+    if (!ready) return;
     const repairGeneration = repairGenerationRef;
     let generation = 0;
-    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+    let unsubscribe = () => {};
+    const activateLocal = async (currentGeneration: number) => {
+      const local = await openCommonLocalApplication(firebase.environment ?? 'unconfigured', { body: initialPinnedNoteRef.current.body, ideasEnabled: initialIdeasEnabledRef.current });
+      if (generation !== currentGeneration) return;
+      localApplicationRef.current = local; activeLocalRef.current = true; activeScopeRef.current = local.scope;
+      const disconnected: SyncAdapter = { connect: async () => { throw new Error('Anonymous scopeをcloudへ接続しません。'); }, upload: async () => { throw new Error('Anonymous Outboxは送信しません。'); } };
+      const controller = new TaskMemoV2SyncController(local.store, disconnected, publish, { localOnly: true });
+      storeRef.current = local.store; controllerRef.current = controller;
+      setApplicationState('ready'); await controller.start(); publish();
+    };
+    const authChanged = async (nextUser: User | null) => {
       recordSyncActivity("authChanged");
       const currentGeneration = ++generation;
       repairGeneration.current++;
+      const previousStore = storeRef.current;
+      const previousWriter = accountWriterRef.current; accountWriterRef.current = null;
       controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
+      setApplicationState('opening'); setOwnershipReview(null);
+      await previousStore?.whenIdle();
+      previousWriter?.release();
+      if (currentGeneration !== generation) return;
       persistenceRef.current = null; adapterRef.current = null;
       localRecoveryModeRef.current = false;
       publishedCandidatesRef.current = "[]"; setLegacyPinnedNoteCandidates([]);
-      onHistoryRef.current(createNodeHistory([]));
       setUser(nextUser); setAuthReady(true); setError(null);
-      if (!nextUser) { setStatus("signed-out"); return; }
+      if (!nextUser) { await activateLocal(currentGeneration); return; }
+      const { db } = getFirebaseClient();
+      activeLocalRef.current = false;
+      activeScopeRef.current = accountScope(firebase.environment ?? 'unconfigured', String(db.app.options.projectId), nextUser.uid);
       setStatus("connecting");
       if (guardedRecovery) {
         beginRecoveryObservation();
@@ -141,6 +180,11 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         const emulator = db.app.options.projectId === "demo-taskmemo-v2";
         const adapterEnvironment = emulator ? "test" : firebase.environment === "production" ? "production" : "development";
         const adapter = createFirebaseSyncAdapter(db, nextUser.uid, adapterEnvironment, { emulator,
+          ensureAccountReady: async () => {
+            if (currentGeneration !== generation) throw new Error('アカウントが切り替わりました。');
+            setStatus('onboarding');
+            await prepareFirebaseAccount(db.app, nextUser.uid, () => currentGeneration === generation);
+          },
           receiptLookupTimeoutMs: guardedRecovery ? 10000 : undefined,
           receiptReadMode: guardedRecovery ? receiptReadMode : undefined,
           receiptLookupIntervalMs: guardedRecovery ? receiptLookupIntervalMs : undefined,
@@ -156,11 +200,12 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           }) : undefined,
         });
         const scope = `${db.app.options.projectId}/${nextUser.uid}`;
+        if (Platform.OS !== 'web') accountWriterRef.current = claimNativeScopeWriter(scope);
         const legacyJournal = guardedRecovery ? await new TaskMemoV2ApplicationJournal(scope).loadJournal() : null;
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-start" });
         const persistence = Platform.OS === "web"
           ? await IndexedDbTaskMemoApplicationJournal.open(scope, undefined, { allowLegacyCopy: !legacyJournal })
-          : new TaskMemoV2ApplicationJournal(scope);
+          : new TaskMemoV2ApplicationJournal(scope, accountWriterRef.current?.token);
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
         const activeLocalMode = persistence instanceof IndexedDbTaskMemoApplicationJournal &&
@@ -194,6 +239,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           const controller = new TaskMemoV2SyncController(store, adapter, publish, { localOnly: true });
           persistenceRef.current = persistence; adapterRef.current = adapter;
           storeRef.current = store; controllerRef.current = controller;
+          setApplicationState('ready');
           publish(); await controller.start(); publish();
           return;
         }
@@ -262,18 +308,31 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         if (guardedRecovery && legacyJournal && !(persistence instanceof IndexedDbTaskMemoApplicationJournal &&
             await persistence.isRecoveryCompleted()))
           throw new Error("旧journalとIndexedDBの状態が一致しません。復旧を停止しました。");
-        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, initialPinnedNote: initialPinnedNoteRef.current, initialIdeasEnabled: initialIdeasEnabledRef.current }, firebase.environment === "production");
+        if (await persistence.loadJournal()) await adapter.connect();
         if (currentGeneration !== generation) return;
-        const controller = new TaskMemoV2SyncController(store, adapter, publish);
-        storeRef.current = store; controllerRef.current = controller; publish(); await controller.start(); publish();
+        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` }, firebase.environment === "production");
+        if (currentGeneration !== generation) return;
+        const local = localApplicationRef.current;
+        const targetScope = activeScopeRef.current;
+        const controller = new TaskMemoV2SyncController(store, adapter, publish, local ? {
+          initialOwnership: { source: () => local.store.anonymousSnapshot(local.scope), targetScope },
+        } : {});
+        adapterRef.current = adapter;
+        storeRef.current = store; controllerRef.current = controller; setApplicationState('ready'); publish(); await controller.start(); publish();
       } catch (reason) {
         if (currentGeneration === generation) {
           if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "error", lastRecoveryError: recoveryErrorCode(reason) });
           setStatus("error"); setError(message(reason));
+          setApplicationState('error');
           appAlert("V2データの復旧を停止しました", `データを削除せず、バックアップを保持してください。\n${message(reason)}`);
         }
       }
-    });
+    };
+    void activateLocal(++generation).then(() => {
+      if (!generation) return;
+      setAuthReady(true);
+      if (configured) unsubscribe = onAuthStateChanged(getFirebaseClient().auth, nextUser => { void authChanged(nextUser).catch(reason => { setApplicationState('error'); setError(message(reason)); }); });
+    }).catch(reason => { setApplicationState('error'); setStatus('error'); setError(message(reason)); });
     const reconnect = () => { void controllerRef.current?.start(); };
     const removeOnlineListener = subscribeToWebOnline(
       Platform.OS,
@@ -281,19 +340,22 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       reconnect,
     );
     return () => {
-      generation++; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
+      const retiringStore = storeRef.current, retiringWriter = accountWriterRef.current;
+      accountWriterRef.current = null;
+      generation = 0; unsubscribe(); controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       repairGeneration.current++; persistenceRef.current = null; adapterRef.current = null;
+      void (retiringStore?.whenIdle() ?? Promise.resolve()).finally(() => retiringWriter?.release());
       removeOnlineListener();
     };
   }, [configured, ready, firebase.environment, guardedRecovery, manualAuthoritativePreflight, manualLocalRecovery,
-    manualAuthoritativeExecution, manualBuildMatches, receiptReadMode, receiptLookupIntervalMs]);
+    manualAuthoritativeExecution, manualBuildMatches, receiptReadMode, receiptLookupIntervalMs, publish]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
     if (repairRunningRef.current) { recordSyncActivity("blockedCommand"); recordNormalOperationGenerationBlockedByRepair(); return true; }
     const controller = controllerRef.current;
     if (!controller) {
-      if (enabled) setError("V2同期へのログイン・初期化が完了するまで編集できません。");
+      if (enabled) setError("Applicationの初期化・復旧が完了するまで編集できません。");
       return enabled; // V2 must not fall back to mutating V1 state.
     }
     void action(controller).then(publish).catch((reason) => {
@@ -312,8 +374,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     }
     const controller = controllerRef.current;
     if (!controller) {
-      setError("V2同期へのログイン・初期化が完了するまで編集できません。");
-      appAlert("保存できません", "V2同期へのログイン・初期化が完了するまで編集できません。入力内容を保持したまま再試行してください。");
+      setError("Applicationの初期化・復旧が完了するまで編集できません。");
+      appAlert("保存できません", "Applicationの初期化・復旧が完了するまで編集できません。入力内容は保持してください。");
       return false;
     }
     const succeeded = await confirmedSave(
@@ -371,6 +433,74 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   };
   const signIn = async (email: string, password: string) => { setStatus("connecting"); setError(null); try { await signInWithEmailAndPassword(getFirebaseClient().auth, email.trim(), password); } catch (reason) { setStatus("signed-out"); setError(message(reason)); throw reason; } };
   const signUp = async (email: string, password: string) => { setStatus("connecting"); setError(null); try { await createUserWithEmailAndPassword(getFirebaseClient().auth, email.trim(), password); } catch (reason) { setStatus("signed-out"); setError(message(reason)); throw reason; } };
+  const readOwnershipTarget = async () => {
+    const adapter = adapterRef.current;
+    if (!adapter?.readRecoverySnapshot || !storeRef.current || activeLocalRef.current || repairRunningRef.current || localRecoveryModeRef.current)
+      throw new Error('取り込み前のaccount確認を実行できません。');
+    await adapter.connect();
+    const snapshot = await adapter.readRecoverySnapshot();
+    return { nodes: Object.fromEntries(snapshot.nodes.map(r => [r.value.id, r])), profile: { pinnedNote: snapshot.pinnedNote ?? null, features: snapshot.features ?? null } };
+  };
+  const reviewOwnership = async () => {
+    const controller = controllerRef.current, store = storeRef.current, local = localApplicationRef.current;
+    if (!controller || !store || !local || activeLocalRef.current) throw new Error('Accountの初期化が必要です。');
+    const scope = activeScopeRef.current;
+    const generation = repairGenerationRef.current;
+    await store.whenIdle();
+    if (!store.pendingOwnership) await controller.flush();
+    if (!store.pendingOwnership && store.outbox.length) throw new Error('通常同期の未送信変更があります。同期後に再試行してください。');
+    controller.pause('ownership');
+    try {
+      const target = await readOwnershipTarget();
+      if (generation !== repairGenerationRef.current || scope !== activeScopeRef.current) throw new Error('Accountが切り替わりました。');
+      let plan: OwnershipPlan;
+      if (store.pendingOwnership) {
+        const operations = store.outbox;
+        const audit = await adapterRef.current!.auditOutbox!(operations);
+        if (generation !== repairGenerationRef.current || scope !== activeScopeRef.current) throw new Error('Accountが切り替わりました。');
+        const receivedIds = (audit.receivedOperationIndexes ?? []).map(index => operations[index].opId);
+        plan = await store.reconfirmOwnership(target.nodes, target.profile, receivedIds);
+      } else {
+        for (const record of Object.values(target.nodes)) {
+          if (generation !== repairGenerationRef.current) throw new Error('Accountが切り替わりました。');
+          await store.receive(record);
+        }
+        if (target.profile.pinnedNote) await store.receivePinnedNote(target.profile.pinnedNote);
+        if (target.profile.features) await store.receiveFeatures(target.profile.features);
+        plan = store.prepareOwnership(local.store.anonymousSnapshot(local.scope), scope);
+        if (canonical(plan.target) !== canonical(target.nodes) || canonical(plan.targetProfile) !== canonical(target.profile))
+          throw new Error('Account snapshotの一致を確認できません。再試行してください。');
+      }
+      if (generation !== repairGenerationRef.current || scope !== activeScopeRef.current) throw new Error('Accountが切り替わりました。');
+      setOwnershipReview(plan); publish();
+    } catch (reason) { if (generation === repairGenerationRef.current && !store.pendingOwnership) await controller.resume(); throw reason; }
+  };
+  const commitOwnership = async (choices: Record<string, 'local' | 'account'>, confirmation?: { fingerprint: string; deletedIds: string[] }) => {
+    const plan = ownershipReview, store = storeRef.current, controller = controllerRef.current;
+    if (!plan || !store || !controller || plan.targetScope !== activeScopeRef.current) throw new Error('取り込みplanがありません。');
+    const generation = repairGenerationRef.current;
+    const target = await readOwnershipTarget();
+    if (generation !== repairGenerationRef.current || canonical(target.nodes) !== canonical(plan.target) || canonical(target.profile) !== canonical(plan.targetProfile))
+      throw new Error('確認後にAccount/Cloudが変わりました。最新状態で再確認してください。');
+    await store.commitOwnership(plan, choices, confirmation);
+    if (generation !== repairGenerationRef.current) return;
+    setOwnershipReview(null); publish(); await controller.resume(); publish();
+  };
+  const skipOwnership = async () => {
+    const store = storeRef.current, local = localApplicationRef.current, controller = controllerRef.current;
+    if (!store || !local || activeLocalRef.current) return;
+    const generation = repairGenerationRef.current;
+    if (store.pendingOwnership) throw new Error('部分適用は破棄できません。最新状態で再確認してください。');
+    await store.skipOwnership(ownershipReview?.source ?? local.store.anonymousSnapshot(local.scope), activeScopeRef.current);
+    if (generation !== repairGenerationRef.current) return;
+    setOwnershipReview(null); publish(); await controller?.resume();
+  };
+  const closeOwnershipReview = async () => { setOwnershipReview(null); if (!storeRef.current?.pendingOwnership) await controllerRef.current?.resume(); };
+  const textController = () => {
+    if (repairRunningRef.current || localRecoveryModeRef.current) throw new Error('同期復旧中はテキストを保存できません。入力は保持されています。');
+    if (!controllerRef.current) throw new Error('Applicationの初期化・復旧が完了するまでテキスト編集できません。');
+    return controllerRef.current;
+  };
   return {
     devNetwork: enabled && process.env.EXPO_PUBLIC_FIREBASE_EMULATOR === "true" ? {
       paused: networkPaused,
@@ -383,10 +513,22 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       },
     } : undefined,
     configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, legacyPinnedNoteCandidates,
+    applicationState, activeScope: activeScopeRef.current, ownershipReview, ownershipPendingCount, ownershipRecovery,
+    reviewOwnership, commitOwnership, skipOwnership, closeOwnershipReview,
     selfRepairProgress, repairSync,
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),
     commandConfirmed,
+    ensureRoutineRoot: async () => {
+      const controller = textController(), scope = activeScopeRef.current;
+      const id = await controller.ensureRoutineRoot();
+      if (controller !== controllerRef.current || scope !== activeScopeRef.current) throw new Error('編集先のアカウントが切り替わりました。');
+      publish(); return { id, nodes: storeRef.current!.nodes };
+    },
+    beginTextEdit: (options: Omit<SessionOptions, 'id' | 'now' | 'scope'>) => textController().beginTextEdit({ ...options, scope: activeScopeRef.current }),
+    prepareTextEdit: (session: TextSession, text: string) => textController().prepareTextEdit(session, text),
+    discardTextEdit: (session: TextSession) => controllerRef.current?.discardTextEdit(session),
+    commitTextEdit: async (plan: TextPlan, confirmation?: { fingerprint: string; deletedIds: string[] }) => { await textController().saveTextEdit(plan, confirmation); publish(); },
     updatePinnedNote: (body: string) => run((controller) => controller.updatePinnedNote(body)),
     updateIdeasEnabled: (value: boolean, type: "update" | "import" = "update") => run((controller) => controller.updateIdeasEnabled(value, type)),
     adoptLegacyPinnedNoteCandidate: (candidate: LegacyPinnedNoteCandidate) => run((controller) => controller.adoptLegacyPinnedNoteCandidate(candidate)),
@@ -397,13 +539,6 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
 }
 
 export function useTaskMemoSync(history: NodeHistory, ready: boolean, onHistory: (history: NodeHistory) => void, initialPinnedNote: PinnedNote = { body: "", updatedAt: new Date(0) }, onPinnedNote: (body: string) => void = () => undefined, initialIdeasEnabled = false, onIdeasEnabled: (value: boolean) => void = () => undefined) {
-  const firebase = firebaseConfiguration();
-  const environment = firebase.environment;
-  const useV2 = isConfiguredV2SyncEnabled(environment, process.env.EXPO_PUBLIC_SYNC_V2_ENABLED, firebase.config !== null);
-  const v1 = useFirebaseSync(history.nodes, ready, (nodes) => {
-    const next = reconcileSyncedNodeHistory(history, nodes);
-    onHistory({ ...next, nodes: normalizeLegacyRanks(next.nodes) });
-  }, !useV2);
-  const v2 = useFirebaseV2Sync(history, ready, onHistory, useV2, initialPinnedNote, onPinnedNote, initialIdeasEnabled, onIdeasEnabled);
-  return useV2 ? { ...v2, protocol: 2 as const } : { ...v1, devNetwork: undefined, protocol: 1 as const, legacyPinnedNoteCandidates: [] as LegacyPinnedNoteCandidate[], command: () => false, commandConfirmed: async () => false, updatePinnedNote: () => false, updateIdeasEnabled: () => false, adoptLegacyPinnedNoteCandidate: () => false, discardLegacyPinnedNoteCandidate: () => false, importLegacyPinnedNoteCandidates: () => false, undo: () => false, redo: () => false };
+  const v2 = useFirebaseV2Sync(history, ready, onHistory, true, initialPinnedNote, onPinnedNote, initialIdeasEnabled, onIdeasEnabled);
+  return { ...v2, protocol: 2 as const };
 }

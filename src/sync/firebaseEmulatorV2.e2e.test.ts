@@ -1,5 +1,5 @@
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { doc, getDoc, runTransaction, setDoc, Timestamp, type Firestore } from "firebase/firestore";
+import { collection, getDocs, doc, getDoc, runTransaction, setDoc, Timestamp, type Firestore } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
@@ -37,6 +37,97 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('provisions a fresh system Routine area concurrently using strict V2 receipts without rewriting the winner', async () => {
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const stores = await Promise.all(['routine-A', 'routine-Z'].map(async deviceId => {
+      const persistence = new MemoryPersistence();
+      Object.assign(persistence, { writeAtomic: async (expected: string | null, value: string) => {
+        if (persistence.committed !== expected || persistence.journal) throw new Error('CAS'); persistence.committed = value;
+      } });
+      return TaskMemoV2ApplicationStore.open(persistence, [], { deviceId });
+    }));
+    let arrivals = 0, release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const controllers = stores.map(store => {
+      const api = createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true });
+      const original = api.readRecoverySnapshot!.bind(api);
+      api.readRecoverySnapshot = async () => {
+        const snapshot = await original(); if (++arrivals === 2) release(); await barrier; return snapshot;
+      };
+      return new TaskMemoV2SyncController(store, api);
+    });
+    try {
+      await Promise.all(controllers.map(controller => controller.start()));
+      expect(await Promise.all(controllers.map(controller => controller.ensureRoutineRoot()))).toEqual(['system-routine', 'system-routine']);
+      await waitFor(() => stores.every(store => !store.outbox.length));
+      const roots = await getDocs(collection(db, 'users/owner/nodesV2'));
+      expect(roots.size).toBe(1);
+      const winner = roots.docs[0].data().record;
+      expect(winner.value.categoryKind).toBe('routineRoot');
+      for (const store of stores) {
+        expect(store.versionedNode('system-routine')).toEqual(winner);
+        expect(store.historyDepths.past).toBe(0);
+        await store.undo(); expect(store.nodes[0].deletedAt).toBeNull();
+      }
+      const receipts = await getDocs(collection(db, 'users/owner/syncOperationsV2'));
+      const creates = receipts.docs.map(snapshot => snapshot.data()).filter(data => data.operation.targetNodeId === 'system-routine');
+      expect(creates).toHaveLength(2);
+      expect(creates.filter(data => data.acknowledgement.result === 'applied')).toHaveLength(1);
+      expect(creates.filter(data => data.acknowledgement.result === 'superseded')).toHaveLength(1);
+      expect((await getDoc(doc(db, 'users/owner/syncMetadataV2/compatibility'))).data()).toEqual(v2Gate);
+    } finally { controllers.forEach(controller => controller.stop()); }
+  });
+
+  it('automatically adopts an empty verified Account through strict receipts and preserves the compatibility gate', async () => {
+    const source = { scope: 'anonymous', nodes: { initial: { id: 'initial', type: 'category', title: 'Initial', parentId: null, sortKey: 'a0',
+      createdAt: now(1).toISOString(), updatedAt: now(1).toISOString(), deletedAt: null } }, profile: { body: '', ideasEnabled: false } };
+    for (const uid of ['owner', 'unprovisioned']) {
+      const persistence = new MemoryPersistence();
+      Object.assign(persistence, { writeAtomic: async (expected: string | null, value: string) => {
+        if (persistence.committed !== expected) throw new Error('CAS'); persistence.committed = value;
+      } });
+      const store = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: `initial-${uid}` });
+      const db = environment.authenticatedContext(uid).firestore() as unknown as Firestore;
+      const adapter = createFirebaseSyncAdapter(db, uid, 'test', { emulator: true });
+      const options = { initialOwnership: { source: () => source, targetScope: uid } };
+      const sync = new TaskMemoV2SyncController(store, adapter, () => {}, options);
+      await sync.start();
+      if (uid === 'owner') {
+        sync.stop();
+        expect(store.nodes[0].title).toBe('Initial'); expect(store.historyDepths.past).toBe(1);
+        expect((await adapter.readRecoverySnapshot!()).receiptDocumentCount).toBe(1);
+        const restart = new TaskMemoV2SyncController(await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: `initial-${uid}` }), adapter, () => {}, options);
+        await restart.start(); restart.stop();
+        expect((await adapter.readRecoverySnapshot!()).receiptDocumentCount).toBe(1);
+      } else {
+        expect(sync.state.phase).toBe('error'); expect(sync.state.lastError).toContain('compatibility');
+        expect(store.nodes).toEqual([]); expect(store.outbox).toEqual([]); sync.stop();
+        expect((await getDoc(doc(db, `users/${uid}/syncMetadataV2/compatibility`))).exists()).toBe(false);
+      }
+    }
+  });
+
+  it('ownership adoption rejects stale server state atomically and receipt retry stays idempotent', async () => {
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true });
+    await adapter.connect();
+    const op: SyncOperation = { opId: 'ownership:1', deviceId: 'ownership', localSeq: 1, targetNodeId: 'adoption', type: 'create', baseRevision: 0,
+      payload: { node: { id: 'adoption', type: 'category', title: 'Local', parentId: null, sortKey: 'a0' } },
+      createdAt: now(1).toISOString(), status: 'pending', attemptCount: 0, nextRetryAt: null, lastError: null,
+      ownership: { reconcileId: 'review:1', expectedCurrent: null } };
+    const { ownership: _ownership, ...ordinary } = op;
+    const remote = { ...ordinary, opId: 'cloud:1', deviceId: 'cloud', payload: { node: { ...op.payload.node as object, title: 'Cloud' } } };
+    await adapter.upload(remote);
+    await expect(adapter.upload(op)).rejects.toThrow();
+    const snapshot = await adapter.readRecoverySnapshot!();
+    expect(snapshot.nodes[0].value.title).toBe('Cloud');
+    const fresh = { ...op, opId: 'ownership:2', localSeq: 2, baseRevision: snapshot.nodes[0].revision,
+      ownership: { reconcileId: 'review:2', expectedCurrent: snapshot.nodes[0] } };
+    const accepted = await adapter.upload(fresh);
+    expect(await adapter.upload(fresh)).toEqual(accepted);
+    expect((await adapter.readRecoverySnapshot!()).nodes[0].value.title).toBe('Local');
+  });
 
   it("connects and reads the server snapshot after acquiring the production repair lease", async () => {
     const uid = "owner";

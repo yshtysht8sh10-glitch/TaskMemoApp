@@ -1,0 +1,3 @@
+[
+  { "id": "legacy-deleted", "type": "memo", "parentId": null, "sortKey": "c", "title": "匿名化した削除メモ", "body": "", "dueAt": null, "duePreset": "none", "status": "active", "completedAt": null, "createdAt": "2026-09-01T00:00:00.000Z", "updatedAt": "2026-09-10T00:00:00.000Z", "deletedAt": "2026-09-11T00:00:00.000Z" }
+]

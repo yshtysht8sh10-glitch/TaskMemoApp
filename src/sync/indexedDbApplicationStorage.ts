@@ -157,6 +157,15 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
     }
   }
 
+  async writeAtomic(expectedCommitted: string | null, value: string) {
+    validateEnvelope(value);
+    await this.update(current => {
+      if (current.committed !== expectedCommitted || current.journal !== null)
+        throw new Error('保存先が別の操作で更新されました。再読込して確認してください。');
+      return { ...current, committed: value, journal: null };
+    });
+  }
+
   async loadCommitted() { return (await this.read())?.committed ?? null; }
   async loadJournal() { return (await this.read())?.journal ?? null; }
   async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }

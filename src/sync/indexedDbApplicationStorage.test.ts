@@ -7,6 +7,7 @@ import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { observePendingJournalReceipts } from "./recovery";
 import type { SyncAdapter } from "./types";
 import type { MemoNode } from "../models/node";
+import { serializeText } from '../textFormat/session';
 
 const storage = vi.hoisted(() => new Map<string, string>());
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
@@ -24,6 +25,40 @@ const envelope = (nodes: number, outbox: number) => JSON.stringify({
 describe("IndexedDB V2 migration", () => {
   let factory: IDBFactory;
   beforeEach(() => { storage.clear(); factory = new IDBFactory(); });
+
+  it('text atomic CAS commits only once and never changes legacy storage', async () => {
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open('text-account', factory);
+    const first = envelope(2, 0), second = envelope(3, 1), third = envelope(4, 2);
+    await persistence.writeAtomic(null, first);
+    const originalLegacy = new Map(storage);
+    const results = await Promise.allSettled([persistence.writeAtomic(first, second), persistence.writeAtomic(first, third)]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+    expect(await persistence.loadJournal()).toBeNull(); expect(storage).toEqual(originalLegacy);
+    const reopened = await IndexedDbTaskMemoApplicationJournal.open('text-account', factory);
+    expect([second, third]).toContain(await reopened.loadCommitted());
+  });
+
+  it('text save transaction abort preserves Domain/History/Outbox after reopening IndexedDB', async () => {
+    const persistence = await IndexedDbTaskMemoApplicationJournal.open('text-account', factory);
+    const at = new Date('2026-10-02T03:00:00.000Z');
+    const memo: MemoNode = { id: 'memo', type: 'memo', parentId: null, sortKey: 'a0', title: 'before', body: '', dueAt: null, duePreset: 'none', status: 'active', completedAt: null, createdAt: at, updatedAt: at, deletedAt: null };
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [memo], { deviceId: 'device-a', now: () => at });
+    const session = store.beginTextEdit({ scope: 'text-account', view: 'tree', timeZone: 'Asia/Tokyo' });
+    const plan = store.prepareTextEdit(session, serializeText(session).replace('before', 'after'));
+    const original = await persistence.loadCommitted();
+    const transaction = FakeIDBDatabase.prototype.transaction;
+    const failure = vi.spyOn(FakeIDBDatabase.prototype, 'transaction').mockImplementation(function (this: IDBDatabase, names, mode, options) {
+      const tx = transaction.call(this, names, mode, options);
+      if (mode === 'readwrite') queueMicrotask(() => tx.abort());
+      return tx;
+    });
+    try { await expect(store.commitTextEdit(plan, { fingerprint: plan.fingerprint, deletedIds: [] })).rejects.toThrow(); }
+    finally { failure.mockRestore(); }
+    expect(await persistence.loadCommitted()).toBe(original); expect(await persistence.loadJournal()).toBeNull();
+    const reopened = await TaskMemoV2ApplicationStore.open(await IndexedDbTaskMemoApplicationJournal.open('text-account', factory), [], { deviceId: 'ignored' });
+    expect(reopened.nodes[0].title).toBe('before'); expect(reopened.historyDepths).toEqual({ past: 0, future: 0 }); expect(reopened.outbox).toEqual([]);
+  });
 
   it("normal startup preserves Application, Journal, Outbox, Undo/Redo and profile across failed migration and restarts", async () => {
     const legacy = new TaskMemoV2ApplicationJournal("account");

@@ -1,3 +1,4 @@
+import { WEB_FORM_MIN_FONT_SIZE } from '../theme/formTypography';
 /** Called synchronously by a user click; do not await before writeText. */
 export function copyDiagnosticText(text: string, clipboard?: Pick<Clipboard, 'writeText'>): Promise<void> {
   if (!clipboard) return Promise.reject(new Error('Clipboard unavailable'));
@@ -47,7 +48,7 @@ export function mountDiagnosticCopyPanel(
         field = doc.createElement('textarea');
         field.readOnly = true;
         field.setAttribute('aria-label', '診断JSON全文');
-        field.style.cssText = 'display:block;width:100%;height:120px;font-size:16px;box-sizing:border-box;user-select:text;-webkit-user-select:text';
+        field.style.cssText = `display:block;width:100%;height:120px;font-size:${WEB_FORM_MIN_FONT_SIZE}px;box-sizing:border-box;user-select:text;-webkit-user-select:text`;
         panel.append(field);
       }
       field.value = snapshot;

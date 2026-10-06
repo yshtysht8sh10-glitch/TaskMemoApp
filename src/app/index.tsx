@@ -1,3 +1,9 @@
+import { FormTextInput } from '../components/FormTextInput';
+import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
+import { TextEditScreen, TextViewScreen } from '@/components/TextWorkspace';
+import { listEditProjection, listTextSnapshot, treeTextSnapshot, type TextViewSnapshot, type ListTextGroup } from '@/textFormat/presentation';
+import type { TextSession } from '@/textFormat/syntax';
+import { flattenVisibleNodes, UNASSIGNED_GROUP_ID } from '@/domain/treeView';
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
@@ -9,7 +15,6 @@ import {
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -61,6 +66,7 @@ import {
   undoNodeHistory,
 } from "@/domain/nodeHistory";
 import { mockNodes } from "@/data/mockNodes";
+import { readLegacyMigrationSource } from '@/services/legacyMigrationRecovery';
 import type {
   DuePreset,
   MemoNode,
@@ -76,6 +82,7 @@ import {
   saveNodes,
 } from "@/services/nodeStorage";
 import {
+  exportMigrationSourceToFile,
   exportNodesToFile,
   pickAndParseNodeBackup,
 } from "@/services/nodeTransfer";
@@ -111,11 +118,11 @@ import { editorKeyboardDismissMode } from "@/utils/editorScroll";
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
+import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
 import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
   clearRoutineCompletion,
-  isValidRepeatRule,
   localDateKey,
   parseLocalDateKey,
   repeatRuleLabel,
@@ -212,6 +219,8 @@ export default function HomeScreen() {
         ).map((group) => group.id),
       ),
   );
+  const [textEdit, setTextEdit] = useState<{ session: TextSession; excluded: number } | null>(null);
+  const [textView, setTextView] = useState<TextViewSnapshot | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [authorizationRequestId, setAuthorizationRequestId] = useState<
@@ -260,11 +269,20 @@ export default function HomeScreen() {
   const sync = useTaskMemoSync(history, ready, setHistory, { body: pinnedNote, updatedAt: pinnedNoteUpdatedAt }, (body) => {
     setPinnedNoteUpdatedAt(new Date());
     setPinnedNote(body);
-    void savePinnedNote(body);
+
   }, ideasEnabled, (value) => {
     setIdeasEnabled(value);
-    void saveFeaturePreferences({ ideasEnabled: value });
+
   });
+  const openTextEdit = async (entrance: 'tree' | 'list', groups: ListTextGroup[] = []) => {
+    try {
+      const editNodes = entrance === 'tree' ? (await sync.ensureRoutineRoot()).nodes : nodes;
+      const projection = listEditProjection(nodes, groups);
+      const orderedIds = entrance === 'tree' ? flattenVisibleNodes(editNodes, new Set([UNASSIGNED_GROUP_ID, ...editNodes.filter(n => n.type === 'category').map(n => n.id)]), true).filter(row => !row.virtual).map(row => row.node.id) : projection.orderedIds;
+      const session = sync.beginTextEdit({ view: entrance, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, systemRegions: entrance === 'tree', orderedIds, listGroups: projection.listGroups });
+      setTextEdit({ session, excluded: entrance === 'list' ? projection.excluded : 0 });
+    } catch (reason) { appAlert('テキスト編集を開けません', reason instanceof Error ? reason.message : String(reason)); }
+  };
   useEffect(() => {
     const traceId = currentTreeTraceId();
     treeDiagnosticLog("hydrate/reload-start", {
@@ -629,7 +647,19 @@ export default function HomeScreen() {
       style={styles.safeArea}
       edges={["top", "right", "bottom", "left"]}
     >
+      {textEdit && <TextEditScreen session={textEdit.session} excluded={textEdit.excluded} prepare={sync.prepareTextEdit} commit={sync.commitTextEdit} discard={sync.discardTextEdit} onClose={() => setTextEdit(null)} />}
+      {textView && <TextViewScreen snapshot={textView} onClose={() => setTextView(null)} />}
       <StatusBar style={resolved === "dark" ? "light" : "dark"} />
+      {sync.applicationState === 'error' && <View accessibilityRole="alert" style={{ padding: 12, backgroundColor: colors.surfaceAlt }}>
+        <Text style={{ color: colors.danger, fontWeight: 'bold' }}>編集基盤を開けません · 原本を保持して停止しています</Text>
+        <Text selectable style={{ color: colors.text }}>{sync.error}</Text>
+        {!sync.user && <Pressable accessibilityRole="button" onPress={() => {
+          void readLegacyMigrationSource().then(exportMigrationSourceToFile).catch(reason => appAlert('原本を書き出せません', String(reason)));
+        }} style={{ paddingVertical: 10 }}><Text style={{ color: colors.text }}>V1原本を書き出す（復旧用・データ変更なし）</Text></Pressable>}
+      </View>}
+      {!!sync.user && (sync.ownershipPendingCount > 0 || sync.ownershipRecovery) && <Pressable accessibilityRole="button" onPress={() => setSyncOpen(true)} style={{ padding: 10, backgroundColor: colors.surfaceAlt }}>
+        <Text style={{ color: colors.text }}>{sync.ownershipRecovery ? 'ローカル取り込みの復旧が必要です · 確認する' : 'この端末に未取り込みのローカル変更があります · 確認する'}</Text>
+      </Pressable>}
       <View style={styles.header}>
         <View>
           <View style={styles.titleRow}>
@@ -705,6 +735,14 @@ export default function HomeScreen() {
       <View style={styles.tree} pointerEvents={ready ? "auto" : "none"}>
         {view === "tree" ? (
           <NodeTree
+            onAddRoutine={() => {
+              void sync.ensureRoutineRoot().then(({ id: parentId }) => {
+                setCreateOpen(false); setMenuNode(null);
+                changeEditor({ type: 'memo', memoType: 'task', parentId }, 'create-routine');
+              }).catch(reason => appAlert('ルーティーンを開けません', reason instanceof Error ? reason.message : String(reason)));
+            }}
+            onTextEdit={() => openTextEdit('tree')}
+            onTextView={(rows) => setTextView(treeTextSnapshot(nodes, rows, new Date()))}
             revealMemoId={revealMemoId}
             onMemoRevealed={() => setRevealMemoId(null)}
             nodes={displayNodes}
@@ -765,6 +803,8 @@ export default function HomeScreen() {
           />
         ) : view === "deadline" ? (
           <DeadlineView
+            onTextEdit={(groups) => openTextEdit('list', groups)}
+            onTextView={(groups, now) => setTextView(listTextSnapshot(nodes, groups, now))}
             revealMemoId={revealMemoId}
             onMemoRevealed={() => setRevealMemoId(null)}
             nodes={displayNodes}
@@ -1400,7 +1440,13 @@ export default function HomeScreen() {
           <View style={styles.buildInfo}>
             <Text style={styles.buildInfoText}>Version: {appBuildInfo.version}</Text>
             <Text style={styles.buildInfoText}>Build: {appBuildInfo.build}</Text>
-            <Text style={styles.buildInfoText}>Sync: {appBuildInfo.sync}</Text>
+            <Text selectable style={styles.buildInfoText}>Commit: {appBuildInfo.fullCommit}</Text>
+            <Text selectable style={styles.buildInfoText}>Release: {appBuildInfo.releaseId ?? 'unknown'}</Text>
+            {Platform.OS === "web" && <>
+              <Text selectable style={styles.buildInfoText}>Hosting: {typeof window !== 'undefined' ? window.location.origin : 'unknown'}</Text>
+              <Text style={styles.buildInfoText}>Display mode: {typeof window !== 'undefined' && ((window.navigator as Navigator & { standalone?: boolean }).standalone === true || window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser'}</Text>
+            </>}
+            <Text style={styles.buildInfoText}>Sync: V{sync.protocol}</Text>
             <Text style={styles.buildInfoText}>Environment: {appBuildInfo.environment}</Text>
           </View>
           {Platform.OS === "web" && (
@@ -1418,6 +1464,8 @@ export default function HomeScreen() {
       >
         <SyncAccountPanel
           configured={sync.configured}
+          applicationState={sync.applicationState}
+          localActive={sync.activeScope.startsWith('local:')}
           environment={sync.environment}
           configurationError={sync.configurationError}
           user={sync.user}
@@ -1429,6 +1477,8 @@ export default function HomeScreen() {
           protocol={sync.protocol}
           devNetwork={sync.devNetwork}
         />
+        <OwnershipReconcilePanel key={`${sync.activeScope}:${sync.ownershipReview?.fingerprint ?? ''}`} count={sync.ownershipPendingCount} recovery={sync.ownershipRecovery} plan={sync.ownershipReview}
+          review={sync.reviewOwnership} commit={sync.commitOwnership} skip={sync.skipOwnership} close={sync.closeOwnershipReview} />
       </Sheet>
       <Sheet
         visible={externalAiOpen}
@@ -1801,7 +1851,7 @@ function EditorModal({
   );
   const [repeatFrequency, setRepeatFrequency] = useState<
     RepeatFrequency | "none"
-  >(initialMemo?.repeatRule?.frequency ?? "none");
+  >(initialRoutineFrequency(initialMemo, !!routineCategory));
   const [repeatInterval, setRepeatInterval] = useState(
     String(initialMemo?.repeatRule?.interval ?? 1),
   );
@@ -1870,13 +1920,11 @@ function EditorModal({
         repeatRule: null,
       });
     if (routineCategory) {
-      const interval = Number(repeatInterval);
-      const repeatRule =
-        repeatFrequency === "none"
-          ? null
-          : { frequency: repeatFrequency, interval, startsOn: repeatStartsOn };
-      if (repeatRule && !isValidRepeatRule(repeatRule)) {
-        if (close) appAlert("入力エラー", "間隔は1以上の整数、開始日は YYYY-MM-DD 形式で入力してください。");
+      let repeatRule;
+      try {
+        repeatRule = routineRuleForSave(repeatFrequency, repeatInterval, repeatStartsOn);
+      } catch (error) {
+        if (close) appAlert("入力エラー", (error as Error).message);
         return false;
       }
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(routineTime)) {
@@ -1986,7 +2034,7 @@ function EditorModal({
             <Text style={styles.label}>
               {editor?.type === "memo" ? "タイトル" : "Category名"} *
             </Text>
-            <TextInput
+            <FormTextInput
               value={title}
               accessibilityLabel={editor?.type === "memo" ? "タイトル" : "Category名"}
               onChangeText={setTitle}
@@ -1996,7 +2044,7 @@ function EditorModal({
             {editor?.type === "memo" && (
               <>
                 <Text style={styles.label}>自由記述</Text>
-                <TextInput
+                <FormTextInput
                   nativeID="editor-body-input"
                   value={body}
                   accessibilityLabel="自由記述"
@@ -2016,7 +2064,6 @@ function EditorModal({
                     <View style={styles.chips}>
                       {(
                         [
-                          { key: "none", label: "未設定" },
                           { key: "day", label: "日" },
                           { key: "week", label: "週" },
                           { key: "month", label: "月" },
@@ -2044,12 +2091,12 @@ function EditorModal({
                     </View>
                     {repeatFrequency === "none" ? (
                       <Text style={styles.lockedDue}>
-                        繰り返し未設定のMemoは期限一覧へ発生しません。
+                        繰り返し設定が必要です。日／週／月／年を選択してください。
                       </Text>
                     ) : (
                       <>
                         <Text style={styles.label}>間隔</Text>
-                        <TextInput
+                        <FormTextInput
                           value={repeatInterval}
                           onChangeText={setRepeatInterval}
                           keyboardType="number-pad"

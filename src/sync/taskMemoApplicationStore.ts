@@ -1,13 +1,20 @@
+import { findRoutineRoot, newRoutineRoot, isRoutineRoot, assertRoutineRootTransition } from '../domain/routineRoot';
 import type { NodeHistory } from "../domain/nodeHistory";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
 import { recordSortKeyPass } from "./sortKeyDiagnostics";
 import type { Node } from "../models/node";
-import { assertSafeNodeTransition } from "./destructiveSyncGuard";
+import { assertSafeNodeTransition, assertSafeTextTransition } from "./destructiveSyncGuard";
+import { createTextSession, type SessionOptions } from "../textFormat/session";
+import { planTextEdit } from "../textFormat/planner";
+import { canonical, type TextChange, type TextPlan, type TextSession } from "../textFormat/syntax";
 import { normalizeNodeSortKeys } from "../domain/sortKeys";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { nodeFromV2Value, nodeToV2Value } from "./nodeV2Codec";
 import { candidateForFeaturesOperation, candidateForOperation, candidateForPinnedNoteOperation, chooseVersionedFeatures, chooseVersionedNode, chooseVersionedPinnedNote } from "./revisionModel";
 import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
+import { decodeLegacyNodes } from './legacyLocalCodec';
+import { integrateOwnershipSortKeys } from './ownershipSortKeys';
+import { pendingAnonymousChanges, planOwnershipReconcile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
 
 type NodeHistoryTarget = {
   resourceType: "node";
@@ -29,7 +36,10 @@ type PinnedNoteHistoryTarget = {
   undoOpId?: string;
   undoRevision?: number;
 };
-type HistoryTarget = NodeHistoryTarget | PinnedNoteHistoryTarget;
+type FeaturesHistoryTarget = Omit<PinnedNoteHistoryTarget, 'resourceType' | 'resourceId' | 'before' | 'after'> & {
+  resourceType: 'features'; resourceId: 'features'; before: { ideasEnabled: boolean }; after: { ideasEnabled: boolean };
+};
+type HistoryTarget = NodeHistoryTarget | PinnedNoteHistoryTarget | FeaturesHistoryTarget;
 type StoredHistoryEntry = {
   commandId: string;
   label: string;
@@ -38,6 +48,10 @@ type StoredHistoryEntry = {
 };
 export type LegacyPinnedNoteCandidate = { body: string; updatedAt: string };
 type Envelope = {
+  ownershipLedgers?: Record<string, OwnershipLedger>;
+  ownershipTransaction?: { plan: OwnershipPlan; choices: Record<string, 'local' | 'account'>; opIds: string[]; appliedIds: string[]; history: StoredHistoryEntry; state: 'uploading' | 'conflict' };
+  ownershipRecoverySeed?: NonNullable<Envelope['ownershipTransaction']>;
+  ownership?: import('./localApplication').LocalOwnership;
   version: 2;
   deviceId: string;
   nextLocalSeq: number;
@@ -57,6 +71,9 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const PINNED_NOTE_HISTORY_COALESCE_MS = 1_000;
 
 export class TaskMemoV2ApplicationStore {
+  private ownershipPlans = new Map<string, OwnershipPlan>();
+  private textSessionSequence = 0;
+  private readonly textSessions = new Map<string, TextSession>();
   // All envelope mutations share one WAL. Serialize the entire read/modify/write,
   // not just persistence, so listener acknowledgements cannot overwrite UI edits.
   private mutations: Promise<unknown> = Promise.resolve();
@@ -145,23 +162,224 @@ export class TaskMemoV2ApplicationStore {
   /** Wait for edits already accepted by the UI before taking a recovery snapshot. */
   whenIdle() { return this.serialize(async () => undefined); }
   get deviceId() { return this.envelope.deviceId; }
+  get pendingOwnership() { const pending = this.envelope.ownershipTransaction ?? this.envelope.ownershipRecoverySeed; return pending ? JSON.parse(JSON.stringify(pending)) as NonNullable<Envelope['ownershipTransaction']> : undefined; }
+  anonymousSnapshot(scope: string): AnonymousSnapshot {
+    if (this.envelope.ownership?.scope !== scope) throw new Error('Anonymous所有者が一致しません。');
+    return JSON.parse(JSON.stringify({ scope, nodes: Object.fromEntries(Object.values(this.envelope.domain).map(r => [r.value.id, r.value])), profile: { body: this.pinnedNote.body, ideasEnabled: this.ideasEnabled } }));
+  }
+  prepareOwnership(source: AnonymousSnapshot, targetScope: string) {
+    const ledger = this.envelope.ownershipLedgers?.[canonical([source.scope, targetScope])];
+    const plan = planOwnershipReconcile(source, this.envelope.domain, ledger, targetScope,
+      { pinnedNote: this.envelope.profile.pinnedNote.synced, features: this.envelope.profile.features.synced });
+    this.ownershipPlans.set(plan.fingerprint, JSON.parse(JSON.stringify(plan)));
+    return plan;
+  }
+  hasOwnershipCheckpoint(sourceScope: string, targetScope: string) {
+    return Boolean(this.envelope.ownershipLedgers?.[canonical([sourceScope, targetScope])]);
+  }
+  unreconciledIds(source: AnonymousSnapshot, targetScope: string) {
+    return pendingAnonymousChanges(source, this.envelope.ownershipLedgers?.[canonical([source.scope, targetScope])], targetScope);
+  }
+  async skipOwnership(source: AnonymousSnapshot, targetScope: string) {
+    return this.serialize(async () => {
+      if (this.pendingOwnership) throw new Error('取り込み復旧が必要です。');
+      const ledger: OwnershipLedger = { sourceScope: source.scope, targetScope, source: JSON.parse(JSON.stringify(source)), ancestors: {}, state: 'skipped' };
+      await this.commit({ ...this.envelope, ownershipLedgers: { ...this.envelope.ownershipLedgers, [canonical([source.scope, targetScope])]: ledger } }, true);
+      this.ownershipPlans.clear();
+    });
+  }
+  async markOwnershipConflict() {
+    return this.serialize(async () => {
+      if (this.envelope.ownershipTransaction) await this.commit({ ...this.envelope, ownershipTransaction: { ...this.envelope.ownershipTransaction, state: 'conflict' } }, true);
+    });
+  }
+  async reconfirmOwnership(observed: Record<string, VersionedNode>, targetProfile: OwnershipPlan['targetProfile'], receivedIds: string[] = []) {
+    return this.serialize(async () => {
+      const transaction = this.pendingOwnership;
+      if (!transaction) throw new Error('復旧対象がありません。');
+      transaction.appliedIds = [...new Set([...transaction.appliedIds, ...receivedIds.filter(id => transaction.opIds.includes(id))])];
+      // Preserve optimistic source and all receipt evidence before projecting the
+      // current account snapshot. Only unacknowledged adoption targets can vanish.
+      const rejected = new Set(transaction.history.targets.filter(t => !transaction.appliedIds.includes(t.forwardOpId ?? '')).map(t => t.resourceId));
+      for (const id of Object.keys(this.envelope.domain)) {
+        if (!observed[id] && !rejected.has(id)) throw new Error('remote snapshotから既存account Nodeが欠落しました。復旧を停止しました。');
+      }
+      decodeLegacyNodes(JSON.stringify(Object.values(observed).map(r => r.value)));
+      const profile = { ...this.envelope.profile,
+        pinnedNote: { ...this.envelope.profile.pinnedNote, localBody: targetProfile.pinnedNote?.value.body ?? '', synced: targetProfile.pinnedNote, dirtySince: null },
+        features: { localIdeasEnabled: targetProfile.features?.value.ideasEnabled ?? false, synced: targetProfile.features, migrationPending: false } };
+      const next = { ...this.envelope, domain: observed, profile, sync: { ...this.envelope.sync, outbox: [] },
+        ownershipRecoveryBackups: [...((this.envelope as Envelope & { ownershipRecoveryBackups?: unknown[] }).ownershipRecoveryBackups ?? []),
+          { transaction, outbox: this.outbox }],
+        ownershipTransaction: undefined, ownershipRecoverySeed: { ...transaction, state: 'conflict' as const } };
+      await this.commit(next, true);
+      const plan = this.prepareOwnership(transaction.plan.source, transaction.plan.targetScope);
+      const appliedNodeIds = new Set(transaction.history.targets.filter(t => t.resourceType === 'node' && transaction.appliedIds.includes(t.forwardOpId ?? '')).map(t => t.resourceId));
+      plan.items = plan.items.filter(item => !appliedNodeIds.has(item.id));
+      const { fingerprint: _fingerprint, ...body } = plan;
+      plan.fingerprint = canonical(body);
+      this.ownershipPlans.set(plan.fingerprint, JSON.parse(JSON.stringify(plan)));
+      return plan;
+    });
+  }
+  async commitOwnership(plan: OwnershipPlan, choices: Record<string, 'local' | 'account'>, confirmation?: { fingerprint: string; deletedIds: string[] }) {
+    return this.serialize(async () => {
+      const trusted = this.ownershipPlans.get(plan.fingerprint);
+      if (!trusted || canonical(trusted) !== canonical(plan) || this.envelope.ownershipTransaction || this.outbox.length)
+        throw new Error('取り込みplanが無効、または未送信操作があります。');
+      const fresh = this.prepareOwnership(trusted.source, trusted.targetScope);
+      if (this.envelope.ownershipRecoverySeed) {
+        const applied = new Set(this.envelope.ownershipRecoverySeed.history.targets.filter(t => t.resourceType === 'node' && this.envelope.ownershipRecoverySeed!.appliedIds.includes(t.forwardOpId ?? '')).map(t => t.resourceId));
+        fresh.items = fresh.items.filter(i => !applied.has(i.id));
+        const { fingerprint: _fingerprint, ...body } = fresh; fresh.fingerprint = canonical(body);
+      }
+      if (fresh.fingerprint !== plan.fingerprint) throw new Error('確認後にアカウントが変更されました。');
+      const integrated = integrateOwnershipSortKeys(trusted, choices);
+      const domain = { ...this.envelope.domain }; let profile = this.envelope.profile;
+      const seed = this.envelope.ownershipRecoverySeed;
+      const operations: SyncOperation[] = []; const targets: HistoryTarget[] = seed?.history.targets.filter(t => seed.appliedIds.includes(t.forwardOpId ?? '')) ?? [];
+      const acceptedResources = new Set(targets.map(target => target.resourceType));
+      let seq = this.envelope.nextLocalSeq;
+      const reconcileId = `${this.deviceId}:ownership:${seq}`;
+      const operation = (id: string, payload: Record<string, unknown>, current: VersionedNode | VersionedPinnedNote | VersionedFeatures | null, targetType?: SyncOperation['targetType']): SyncOperation => ({
+        opId: `${this.deviceId}:${seq}`, deviceId: this.deviceId, localSeq: seq++, targetNodeId: id, ...(targetType ? { targetType } : {}), type: 'import', baseRevision: current?.revision ?? 0,
+        payload, createdAt: this.now().toISOString(), status: 'pending', attemptCount: 0, nextRetryAt: null, lastError: null, ownership: { reconcileId, expectedCurrent: current } });
+      for (const item of plan.items) {
+        if (item.kind === 'same') continue;
+        if (!['local', 'account'].includes(choices[item.id])) throw new Error('各変更の採用先を確認してください。');
+        if (choices[item.id] === 'account') continue;
+        if (item.id === '$profile') {
+          const desired = plan.source.profile;
+          if (!acceptedResources.has('pinnedNote') && desired.body !== profile.pinnedNote.localBody) {
+            const op = operation('pinnedNote', { pinnedNote: { body: desired.body } }, profile.pinnedNote.synced, 'pinnedNote');
+            const record = candidateForPinnedNoteOperation(op); operations.push(op);
+            targets.push({ resourceType: 'pinnedNote', resourceId: 'pinnedNote', before: { body: profile.pinnedNote.localBody }, after: { body: desired.body }, forwardOpId: op.opId, forwardRevision: record.revision });
+            profile = { ...profile, pinnedNote: { ...profile.pinnedNote, localBody: desired.body, synced: record, dirtySince: null, migrationPending: false } };
+          }
+          if (!acceptedResources.has('features') && desired.ideasEnabled !== profile.features.localIdeasEnabled) {
+            const op = operation('features', { features: { ideasEnabled: desired.ideasEnabled } }, profile.features.synced, 'features');
+            const record = candidateForFeaturesOperation(op); operations.push(op);
+            targets.push({ resourceType: 'features', resourceId: 'features', before: { ideasEnabled: profile.features.localIdeasEnabled }, after: { ideasEnabled: desired.ideasEnabled }, forwardOpId: op.opId, forwardRevision: record.revision });
+            profile = { ...profile, features: { localIdeasEnabled: desired.ideasEnabled, synced: record, migrationPending: false } };
+          }
+          continue;
+        }
+        if (item.kind === 'purged' || !item.local || item.local.purgedAt || item.account?.value.purgedAt) throw new Error('purged Nodeの採用/復活は禁止です。');
+        const adoptedValue = integrated.nodes[item.id];
+        const op = operation(item.id, { node: adoptedValue }, item.account);
+        op.type = item.local.deletedAt ? 'softDelete' : item.account ? 'update' : 'create';
+        const record = candidateForOperation(op); domain[item.id] = record; operations.push(op);
+        if (!isRoutineRoot(adoptedValue)) targets.push({ resourceType: 'node', resourceId: item.id, before: item.account?.value ?? null, after: adoptedValue, forwardOpId: op.opId, forwardRevision: record.revision });
+      }
+      decodeLegacyNodes(JSON.stringify(Object.values(domain).map(r => r.value)));
+      assertRoutineRootTransition(this.nodes, Object.values(domain).map(r => nodeFromV2Value(r.value)));
+      const deletedIds = operations.filter(op => op.targetType == null && (op.payload.node as SyncNodeValue).deletedAt &&
+        this.envelope.domain[op.targetNodeId] && !this.envelope.domain[op.targetNodeId].value.deletedAt && !this.envelope.domain[op.targetNodeId].value.purgedAt).map(op => op.targetNodeId);
+      if (deletedIds.length && (confirmation?.fingerprint !== plan.fingerprint || canonical([...confirmation.deletedIds].sort()) !== canonical([...deletedIds].sort())))
+        throw new Error('削除対象の明示確認が必要です。');
+      assertSafeTextTransition(this.nodes, Object.values(domain).map(r => nodeFromV2Value(r.value)), deletedIds);
+      const history: StoredHistoryEntry = { commandId: reconcileId, label: 'ローカルデータをアカウントへ取り込み', targets };
+      const next: Envelope = { ...this.envelope, domain, profile, nextLocalSeq: seq, sync: { ...this.envelope.sync, outbox: operations },
+        ownershipRecoverySeed: undefined,
+        ownershipTransaction: { plan: trusted, choices: { ...seed?.choices, ...choices }, opIds: [...(seed?.appliedIds ?? []), ...operations.map(op => op.opId)], appliedIds: seed?.appliedIds ?? [], history, state: 'uploading' } };
+      if (!operations.length) this.finishOwnership(next);
+      await this.commit(next, true); this.ownershipPlans.clear(); return operations;
+    });
+  }
+  private finishOwnership(next: Envelope) {
+    const transaction = next.ownershipTransaction!;
+    const plan = transaction.plan;
+    const previous = next.ownershipLedgers?.[canonical([plan.source.scope, plan.targetScope])];
+    const ancestors = { ...previous?.ancestors };
+    for (const item of plan.items) {
+      if (item.kind === 'same' || transaction.choices[item.id] === 'local') {
+        if (item.local) ancestors[item.id] = item.local;
+      } else delete ancestors[item.id];
+    }
+    for (const target of transaction.history.targets) if (target.resourceType === 'node' && plan.source.nodes[target.resourceId])
+      ancestors[target.resourceId] = target.after as SyncNodeValue;
+    next.ownershipLedgers = { ...next.ownershipLedgers, [canonical([plan.source.scope, plan.targetScope])]: {
+      sourceScope: plan.source.scope, targetScope: plan.targetScope, source: plan.source, ancestors, state: 'completed' } };
+    if (transaction.history.targets.length) next.history = { past: [...next.history.past, transaction.history].slice(-75), future: [] };
+    // Keep complete source/plan/receipt backup; no time-based cleanup.
+    (next as Envelope & { ownershipBackups?: unknown[] }).ownershipBackups = [...((next as Envelope & { ownershipBackups?: unknown[] }).ownershipBackups ?? []), transaction];
+    delete next.ownershipTransaction;
+  }
+
+  beginTextEdit(options: Omit<SessionOptions, 'id' | 'now'>): TextSession {
+    if (this.pendingOwnership) throw new Error('ローカル取り込みの復旧中です。');
+    const fixedNow = this.now();
+    const session = createTextSession(Object.values(this.envelope.domain), { ...options,
+      id: `${this.deviceId}-${fixedNow.getTime()}-${++this.textSessionSequence}-${Math.random().toString(36).slice(2)}`, now: fixedNow.toISOString() });
+    // Keep a private baseline so callers cannot mutate the commit preconditions.
+    this.textSessions.set(session.id, JSON.parse(JSON.stringify(session)) as TextSession);
+    return session;
+  }
+  discardTextEdit(session: TextSession) { this.textSessions.delete(session.id); }
+  prepareTextEdit(session: TextSession, text: string): TextPlan {
+    const trusted = this.textSessions.get(session.id);
+    if (!trusted || canonical(trusted) !== canonical(session)) throw new Error('編集sessionが無効です。');
+    return planTextEdit(JSON.parse(JSON.stringify(trusted)) as TextSession, text, Object.values(this.envelope.domain));
+  }
+  async commitTextEdit(plan: TextPlan, confirmation?: { fingerprint: string; deletedIds: string[] }) {
+    return this.serialize(async () => {
+      if (this.pendingOwnership) throw new Error('ローカル取り込みの復旧中です。');
+      const session = this.textSessions.get(plan.session.id);
+      if (!session || canonical(session) !== canonical(plan.session)) throw new Error('編集sessionが無効です。');
+      const fresh = planTextEdit(session, plan.document, Object.values(this.envelope.domain));
+      if (fresh.errors.length) throw new Error(fresh.errors.map(e => `${e.line}:${e.cell} ${e.message}`).join('\n'));
+      if (plan.errors.length || fresh.fingerprint !== plan.fingerprint || canonical(fresh.changes) !== canonical(plan.changes))
+        throw new Error('確認した変更planが変わりました。再確認してください。');
+      if (fresh.requiresConfirmation && (confirmation?.fingerprint !== fresh.fingerprint ||
+          canonical([...(confirmation?.deletedIds ?? [])].sort()) !== canonical([...fresh.deletedIds].sort())))
+        throw new Error('削除・大量変更の確認が必要です。');
+      if (!fresh.changes.length) { this.textSessions.delete(session.id); return []; }
+      const values = new Map(Object.values(this.envelope.domain).map(record => [record.value.id, record.value]));
+      fresh.changes.forEach(change => values.set(change.id, change.after));
+      assertSafeTextTransition(this.nodes, [...values.values()].map(nodeFromV2Value), fresh.deletedIds);
+      assertRoutineRootTransition(this.nodes, [...values.values()].map(nodeFromV2Value));
+      const operations = await this.applyCommand('update', this.nodes, 'テキスト編集を保存', true, this.now(), fresh.changes);
+      this.textSessions.delete(session.id);
+      return operations;
+    });
+  }
+
+  /** Infrastructure initialization: durable ordinary create, no user Undo entry. */
+  async ensureRoutineRoot() {
+    return this.serialize(async () => {
+      if (this.pendingOwnership) throw new Error('取り込みの完了/復旧を待ってください。');
+      const values = Object.values(this.envelope.domain).map(r => r.value);
+      const existing = findRoutineRoot(values);
+      if (existing) return existing.id;
+      const value = newRoutineRoot(values, this.now());
+      const after = [...this.nodes, nodeFromV2Value(value)];
+      assertSafeNodeTransition(this.nodes, after, 'create');
+      await this.applyCommand('create', after, 'Routine管理領域を用意', false, this.now(),
+        [{ id: value.id, type: 'create', before: null, after: value, fields: ['categoryKind'], line: 0 }]);
+      return value.id;
+    });
+  }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
     return this.serialize(() => this.commandSerialized(label, type, transform, options));
   }
 
   private async commandSerialized(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean }) {
+    if (this.pendingOwnership) throw new Error('取り込みの完了/復旧を待ってください。');
     const before = this.nodes;
     const after = transform(before);
     if (same(encodeNodes(before), encodeNodes(after))) return [];
     assertSafeNodeTransition(before, after, type);
+    assertRoutineRootTransition(before, after);
     return this.applyCommand(type, after, label, options.recordHistory !== false && type !== "purge", this.now());
   }
 
   async undo(now = this.now()) {
+    if (this.pendingOwnership) throw new Error('取り込みは部分適用/復旧中です。Undoできません。');
     return this.serialize(() => this.undoSerialized(now));
   }
   private async undoSerialized(now: Date) {
+    if (this.pendingOwnership) throw new Error('取り込みの復旧中です。');
     if (!this.envelope.history.past.length) return [];
     const entry = this.envelope.history.past.at(-1)!;
     if (!this.canReplay(entry, "undo")) return [];
@@ -169,9 +387,11 @@ export class TaskMemoV2ApplicationStore {
   }
 
   async redo(now = this.now()) {
+    if (this.pendingOwnership) throw new Error('取り込みは部分適用/復旧中です。Redoできません。');
     return this.serialize(() => this.redoSerialized(now));
   }
   private async redoSerialized(now: Date) {
+    if (this.pendingOwnership) throw new Error('取り込みの復旧中です。');
     if (!this.envelope.history.future.length) return [];
     const entry = this.envelope.history.future[0];
     if (!this.canReplay(entry, "redo")) return [];
@@ -247,6 +467,7 @@ export class TaskMemoV2ApplicationStore {
     return this.serialize(() => this.setIdeasEnabledSerialized(value, type, force));
   }
   private async setIdeasEnabledSerialized(value: boolean, type: SyncOperationType, force: boolean) {
+    if (this.pendingOwnership) throw new Error('取り込みの復旧中です。');
     const current = this.envelope.profile.features;
     if (!force && current.localIdeasEnabled === value) return undefined;
     const localSeq = this.envelope.nextLocalSeq;
@@ -287,6 +508,7 @@ export class TaskMemoV2ApplicationStore {
 
   async setPinnedNoteDraft(body: string, now = this.now()) {
     return this.serialize(async () => {
+      if (this.pendingOwnership) throw new Error('取り込みの復旧中です。');
       const current = this.envelope.profile.pinnedNote;
       if (current.localBody === body) return;
       const latest = this.envelope.history.past.at(-1);
@@ -383,8 +605,14 @@ export class TaskMemoV2ApplicationStore {
   }
   private async acknowledgeSerialized(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote, featuresRecord?: VersionedFeatures) {
     const operation = this.envelope.sync.outbox.find((item) => item.opId === opId);
+    if (operation?.ownership && (record ?? pinnedNoteRecord ?? featuresRecord)?.lastOpId !== opId)
+      throw new Error('取り込みoperationの受領値が一致しません。復旧が必要です。');
     let domain = this.envelope.domain;
-    if (record && record.lastDeviceId !== this.envelope.deviceId) {
+    if (record && operation?.type === 'create' && operation.targetNodeId === 'system-routine' &&
+        isRoutineRoot(operation.payload.node as SyncNodeValue) && domain[record.value.id]?.lastOpId === opId) {
+      findRoutineRoot([record.value]);
+      domain = { ...domain, [record.value.id]: record };
+    } else if (record && record.lastDeviceId !== this.envelope.deviceId) {
       const current = domain[record.value.id];
       const winner = chooseVersionedNode(current, record);
       domain = { ...domain, [record.value.id]: winner };
@@ -410,7 +638,12 @@ export class TaskMemoV2ApplicationStore {
         seenOpIds: record || pinnedNoteRecord || featuresRecord ? [...new Set([...this.envelope.sync.seenOpIds, (record ?? pinnedNoteRecord ?? featuresRecord)!.lastOpId])].slice(-500) : this.envelope.sync.seenOpIds,
       },
     };
-    if (operation || domain !== this.envelope.domain || profile !== this.envelope.profile) await this.commit(next);
+    if (operation?.ownership && next.ownershipTransaction) {
+      const transaction = next.ownershipTransaction;
+      next.ownershipTransaction = { ...transaction, appliedIds: [...new Set([...transaction.appliedIds, opId])] };
+      if (next.ownershipTransaction.opIds.every(id => next.ownershipTransaction!.appliedIds.includes(id))) this.finishOwnership(next);
+    }
+    if (operation || domain !== this.envelope.domain || profile !== this.envelope.profile) await this.commit(next, Boolean(operation?.ownership));
   }
 
   private attachPinnedForwardIdentity(opId: string, revision: number): Envelope["history"] {
@@ -433,6 +666,11 @@ export class TaskMemoV2ApplicationStore {
         const expectedOpId = direction === "undo" ? target.forwardOpId : target.undoOpId;
         const expectedRevision = direction === "undo" ? target.forwardRevision : target.undoRevision;
         return !!expectedOpId && current.lastOpId === expectedOpId && current.revision === expectedRevision;
+      }
+      if (target.resourceType === 'features') {
+        const current = this.envelope.profile.features.synced;
+        return current?.lastOpId === (direction === 'undo' ? target.forwardOpId : target.undoOpId)
+          && current?.revision === (direction === 'undo' ? target.forwardRevision : target.undoRevision);
       }
       const current = this.envelope.profile.pinnedNote;
       const expectedBody = direction === "undo" ? target.after.body : target.before.body;
@@ -464,6 +702,7 @@ export class TaskMemoV2ApplicationStore {
     for (const target of entry.targets) {
       if (target.resourceType === "node") {
         const current = domain[target.resourceId];
+        if (current && isRoutineRoot(current.value)) { nextTargets.push(target); continue; }
         const value = this.historyNodeValue(current, direction === "undo" ? target.before : target.after, now);
         if (!value) return [];
         const operation: SyncOperation = {
@@ -478,6 +717,16 @@ export class TaskMemoV2ApplicationStore {
         nextTargets.push(direction === "undo"
           ? { ...target, undoOpId: operation.opId, undoRevision: record.revision }
           : { ...target, forwardOpId: operation.opId, forwardRevision: record.revision, undoOpId: undefined, undoRevision: undefined });
+      } else if (target.resourceType === 'features') {
+        const current = profile.features;
+        const value = direction === 'undo' ? target.before : target.after;
+        const operation: SyncOperation = { opId: `${this.deviceId}:${localSeq}`, deviceId: this.deviceId, localSeq: localSeq++, targetNodeId: 'features', targetType: 'features', type: direction,
+          baseRevision: current.synced?.revision ?? 0, payload: { features: value }, createdAt: now.toISOString(), status: 'pending', attemptCount: 0, nextRetryAt: null, lastError: null };
+        const synced = candidateForFeaturesOperation(operation);
+        profile = { ...profile, features: { localIdeasEnabled: value.ideasEnabled, synced, migrationPending: false } };
+        operations.push(operation);
+        nextTargets.push(direction === 'undo' ? { ...target, undoOpId: operation.opId, undoRevision: synced.revision }
+          : { ...target, forwardOpId: operation.opId, forwardRevision: synced.revision, undoOpId: undefined, undoRevision: undefined });
       } else {
         const current = profile.pinnedNote;
         const body = direction === "undo" ? target.before.body : target.after.body;
@@ -504,13 +753,17 @@ export class TaskMemoV2ApplicationStore {
     return operations;
   }
 
-  private async applyCommand(type: SyncOperationType, nodes: Node[], label: string, recordHistory: boolean, commandTime: Date) {
+  private async applyCommand(type: SyncOperationType, nodes: Node[], label: string, recordHistory: boolean, commandTime: Date, textChanges?: TextChange[]) {
     let localSeq = this.envelope.nextLocalSeq;
     const operations: SyncOperation[] = [];
     const domain = { ...this.envelope.domain };
     const normalizationStarted = new Date();
-    const normalizedNodes = normalizeNodeSortKeys(nodes);
-    const after = new Map(normalizedNodes.map((node) => [node.id, nodeToV2Value(node)]));
+    const normalizedNodes = textChanges ? nodes : normalizeNodeSortKeys(nodes);
+    // Text plans carry reviewed raw patches; never re-encode untouched legacy fields.
+    const after = textChanges ? new Map(Object.values(domain).map(record => [record.value.id, record.value]))
+      : new Map(normalizedNodes.map((node) => [node.id, nodeToV2Value(node)]));
+    const textTypes = new Map(textChanges?.map(change => [change.id, change.type]));
+    textChanges?.forEach(change => after.set(change.id, change.after));
     for (const [id, current] of Object.entries(domain)) {
       if (!after.has(id)) after.set(id, { ...current.value, deletedAt: commandTime.toISOString(), deletionBatchId: null });
     }
@@ -522,7 +775,7 @@ export class TaskMemoV2ApplicationStore {
       if (current && same(current.value, value)) continue;
       const operation: SyncOperation = {
         opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
-        targetNodeId: id, type, baseRevision: current?.revision ?? 0, payload: { node: value },
+        targetNodeId: id, type: textTypes.get(id) ?? type, baseRevision: current?.revision ?? 0, payload: { node: value },
         createdAt: commandTime.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
       };
       localSeq += 1; operations.push(operation); domain[id] = candidateForOperation(operation);
@@ -533,7 +786,7 @@ export class TaskMemoV2ApplicationStore {
       label.includes("ルーティン") ? "routine" : "local-command", nodes, normalizedNodes,
       operations.filter(operation => normalizedIds.has(operation.targetNodeId)).length,
       normalizationStarted, Date.now() - normalizationStarted.getTime());
-    const targets: NodeHistoryTarget[] = operations.map((operation) => {
+    const targets: NodeHistoryTarget[] = operations.filter(operation => !isRoutineRoot(domain[operation.targetNodeId].value)).map((operation) => {
       const previous = this.envelope.domain[operation.targetNodeId];
       const nextRecord = domain[operation.targetNodeId];
       return { resourceType: "node", resourceId: operation.targetNodeId, before: previous?.value ?? null, after: nextRecord.value, forwardOpId: operation.opId, forwardRevision: nextRecord.revision };
@@ -543,19 +796,28 @@ export class TaskMemoV2ApplicationStore {
       future: [],
     } : this.envelope.history;
     const next: Envelope = { ...this.envelope, nextLocalSeq: localSeq, domain, history, sync: { ...this.envelope.sync, outbox: [...this.envelope.sync.outbox, ...operations] } };
-    await this.commit(next);
+    await this.commit(next, Boolean(textChanges));
     return operations;
   }
 
-  private async commit(next: Envelope) {
+  private async commit(next: Envelope, atomic = false) {
+    atomic = atomic || next.ownership?.kind === 'local' || Boolean(next.ownershipTransaction || next.ownershipRecoverySeed);
     const previousIds = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
     const generated = next.sync.outbox.filter(operation => !previousIds.has(operation.opId));
     const value = JSON.stringify(next);
-    await this.persistence.writeJournal(value);
-    await this.persistence.writeCommitted(value);
+    if (atomic) {
+      if (!this.persistence.writeAtomic) throw new Error('原子的なテキスト保存に対応したstorageが必要です。');
+      const expected = await this.persistence.loadCommitted();
+      if (expected === null || canonical(JSON.parse(expected)) !== canonical(this.envelope))
+        throw new Error('保存先が別の操作で更新されました。再読込してください。');
+      await this.persistence.writeAtomic(expected, value);
+    } else {
+      await this.persistence.writeJournal(value);
+      await this.persistence.writeCommitted(value);
+    }
     this.envelope = next;
     recordSyncActivity("localCommit", { deviceId: next.deviceId });
     for (const operation of generated) recordSyncActivity("outboxGenerated", { operationId: operation.opId, deviceId: operation.deviceId });
-    await this.persistence.clearJournal();
+    if (!atomic) await this.persistence.clearJournal();
   }
 }

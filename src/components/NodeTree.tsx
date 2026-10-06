@@ -19,11 +19,11 @@ import { isMobileTitleEditor } from '@/utils/memoTap';
 
 export type VisibleRow = VisibleTreeRow;
 export type { DropCandidate } from '@/domain/treeDrop';
-type Props = { nodes: Node[]; revealMemoId?: string | null; onMemoRevealed?: () => void; showCompletedMemos: boolean; onShowCompletedMemosChange: (value: boolean) => void; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => Promise<boolean>; onOpenMemo: (memo: import('@/models/node').MemoNode) => void; onQuickTitle: (memo: import('@/models/node').MemoNode) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
+type Props = { onAddRoutine?: () => void; onTextEdit?: () => void; onTextView?: (rows: VisibleTreeRow[]) => void; nodes: Node[]; revealMemoId?: string | null; onMemoRevealed?: () => void; showCompletedMemos: boolean; onShowCompletedMemosChange: (value: boolean) => void; completingIds: ReadonlySet<string>; onCompletionAnimationFinished: (id: string) => void; onAddMemo: (parentId: string | null) => void; onRenameMemo: (id: string, title: string) => Promise<boolean>; onOpenMemo: (memo: import('@/models/node').MemoNode) => void; onQuickTitle: (memo: import('@/models/node').MemoNode) => void; onComplete: (memo: import('@/models/node').MemoNode) => void; onMenu: (node: Node) => void; onDrop: (nodeId: string, candidate: DropCandidate) => void; onBulkMove: (nodeIds: string[], onSuccess: () => void) => void; onBulkComplete: (nodeIds: string[]) => boolean; onBulkDelete: (nodeIds: string[], onSuccess: () => void) => void };
 const INITIAL_EXPANDED_CATEGORY_IDS = [UNASSIGNED_GROUP_ID, 'personal', 'books', 'technical-books'];
 let retainedExpandedCategoryIds = new Set(INITIAL_EXPANDED_CATEGORY_IDS);
 
-export function NodeTree({ nodes, revealMemoId, onMemoRevealed, showCompletedMemos, onShowCompletedMemosChange, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onOpenMemo, onQuickTitle, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
+export function NodeTree({ onAddRoutine, onTextEdit, onTextView, nodes, revealMemoId, onMemoRevealed, showCompletedMemos, onShowCompletedMemosChange, completingIds, onCompletionAnimationFinished, onAddMemo, onRenameMemo, onOpenMemo, onQuickTitle, onComplete, onMenu, onDrop, onBulkMove, onBulkComplete, onBulkDelete }: Props) {
   const { width } = useWindowDimensions();
   const mobileTitleEditor = isMobileTitleEditor(Platform.OS, width, Platform.OS === 'web' && typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
   const { colors } = useAppTheme(); const styles = createStyles(colors);
@@ -102,9 +102,11 @@ export function NodeTree({ nodes, revealMemoId, onMemoRevealed, showCompletedMem
     movingId.current = null; candidateRef.current = null; setCandidate(null);
     if (id && finalCandidate) onDrop(id, finalCandidate);
   };
+  const textTools = !selectionMode && <>{onAddRoutine && <Pressable accessibilityRole="button" accessibilityLabel="ルーティーンを追加" style={styles.tool} onPress={onAddRoutine}><Text style={styles.toolText}>🔁 ルーティーン追加</Text></Pressable>}
+        {onTextEdit && <Pressable style={styles.tool} accessibilityRole="button" onPress={onTextEdit}><Text style={styles.toolText}>テキスト編集</Text></Pressable>}{onTextView && <Pressable style={styles.tool} accessibilityRole="button" onPress={() => onTextView(rows)}><Text style={styles.toolText}>テキストView</Text></Pressable>}</>;
   const completedToggle = !selectionMode && <View style={styles.toggle}><Text style={styles.toolText}>完了を表示</Text><Switch value={showCompletedMemos} onValueChange={onShowCompletedMemosChange} accessibilityLabel="完了を表示" /></View>;
   if (Platform.OS === 'web') return <View style={styles.container}>
-    <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
+    <View style={styles.toolbar}>{selectionTools}{completedToggle}{textTools}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !selectionMode && !row.virtual}
       distinguishBeforeTarget
       canDropAfter={() => true}
@@ -119,7 +121,7 @@ export function NodeTree({ nodes, revealMemoId, onMemoRevealed, showCompletedMem
     {actionBar}
   </View>;
   return <View style={styles.container}>
-    <View style={styles.toolbar}>{selectionTools}{completedToggle}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
+    <View style={styles.toolbar}>{selectionTools}{completedToggle}{textTools}{!selectionMode && <><Pressable style={styles.tool} onPress={() => setExpanded(new Set(categoryIds))} accessibilityLabel="すべて開く"><Text style={styles.toolText}>すべて開く</Text></Pressable><Pressable style={styles.tool} onPress={() => setExpanded(new Set())} accessibilityLabel="すべて閉じる"><Text style={styles.toolText}>すべて閉じる</Text></Pressable></>}</View>
     <View ref={viewportRef} collapsable={false} style={styles.listViewport}>
       <DraggableFlatList ref={listRef} data={rows} keyExtractor={(row) => row.node.id}
         onScrollToIndexFailed={({ index, averageItemLength }) => listRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: true })}

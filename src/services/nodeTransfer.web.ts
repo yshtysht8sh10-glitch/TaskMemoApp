@@ -3,6 +3,13 @@ import { parseTaskMemoBackup, serializeTaskMemoBackup, type TaskMemoBackupData, 
 import type { PinnedNote } from '@/services/pinnedNoteStorage';
 import type { LegacyPinnedNoteCandidate } from '@/sync/taskMemoApplicationStore';
 
+export async function exportMigrationSourceToFile(raw: string) {
+  const url = URL.createObjectURL(new Blob([raw], { type: 'application/json' }));
+  const anchor = document.createElement('a'); anchor.href = url;
+  anchor.download = `taskmemo-v1-migration-source-${Date.now()}.json`;
+  document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+}
+
 export async function exportNodesToFile(nodes: Node[], pinnedNote: PinnedNote, settings: TaskMemoBackupSettings, legacyPinnedNoteCandidates: LegacyPinnedNoteCandidate[] = []) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const blob = new Blob([serializeTaskMemoBackup(nodes, pinnedNote, settings, new Date(), legacyPinnedNoteCandidates)], { type: 'application/json' });

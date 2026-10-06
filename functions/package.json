@@ -2,10 +2,12 @@
   "name": "taskmemo-remote-mcp",
   "private": true,
   "main": "lib/functions/src/index.js",
-  "engines": { "node": "22" },
+  "engines": {
+    "node": "22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run src/oauthService.test.ts src/mcpServer.test.ts src/firestoreNodeRepository.test.ts",
+    "test": "vitest run src/oauthService.test.ts src/mcpServer.test.ts src/firestoreNodeRepository.test.ts src/onboarding",
     "check": "npm run build && npm test"
   },
   "dependencies": {
@@ -13,6 +15,7 @@
     "express": "^5.1.0",
     "firebase-admin": "^14.4.0",
     "firebase-functions": "^7.0.0",
+    "fractional-indexing": "^4.0.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { FormTextInput } from './FormTextInput';
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { dragActivationDelay } from "@/domain/dragActivation";
 import type { MemoNode } from "@/models/node";
 import { formatDueLabel } from "@/utils/formatDueLabel";
@@ -133,7 +134,7 @@ export function MemoRow({
               {isTitleEditorFor(titleEdit.activeId, memo.id) ? (
                 <View nativeID={titleEdit.nativeID}>
                   <View style={styles.titleEditRow}>
-                    <TextInput
+                    <FormTextInput
                       autoFocus
                       value={titleEdit.draft}
                       onChangeText={titleEdit.changeDraft}
