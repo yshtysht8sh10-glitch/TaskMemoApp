@@ -53,10 +53,10 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); });
 const source = () => readFileSync('src/components/TextWorkspace.tsx', 'utf8');
-it('Issue 92 uses native vertical textarea resize without a height cap or replacing the editor during validation', async () => {
+it('Issue 92 removes standard resize, uses overflow auto and preserves uncontrolled editor height during validation', async () => {
   const p = props(); await mount(<TextEditScreen {...p} />);
   const editor = host.querySelector('textarea')!;
-  expect(editor.style.resize).toBe('vertical'); expect(editor.style.overflow).toBe('scroll');
+  expect(editor.style.resize).toBe('none'); expect(editor.style.overflow).toBe('auto');
   expect(editor.style.minHeight).toBe('260px'); expect(editor.style.maxHeight).toBe('');
   expect(Number.parseFloat(editor.style.fontSize)).toBeGreaterThanOrEqual(16);
   const draft = serializeText(p.session).replace('Title', 'Changed'); await input(draft);
