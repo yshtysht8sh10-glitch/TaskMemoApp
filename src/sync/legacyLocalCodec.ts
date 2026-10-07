@@ -1,6 +1,7 @@
 import { isValidSortKey } from '../domain/sortKeys';
 import { canonical } from '../textFormat/syntax';
 import type { SyncNodeValue } from './types';
+import { decodeLegacyDate } from './legacyDateCodec';
 
 /** Exact content fingerprint. Kept private: contains user data, never log it. */
 export const sourceFingerprint = (value: unknown) => canonical(value);
@@ -10,7 +11,9 @@ export const sourceFingerprint = (value: unknown) => canonical(value);
 export const isSupportedRawRank = (node: SyncNodeValue) => typeof node.sortKey === 'string' &&
   (isValidSortKey(node.sortKey) || (Boolean(node.deletedAt || node.purgedAt) && /^[a-z]$/.test(node.sortKey)));
 export function decodeLegacyNodes(raw: string | null): SyncNodeValue[] {
-  const nodes: SyncNodeValue[] = raw === null ? [] : JSON.parse(raw);
+  const parsed: SyncNodeValue[] = raw === null ? [] : JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('V1保存がNode配列ではありません。原本を保持しました。');
+  const nodes = parsed.map(node => node && typeof node === 'object' ? { ...node } : node);
   if (!Array.isArray(nodes)) throw new Error('V1保存がNode配列ではありません。原本を保持しました。');
   const ids = new Map<string, SyncNodeValue>();
   const ranks = new Set<string>();
@@ -24,7 +27,7 @@ export function decodeLegacyNodes(raw: string | null): SyncNodeValue[] {
     ].filter(Boolean);
     if (failed.length) throw new Error(`V1のID/種別/rank検証で停止しました。自動修復しません。\nrecord ${nodes.indexOf(n) + 1}: ${JSON.stringify({ id: n?.id ?? null, type: n?.type ?? null, kind: n?.kind ?? null, parentId: n?.parentId ?? null, sortKey: n?.sortKey ?? null, rank: n?.rank ?? null, deletedAt: n?.deletedAt ?? null, purgedAt: n?.purgedAt ?? null })}\n${failed.join('\n')}`);
     for (const key of ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt']) {
-      if (n[key] != null && (typeof n[key] !== 'string' || !Number.isFinite(Date.parse(n[key] as string)))) throw new Error(`V1日時 ${key} が不正です。`);
+      if (n[key] != null) n[key] = decodeLegacyDate(n[key], key);
     }
     if (!n.createdAt || !n.updatedAt) throw new Error('V1の作成/更新日時がありません。');
     if (n.type === 'memo' && (typeof n.body !== 'string' || !['active', 'completed'].includes(String(n.status)) ||
