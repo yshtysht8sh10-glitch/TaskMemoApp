@@ -6,13 +6,15 @@ Text Workspace編集入力はFormTextInput→React Native Web TextInput→textar
 
 2026-10-07実機レビューで標準resizeは不採用。Web編集textareaは
 resize: none / overflow: autoに変更し、常時scrollbarを除去する。
-最終レビューに従い、常設メモと共通のresizeHandleAppearanceで
-高さ20px・細い上境界線・12pxの控えめな↕のみ表示する。
-常設メモのWeb表示styleも同じ関数を利用し、既存interactionは維持する。
-Text Workspaceのbuttonは透明背景・borderなし、44pxの操作領域を
-上下に12pxずつ広げる。可視の20px領域以外に説明文/パネル/grabberは表示しない。
+第3回レビューに従い、両方でVerticalResizeHandle.web.tsxそのものを利用する。
+style共有だけのresizeHandleAppearanceは削除。常設メモ由来の高さ20px・細い
+上境界線・12pxの控えめな↕、中央位置、背景、余白、cursor、opacity、
+同一system font、44px操作領域を単一component内で定義する。
+Text Workspace adapterにはstyle/文字/glyphもpointer処理も置かない。
+同じcomponentがmouse/touch/capture/keyboardを処理する。
+可視20px以外の操作領域は上下12pxずつ広げ、両方で同じにする。
 accessibility labelとkeyboard操作は維持する。
-EditorResizeHandle.web.tsxはPointer Eventsとcaptureでmouse/touchを処理する。
+VerticalResizeHandle.web.tsxはPointer Eventsとcaptureでmouse/touchを処理する。
 touch-action: noneはhandleだけに適用する。pointerdownのdefaultを防ぎ、
 editorのfocusや選択を取り直さない。pointerup/cancel/lost captureで終了する。
 副pointer/非primary/右クリック、busy/dialog中の操作は開始しない。
@@ -27,6 +29,9 @@ validation再描画後の同じtextarea/content/focus/caret/選択範囲/ユー�
 native style非変更を確認。EditorResizeHandle.web.test.tsxではmouse/touch両方の
 pointer、capture、最小高さ、大幅拡張、cancel、他pointer、busy、keyboardと
 content/focus/caret/selection/scrollLeft維持を確認する。
+両呼び出しでbutton styleとinnerHTMLが完全一致すること、adapterにstyle/glyphが
+ないことを検証。常設メモは既存の72–280px clamp、RAF更新・完了時の高さ保存を
+維持し、Text Workspaceは260px以上でDOM高さを管理する。
 jsdomは実ブラウザgestureやIMEを実行できない。
 PCブラウザでhandle drag、縦横スクロール、IME、iPhone Safari/PWAのレイアウトを
 手動確認する。実機受入はユーザー確認待ち。

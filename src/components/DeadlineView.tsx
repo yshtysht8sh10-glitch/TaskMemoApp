@@ -1,5 +1,5 @@
 import { FormTextInput } from './FormTextInput';
-import { resizeHandleAppearance } from './resizeHandleAppearance';
+import { VerticalResizeHandle } from './VerticalResizeHandle.web';
 import type { ListTextGroup } from '../textFormat/presentation';
 import { useEffect, useMemo, useRef, useState, type ElementRef } from "react";
 import {
@@ -132,8 +132,6 @@ function WebPinnedNote({
   embedded?: boolean;
 }) {
   const [draftHeight, setDraftHeight] = useState(height);
-  const startY = useRef(0);
-  const startHeight = useRef(height);
   const currentHeight = useRef(height);
   const frame = useRef<number | null>(null);
   useEffect(
@@ -142,10 +140,8 @@ function WebPinnedNote({
     },
     [],
   );
-  const move = (clientY: number) => {
-    const next = clampPinnedNoteHeight(
-      startHeight.current + clientY - startY.current,
-    );
+  const move = (height: number) => {
+    const next = clampPinnedNoteHeight(height);
     currentHeight.current = next;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => {
@@ -153,9 +149,7 @@ function WebPinnedNote({
       frame.current = null;
     });
   };
-  const finish = (element: HTMLDivElement, pointerId: number) => {
-    if (element.hasPointerCapture(pointerId))
-      element.releasePointerCapture(pointerId);
+  const finish = () => {
     setDraftHeight(currentHeight.current);
     onHeightChange(currentHeight.current);
   };
@@ -182,32 +176,8 @@ function WebPinnedNote({
           },
         ]}
       />
-      <div
-        role="slider"
-        aria-label="常設メモの高さを変更"
-        onPointerDown={(event) => {
-          startY.current = event.clientY;
-          startHeight.current = currentHeight.current;
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId))
-            move(event.clientY);
-        }}
-        onPointerUp={(event) => finish(event.currentTarget, event.pointerId)}
-        onPointerCancel={(event) =>
-          finish(event.currentTarget, event.pointerId)
-        }
-        style={{
-          position: "absolute",
-          ...resizeHandleAppearance(colors),
-          left: 0,
-          right: 0,
-          bottom: 0,
-        }}
-      >
-        ↕
-      </div>
+      <VerticalResizeHandle label="常設メモの高さを変更" minimum={72}
+        getHeight={() => currentHeight.current} setHeight={move} finish={finish} />
     </View>
   );
 }
