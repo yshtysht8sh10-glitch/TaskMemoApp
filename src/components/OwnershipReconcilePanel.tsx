@@ -18,14 +18,15 @@ export function OwnershipReconcilePanel({ count, recovery, plan, review, commit,
   if (plan) try { orderPreview = integrateOwnershipSortKeys(plan, choices); }
   catch (e) { orderError = e instanceof Error ? e.message : '取り込み順序を確認できません。'; }
   const reviewAgain = () => void run(async () => { setChoices({}); setConfirmed(false); await review(); });
+  const reviewItems = plan?.items.filter(item => item.id !== '$profile' || item.kind !== 'same') ?? [];
   return <View style={{ gap: 12, padding: 12, borderWidth: 1, borderColor: colors.border }}>
     <Text style={{ color: colors.text, fontWeight: 'bold' }}>{recovery ? 'ローカル取り込みの復旧が必要です' : `この端末に未取り込みのローカル変更が${count}件あります`}</Text>
     <Text style={{ color: colors.textSecondary }}>ログイン前のローカルデータを、このアカウントへ取り込むか確認します。通常のクラウド同期とは別の操作です。原本は保持されます。</Text>
     {!plan ? <>{button(recovery ? '最新状態を確認して復旧' : '取り込み内容を確認', reviewAgain)}{!recovery && button('アカウント側のみを使用する', () => void run(skip))}</> : <>
-      <Text style={{ color: colors.text }}>確認対象: {plan.items.length}件</Text>
+      <Text style={{ color: colors.text }}>確認対象: {reviewItems.length}件</Text>
       {!!orderPreview?.adjustments.length && <Text style={{ color: colors.textSecondary }}>兄弟順序の重複を避けるため、ローカル採用Node {orderPreview.adjustments.length}件の並び順キーを調整します。アカウント採用側の順序とローカル原本は保持します。</Text>}
       {!!orderError && <Text style={{ color: colors.danger }}>{orderError}</Text>}
-      {plan.items.map(item => <View key={item.id} style={{ gap: 8, padding: 10, backgroundColor: colors.surfaceAlt }}>
+      {reviewItems.map(item => <View key={item.id} style={{ gap: 8, padding: 10, backgroundColor: colors.surfaceAlt }}>
         <Text style={{ color: colors.text, fontWeight: 'bold' }}>{item.id === '$profile' ? '常設メモ・Idea設定' : String(item.local?.title ?? item.account?.value.title ?? '削除対象')} · {({ same: '同一内容（変更なし）', add: '追加候補', apply: '変更候補', conflict: '個別確認', purged: '削除済み・復活不可' })[item.kind]}</Text>
         <ConflictComparison local={item.id === '$profile' ? plan.source.profile : item.local} account={item.id === '$profile' ? { body: plan.targetProfile.pinnedNote?.value.body ?? '', ideasEnabled: plan.targetProfile.features?.value.ideasEnabled ?? false } : item.account?.value ?? null} />
         {orderPreview?.adjustments.filter(a => a.id === item.id).map(a => <Text key={a.id} style={{ color: colors.textSecondary }}>取り込み先のsortKey: {a.before} → {a.after}（ローカル原本は変更しません）</Text>)}

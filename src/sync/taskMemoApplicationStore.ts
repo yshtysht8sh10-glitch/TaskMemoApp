@@ -14,7 +14,7 @@ import { candidateForFeaturesOperation, candidateForOperation, candidateForPinne
 import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import { decodeLegacyNodes } from './legacyLocalCodec';
 import { integrateOwnershipSortKeys } from './ownershipSortKeys';
-import { pendingAnonymousChanges, planOwnershipReconcile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
+import { pendingAnonymousChanges, planOwnershipReconcile, sameOwnershipProfile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
 
 type NodeHistoryTarget = {
   resourceType: "node";
@@ -178,7 +178,9 @@ export class TaskMemoV2ApplicationStore {
     return Boolean(this.envelope.ownershipLedgers?.[canonical([sourceScope, targetScope])]);
   }
   unreconciledIds(source: AnonymousSnapshot, targetScope: string) {
-    return pendingAnonymousChanges(source, this.envelope.ownershipLedgers?.[canonical([source.scope, targetScope])], targetScope);
+    return pendingAnonymousChanges(source, this.envelope.ownershipLedgers?.[canonical([source.scope, targetScope])], targetScope)
+      .filter(id => id !== '$profile' || !sameOwnershipProfile(source.profile,
+        { pinnedNote: this.envelope.profile.pinnedNote.synced, features: this.envelope.profile.features.synced }));
   }
   async skipOwnership(source: AnonymousSnapshot, targetScope: string) {
     return this.serialize(async () => {
