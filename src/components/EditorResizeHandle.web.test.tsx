@@ -15,6 +15,11 @@ it.each(['mouse', 'touch'])('resizes vertically with %s, preserves editor state,
   try {
     await act(async () => root.render(<EditorResizeHandle editor={ref} disabled={false} />));
     const handle = host.querySelector('button')!;
+    expect(handle.textContent).toBe('↕');
+    expect(handle.style.height).toBe('44px');
+    expect(handle.querySelector('span')!.style.height).toBe('20px');
+    expect(handle.querySelector('span')!.style.fontSize).toBe('12px');
+    expect(handle.querySelector('span')!.style.borderTopWidth).toBe('1px');
     handle.setPointerCapture = vi.fn(); handle.releasePointerCapture = vi.fn(); handle.hasPointerCapture = () => true;
     const send = async (name: string, y: number, id = 1) => {
       const event = new Event(name, { bubbles: true, cancelable: true });

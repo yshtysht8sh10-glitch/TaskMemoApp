@@ -1,4 +1,5 @@
 import { FormTextInput } from './FormTextInput';
+import { resizeHandleAppearance } from './resizeHandleAppearance';
 import type { ListTextGroup } from '../textFormat/presentation';
 import { useEffect, useMemo, useRef, useState, type ElementRef } from "react";
 import {
@@ -199,19 +200,10 @@ function WebPinnedNote({
         }
         style={{
           position: "absolute",
-          height: 20,
+          ...resizeHandleAppearance(colors),
           left: 0,
           right: 0,
           bottom: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderTop: `1px solid ${colors.border}`,
-          color: colors.textSecondary,
-          fontSize: 12,
-          cursor: "ns-resize",
-          touchAction: "none",
-          userSelect: "none",
         }}
       >
         ↕

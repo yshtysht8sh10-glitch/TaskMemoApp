@@ -6,7 +6,12 @@ Text Workspace編集入力はFormTextInput→React Native Web TextInput→textar
 
 2026-10-07実機レビューで標準resizeは不採用。Web編集textareaは
 resize: none / overflow: autoに変更し、常時scrollbarを除去する。
-下端全幅・最小44pxの専用button handleに↕/横grabber/操作文言を表示する。
+最終レビューに従い、常設メモと共通のresizeHandleAppearanceで
+高さ20px・細い上境界線・12pxの控えめな↕のみ表示する。
+常設メモのWeb表示styleも同じ関数を利用し、既存interactionは維持する。
+Text Workspaceのbuttonは透明背景・borderなし、44pxの操作領域を
+上下に12pxずつ広げる。可視の20px領域以外に説明文/パネル/grabberは表示しない。
+accessibility labelとkeyboard操作は維持する。
 EditorResizeHandle.web.tsxはPointer Eventsとcaptureでmouse/touchを処理する。
 touch-action: noneはhandleだけに適用する。pointerdownのdefaultを防ぎ、
 editorのfocusや選択を取り直さない。pointerup/cancel/lost captureで終了する。

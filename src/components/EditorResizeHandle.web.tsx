@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { EditorResizeProps } from './EditorResizeHandle';
 import { useAppTheme } from '../theme/theme';
+import { resizeHandleAppearance, RESIZE_HANDLE_VISUAL_HEIGHT } from './resizeHandleAppearance';
 
 export function EditorResizeHandle({ editor, disabled }: EditorResizeProps) {
   const { colors } = useAppTheme();
@@ -8,8 +9,8 @@ export function EditorResizeHandle({ editor, disabled }: EditorResizeProps) {
   useEffect(() => { if (disabled) drag.current = null; return () => { drag.current = null; }; }, [disabled]);
   const input = () => editor.current as unknown as HTMLTextAreaElement | null;
   const resize = (target: HTMLTextAreaElement, height: number) => { target.style.height = `${Math.max(260, height)}px`; };
-  return <button type="button" disabled={disabled} aria-label="編集領域の高さを変更（上下にドラッグ、矢印キーでも変更）"
-    style={{ width: '100%', minHeight: 44, flexShrink: 0, border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surfaceAlt, color: colors.text, cursor: disabled ? 'default' : 'ns-resize', touchAction: 'none', userSelect: 'none', opacity: disabled ? .45 : 1 }}
+  return <div style={{ height: RESIZE_HANDLE_VISUAL_HEIGHT, position: 'relative', flexShrink: 0 }}><button type="button" disabled={disabled} aria-label="編集領域の高さを変更（上下にドラッグ、矢印キーでも変更）"
+    style={{ position: 'absolute', top: -12, left: 0, width: '100%', height: 44, boxSizing: 'border-box', padding: '12px 0', border: 0, background: 'transparent', cursor: disabled ? 'default' : 'ns-resize', touchAction: 'none', userSelect: 'none', opacity: disabled ? .45 : 1 }}
     onMouseDown={event => event.preventDefault()}
     onPointerDown={event => {
       if (disabled || !event.isPrimary || event.button !== 0 || drag.current) return;
@@ -34,6 +35,6 @@ export function EditorResizeHandle({ editor, disabled }: EditorResizeProps) {
       const target = input(); if (!target) return;
       event.preventDefault(); resize(target, event.key === 'Home' ? 260 : target.getBoundingClientRect().height + (event.key === 'ArrowDown' ? 40 : -40));
     }}>
-    <span aria-hidden="true">↕ ━━━ </span>上下にドラッグして高さを変更
-  </button>;
+    <span aria-hidden="true" style={resizeHandleAppearance(colors)}>↕</span>
+  </button></div>;
 }
