@@ -80,7 +80,7 @@ export function canMoveNode(
   destinationParentId: string | null,
 ) {
   const moving = nodes.find(
-    (node) => node.id === nodeId && node.deletedAt === null,
+    (node) => node.id === nodeId && node.deletedAt === null && !node.purgedAt,
   );
   if (!moving) return false;
   if (moving.type === "category" && moving.categoryKind === "routineRoot")
@@ -100,6 +100,7 @@ export function canMoveNode(
   let current: Node | undefined = destination;
   const visited = new Set<string>();
   while (current) {
+    if (current.deletedAt !== null || current.purgedAt || current.type !== 'category') return false;
     if (current.id === nodeId || visited.has(current.id)) return false;
     visited.add(current.id);
     if (current.parentId === null) return true;
@@ -237,6 +238,8 @@ export function moveNode(
   if (!canMoveNode(nodes, id, parentId))
     throw new Error("この場所には移動できません。");
   const siblings = siblingsOf(nodes, parentId, id);
+  if (siblings.some(node => !isValidSortKey(node.sortKey)) || new Set(siblings.map(node => node.sortKey)).size !== siblings.length)
+    throw new Error('移動先のsortKeyが不正または重複しています。');
   const index =
     beforeId === undefined
       ? siblings.length

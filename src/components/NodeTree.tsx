@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ElementRef } from 'react';
 import { Platform, Pressable, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
 import DraggableFlatList, { type DragEndParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import { flattenVisibleNodes, UNASSIGNED_GROUP_ID, visibleDescendantNodeCount, visibleUnassignedMemoCount, type VisibleTreeRow } from '@/domain/treeView';
-import { dropCandidateFor, resolveDropCandidate, type DropCandidate } from '@/domain/treeDrop';
+import { dropCandidateFor, resolveDropCandidate, treeEndDropCandidate, type DropCandidate } from '@/domain/treeDrop';
 import type { Node } from '@/models/node';
 import { CategoryRow } from '@/components/CategoryRow';
 import { MemoRow } from '@/components/MemoRow';
@@ -89,7 +89,16 @@ export function NodeTree({ onAddRoutine, onTextEdit, onTextView, nodes, revealMe
   };
   const selectionTools = selectionMode ? <><Text style={styles.selectionCount}>{normalizedIds.length}件選択</Text><Pressable style={styles.tool} onPress={clearSelection}><Text style={styles.toolText}>キャンセル</Text></Pressable></> : <Pressable style={styles.tool} onPress={() => setSelectionMode(true)}><Text style={styles.toolText}>複数選択</Text></Pressable>;
   const actionBar = selectionMode && <View style={styles.actionBar}><Text style={styles.actionCount}>{normalizedIds.length}件選択</Text><Pressable disabled={!normalizedIds.length} style={[styles.actionButton, !normalizedIds.length && styles.disabled]} onPress={() => onBulkMove(normalizedIds, clearSelection)}><Text style={styles.actionText}>移動</Text></Pressable><Pressable disabled={!completableCount} style={[styles.actionButton, !completableCount && styles.disabled]} onPress={() => { if (onBulkComplete(normalizedIds)) clearSelection(); }}><Text style={styles.actionText}>{completableCount}件のMemoを完了</Text></Pressable><Pressable disabled={!normalizedIds.length} style={[styles.actionButton, styles.deleteButton, !normalizedIds.length && styles.disabled]} onPress={() => onBulkDelete(normalizedIds, clearSelection)}><Text style={styles.deleteText}>削除</Text></Pressable></View>;
-  const updateCandidate = (index: number, data = rows) => { const atEnd = index >= data.length; const target = (atEnd ? data.at(-1) : data[index])?.node; const next = movingId.current ? dropCandidateFor(nodes, movingId.current, target, atEnd ? 'after' : 'on') : null; candidateRef.current = next; setCandidate(next); treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next }); };
+  const updateCandidate = (index: number, data = rows) => {
+    // FlatList's final placeholder index is length - 1, not length.
+    const atEnd = index >= data.length - 1;
+    const target = (atEnd ? data.at(-1) : data[index])?.node;
+    const next = movingId.current
+      ? atEnd ? treeEndDropCandidate(nodes, movingId.current, data) : dropCandidateFor(nodes, movingId.current, target, 'on')
+      : null;
+    candidateRef.current = next; setCandidate(next);
+    treeDiagnosticLog('placeholder-change', { index, movingId: movingId.current, targetId: target?.id ?? null, candidate: next });
+  };
   const drop = ({ data, from, to }: DragEndParams<VisibleRow>) => {
     const id = movingId.current;
     // The returned array already contains the moving row at `to`, so it is not
@@ -110,6 +119,8 @@ export function NodeTree({ onAddRoutine, onTextEdit, onTextView, nodes, revealMe
     <WebSortableScrollList data={rows} keyFor={(row) => row.node.id} canDrag={(row) => !selectionMode && !row.virtual}
       distinguishBeforeTarget
       canDropAfter={() => true}
+      onTailHover={(active) => { movingId.current = active.node.id; const next = treeEndDropCandidate(nodes, active.node.id, rows); candidateRef.current = next; setCandidate(next); }}
+      onTailDrop={(active) => { const next = treeEndDropCandidate(nodes, active.node.id, rows); candidateRef.current = null; setCandidate(null); if (next) onDrop(active.node.id, next); }}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: selectionMode ? 170 : 110 }}
       onHover={(active, target, placement) => { movingId.current = active.node.id; const next = placement === 'before' ? candidateBeforeTarget(active, target) : dropCandidateFor(nodes, active.node.id, target.node, placement); candidateRef.current = next; setCandidate(next); }}
       onDrop={(active, target, placement) => { const next = placement === 'before' ? candidateBeforeTarget(active, target) : dropCandidateFor(nodes, active.node.id, target.node, placement); candidateRef.current = null; setCandidate(null); if (next) onDrop(active.node.id, next); }}

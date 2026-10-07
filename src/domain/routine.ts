@@ -106,6 +106,7 @@ export function routineOccurrenceDueAt(
   now = new Date(),
 ) {
   if (
+    memo.deletedAt !== null || !!memo.purgedAt ||
     !routineCategoryForMemo(nodes, memo) ||
     !isValidRepeatRule(memo.repeatRule)
   )
@@ -137,7 +138,7 @@ export const isRoutineDueOn = (
 };
 
 export function missedRoutineOccurrences(nodes: Node[], memo: MemoNode, now = new Date()): MemoNode[] {
-  if (!routineCategoryForMemo(nodes, memo) || !isValidRepeatRule(memo.repeatRule)) return [];
+  if (memo.deletedAt !== null || memo.purgedAt || memo.routineOccurrenceKey || !routineCategoryForMemo(nodes, memo) || !isValidRepeatRule(memo.repeatRule)) return [];
   const start = parseLocalDateKey(memo.repeatRule.startsOn)!;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const missed: MemoNode[] = [];

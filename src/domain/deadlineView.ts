@@ -158,7 +158,7 @@ const common: readonly DeadlineGroupDefinition[] = [
   {
     id: "twoThreeDays",
     label: "2〜3日以内",
-    create: custom((now) => dayEnd(now, 3)),
+    create: custom((now) => dayEnd(now, Math.min(3, (7 - now.getDay()) % 7))),
     fallbackGroupId: "thisWeek",
     dropLabel: "3日以内に変更",
   },
@@ -226,7 +226,8 @@ const boundaries = (now: Date) => {
   return {
     todayEnd: dayEnd(now, 0),
     tomorrowEnd: dayEnd(now, 1),
-    threeDaysEnd: dayEnd(now, 3),
+    // Short horizon buckets must never consume days from the next calendar week.
+    threeDaysEnd: dayEnd(now, Math.min(3, weekOffset)),
     weekEnd: dayEnd(now, weekOffset),
     nextWeekEnd: dayEnd(now, weekOffset + 7),
     monthEnd: endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
@@ -279,13 +280,17 @@ export function visibleDeadlineGroup(
   source: DeadlineGroupKey,
   visible: ReadonlySet<DeadlineGroupKey>,
   granularity: TodayGranularity,
+  now?: Date,
 ): DeadlineGroupKey | null {
   const definitions = deadlineGroupDefinitions(granularity);
   const byId = new Map(definitions.map((definition) => [definition.id, definition]));
   const visited = new Set<DeadlineGroupKey>();
+  const ends = now ? futureGroupEnds(now) : {};
+  const sourceEnd = ends[source];
   let current: DeadlineGroupKey | null = source;
   while (current && !visited.has(current)) {
-    if (visible.has(current)) return current;
+    const targetEnd = ends[current];
+    if (visible.has(current) && (!sourceEnd || !targetEnd || targetEnd >= sourceEnd)) return current;
     visited.add(current);
     current = byId.get(current)?.fallbackGroupId ?? null;
   }
@@ -342,7 +347,7 @@ export function deadlineGroups(
         node.type === "memo" &&
         isTask(node) &&
         node.status === "active" &&
-        node.deletedAt === null,
+        node.deletedAt === null && !node.purgedAt,
     )
     .flatMap((memo) => [
       ...(!routineCategoryForMemo(nodes, memo) || occurrenceDueAt(memo) !== null ? [memo] : []),
@@ -361,7 +366,7 @@ export function deadlineGroups(
     const source = routineCategoryForMemo(nodes, memo)
       ? deadlineGroupForDueAt(occurrenceDueAt(memo), now, granularity)
       : deadlineGroupForMemo(memo, now, granularity);
-    const key = visibleDeadlineGroup(source, visible, granularity);
+    const key = visibleDeadlineGroup(source, visible, granularity, now);
     if (key) grouped.set(key, [...(grouped.get(key) ?? []), memo]);
   }
   return definitions
@@ -418,18 +423,18 @@ export function deadlineDisplayGroups(
   const assignedStart = new Map<DeadlineGroupKey, Date>();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   for (const definition of todayDefinitions[granularity]) {
-    const target = visibleDeadlineGroup(definition.id, visible, granularity);
+    const target = visibleDeadlineGroup(definition.id, visible, granularity, now);
     if (target && FUTURE_GROUP_KEYS.includes(target)) assignedStart.set(target, todayStart);
   }
   for (const source of FUTURE_GROUP_KEYS) {
     if (source === "later") continue;
-    const target = visibleDeadlineGroup(source, visible, granularity);
+    const target = visibleDeadlineGroup(source, visible, granularity, now);
     const end = ends[source];
     if (!target || !end) continue;
     const current = assignedEnd.get(target);
     if (!current || end.getTime() > current.getTime()) assignedEnd.set(target, end);
   }
-  const prefix = groups.filter((group) => !FUTURE_GROUP_KEYS.includes(group.key) && group.key !== "none");
+  const prefix = [...groupByKey.values()].filter((group) => !FUTURE_GROUP_KEYS.includes(group.key) && group.key !== "none");
   const result: DeadlineGroup[] = [...prefix];
   const ranged: { group: DeadlineGroup; start: Date; end: Date | null; names: string[] }[] = [];
   let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
@@ -445,6 +450,8 @@ export function deadlineDisplayGroups(
     const start = assignedStart.get(key);
     if (start && start.getTime() < cursor.getTime()) cursor = new Date(start);
     if (end.getTime() < cursor.getTime()) {
+      // An empty short-horizon interval has no semantic name to merge.
+      if (key === 'twoThreeDays') continue;
       const containing = ranged.find((entry) => entry.end && end.getTime() >= entry.start.getTime() && end.getTime() <= entry.end.getTime());
       if (containing) {
         containing.names.push(group.label);
@@ -493,7 +500,7 @@ export function hiddenDeadlineSummary(
     .map((group) => ({
       key: group.key,
       label: group.label,
-      count: visibleDeadlineGroup(group.key, visible, granularity) === null ? group.memos.length : 0,
+      count: visibleDeadlineGroup(group.key, visible, granularity, now) === null ? group.memos.length : 0,
     }))
     .filter((group) => group.count > 0);
   return { total: groups.reduce((sum, group) => sum + group.count, 0), groups };

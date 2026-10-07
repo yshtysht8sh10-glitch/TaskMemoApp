@@ -16,7 +16,7 @@ describe('deadline view', () => {
     ['amPm', 12, 'am'], ['amPm', 12.01, 'pm'], ['threePart', 10, 'morning'],
     ['threePart', 10.01, 'day'], ['threePart', 17, 'day'], ['threePart', 17.01, 'evening'],
   ] as const)('%s粒度で今日%時を%sに分類する', (granularity, decimalHour, expected) => { const hour = Math.floor(decimalHour); const minute = Math.round((decimalHour - hour) * 60); expect(deadlineGroupForDueAt(new Date(2026, 8, 13, hour, minute), now, granularity)).toBe(expected); });
-  it('今日以外を2〜3日・今週・来週を含むフラットな時間軸へ分類する', () => { expect(deadlineGroupForDueAt(new Date(2026, 8, 14, 12), now)).toBe('tomorrow'); expect(deadlineGroupForDueAt(new Date(2026, 8, 15, 12), now)).toBe('twoThreeDays'); expect(deadlineGroupForDueAt(new Date(2026, 8, 20, 12), now)).toBe('nextWeek'); });
+  it('今日以外を2〜3日・今週・来週を含むフラットな時間軸へ分類する', () => { expect(deadlineGroupForDueAt(new Date(2026, 8, 14, 12), now)).toBe('tomorrow'); expect(deadlineGroupForDueAt(new Date(2026, 8, 15, 12), now)).toBe('nextWeek'); expect(deadlineGroupForDueAt(new Date(2026, 8, 20, 12), now)).toBe('nextWeek'); });
   it('通常時は明日・今週・来週の実際の期間を見出しへ表示する', () => {
     const monday = new Date(2026, 8, 14, 8);
     const labels = new Map(deadlineDisplayGroups(deadlineGroups([], monday), monday).map((group) => [group.key, group.label]));
@@ -43,7 +43,7 @@ describe('deadline view', () => {
     const yearBoundary = new Date(2026, 11, 27, 8);
     const labelFor = (current: Date) => deadlineDisplayGroups(deadlineGroups([], current), current).find((group) => group.key === 'nextWeek')?.label;
     expect(labelFor(monthBoundary)).toBe('来週・今月（9/28〜10/4）');
-    expect(labelFor(yearBoundary)).toBe('来週・今月・今年（2026/12/31〜2027/1/3）');
+    expect(labelFor(yearBoundary)).toBe('来週・今月・今年（2026/12/29〜2027/1/3）');
   });
   it('週末当日の今週Memoを今日bucketへ統合して消さない', () => {
     const sunday = new Date(2026, 11, 27, 8);

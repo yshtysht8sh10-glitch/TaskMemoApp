@@ -57,13 +57,33 @@ export function resolveDropCandidate(nodes: Node[], movingId: string, hover: Dro
     const candidate = { parentId: next.node.parentId, beforeId: next.node.id, targetId: next.node.id, kind: 'before' as const };
     return canMoveNode(nodes, movingId, candidate.parentId) ? candidate : null;
   }
+  if (!next && hover.kind === 'after' && moving?.type === 'category')
+    return canMoveNode(nodes, movingId, null) ? { parentId: null, targetId: hover.targetId, kind: 'after' } : null;
   return canMoveNode(nodes, movingId, hover.parentId) ? { ...hover, beforeId: undefined } : null;
+}
+
+/** The list's final gap is outside expanded category subtrees. */
+export function treeEndDropCandidate(nodes: Node[], movingId: string, rows: DropRow[]): DropCandidate | null {
+  const descendants = descendantIds(nodes, movingId);
+  const remaining = rows.filter(row => row.node.id !== movingId && !descendants.has(row.node.id));
+  const target = remaining.at(-1)?.node;
+  const moving = nodes.find(node => node.id === movingId);
+  if (!target || !moving) return null;
+  if (moving.type === 'category')
+    return canMoveNode(nodes, movingId, null) ? { parentId: null, targetId: target.id, kind: 'after' } : null;
+  return dropCandidateFor(nodes, movingId, target, 'after');
 }
 
 /** Convert a visual row target into one unambiguous domain insertion point. */
 export function dropCandidateFor(nodes: Node[], movingId: string, target?: Node, placement: 'before' | 'on' | 'after' = 'on'): DropCandidate | null {
-  const moving = nodes.find((node) => node.id === movingId && node.deletedAt === null);
+  const moving = nodes.find((node) => node.id === movingId && node.deletedAt === null && !node.purgedAt);
   if (!moving || !target || target.id === movingId) return null;
+  if (target.id !== UNASSIGNED_GROUP_ID) {
+    const targetId = target.id;
+    const currentTarget = nodes.find(node => node.id === targetId);
+    if (!currentTarget || currentTarget.deletedAt !== null || currentTarget.purgedAt) return null;
+    target = currentTarget;
+  }
 
   if (placement === 'after') {
     if (!canMoveNode(nodes, movingId, target.parentId)) return null;

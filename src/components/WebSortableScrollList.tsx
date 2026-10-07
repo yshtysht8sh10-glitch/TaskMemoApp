@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { createDragAutoScroller } from '@/domain/dragAutoScroll';
-import { exceedsWebTouchDragTolerance, WEB_DRAG_ACTIVATION_DELAY_MS, webTouchDragOverlayPosition } from '@/domain/dragActivation';
+import { createDragAutoScroller } from '../domain/dragAutoScroll';
+import { exceedsWebTouchDragTolerance, WEB_DRAG_ACTIVATION_DELAY_MS, webTouchDragOverlayPosition } from '../domain/dragActivation';
 
 type Props<T> = {
   data: T[];
@@ -12,6 +12,8 @@ type Props<T> = {
   onHover: (active: T, target: T, placement: 'before' | 'on' | 'after') => void;
   onDrop: (active: T, target: T, placement: 'before' | 'on' | 'after') => void;
   canDropAfter?: (item: T) => boolean;
+  onTailHover?: (active: T) => void;
+  onTailDrop?: (active: T) => void;
   contentContainerStyle?: object;
   /** Disable targets that supply their own drop indicator. */
   showDropIndicator?: boolean | ((active: T, target: T) => boolean);
@@ -25,9 +27,10 @@ type Props<T> = {
  * web drag path is broken. Native HTML drag keeps the whole card draggable
  * while leaving ordinary vertical swipes to the browser scroll container.
  */
-export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, renderItem, onHover, onDrop, contentContainerStyle, showDropIndicator = true, distinguishBeforeTarget = false, canDropAfter }: Props<T>) {
+export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, renderItem, onHover, onDrop, onTailHover, onTailDrop, contentContainerStyle, showDropIndicator = true, distinguishBeforeTarget = false, canDropAfter }: Props<T>) {
   const activeRef = useRef<T | null>(null);
   const targetRef = useRef<T | null>(null);
+  const tailTargetRef = useRef(false);
   const placementRef = useRef<'before' | 'on' | 'after'>('before');
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
@@ -47,6 +50,7 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [targetKey, setTargetKey] = useState<string | null>(null);
   const [placement, setPlacement] = useState<'before' | 'on' | 'after'>('before');
+  const [tailTarget, setTailTarget] = useState(false);
 
   useEffect(() => {
     const scroller = createDragAutoScroller({
@@ -76,11 +80,16 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
     touchOverlayRef.current?.remove();
     touchOverlayRef.current = null;
     activeRef.current = null; targetRef.current = null; setActiveKey(null); setTargetKey(null);
-    if (commit && active && target && keyFor(active) !== keyFor(target)) onDrop(active, target, placementRef.current);
+    setTailTarget(false);
+    if (commit && active && tailTargetRef.current && onTailDrop) onTailDrop(active);
+    else if (commit && active && target && keyFor(active) !== keyFor(target)) onDrop(active, target, placementRef.current);
+    tailTargetRef.current = false;
   };
   const begin = (item: T, key: string, clientX: number, clientY: number) => {
     activeRef.current = item; targetRef.current = item; placementRef.current = 'before';
+    tailTargetRef.current = false;
     pointerRef.current = { x: clientX, y: clientY };
+    setTailTarget(false);
     autoScrollerRef.current?.start(clientY);
     setPlacement('before'); setActiveKey(key); setTargetKey(null);
   };
@@ -128,14 +137,19 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
     const active = activeRef.current;
     if (!active || !tailItem || !tailKey) return;
     targetRef.current = tailItem;
+    tailTargetRef.current = true;
+    setTailTarget(true);
     placementRef.current = 'after';
     setTargetKey(tailKey);
     setPlacement('after');
-    onHover(active, tailItem, 'after');
-  }, [onHover, tailItem, tailKey]);
+    if (onTailHover) onTailHover(active);
+    else onHover(active, tailItem, 'after');
+  }, [onHover, onTailHover, tailItem, tailKey]);
 
   const updateTarget = useCallback((item: T, key: string, clientY: number, currentTarget: { getBoundingClientRect(): { top: number; height: number } }) => {
     const active = activeRef.current; if (!active) return;
+    tailTargetRef.current = false;
+    setTailTarget(false);
     const bounds = currentTarget.getBoundingClientRect();
     const nextPlacement = canDropAfter?.(item)
       ? distinguishBeforeTarget
@@ -262,16 +276,18 @@ export function WebSortableScrollList<T>({ data, header, keyFor, canDrag, render
       } : { draggable: false };
       return <div key={key} data-taskmemo-dnd-key={key} style={webStyles.slot} {...targetProps}>
         {opensBelow && <div aria-hidden="true" style={webStyles.indicator} />}
-        {showForTarget && targetKey === key && activeKey !== key && placement === 'after' && <div aria-hidden="true" style={{ ...webStyles.indicator, top: 'auto', bottom: -2 }} />}
+        {showForTarget && !tailTarget && targetKey === key && activeKey !== key && placement === 'after' && <div aria-hidden="true" style={{ ...webStyles.indicator, top: 'auto', bottom: -2 }} />}
         <div aria-label={canDrag(item) ? `${key}をドラッグして移動` : undefined} style={{ ...webStyles.row, ...(canDrag(item) ? webStyles.draggable : {}), ...(activeKey === key ? webStyles.active : {}), ...(opensBelow ? webStyles.openBelow : {}), ...(opensAbove ? webStyles.openAbove : {}) }} {...dragProps}>
           <View style={styles.content}>{renderItem(item, activeKey === key)}</View>
         </div>
       </div>;
     })}
-    {tailKey && <div data-taskmemo-dnd-tail="true" style={{ minHeight: 55 }}
+    {tailKey && <div data-taskmemo-dnd-tail="true" style={{ minHeight: 55, position: 'relative' }}
       onDragEnter={(event) => { event.preventDefault(); targetTail(); }}
       onDragOver={(event) => { event.preventDefault(); pointerRef.current = { x: event.clientX, y: event.clientY }; targetTail(); }}
-      onDrop={(event) => { event.preventDefault(); finish(); }} />}
+      onDrop={(event) => { event.preventDefault(); finish(); }}>
+      {tailTarget && activeItem && tailItem && (typeof showDropIndicator === 'function' ? showDropIndicator(activeItem, tailItem) : showDropIndicator) && <div data-taskmemo-dnd-tail-indicator="true" aria-hidden="true" style={webStyles.indicator} />}
+    </div>}
     </View>
   </div>;
 }
