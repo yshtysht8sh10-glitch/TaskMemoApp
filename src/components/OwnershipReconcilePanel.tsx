@@ -3,6 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import type { OwnershipPlan } from '../sync/ownershipReconcile';
 import { integrateOwnershipSortKeys } from '../sync/ownershipSortKeys';
 import { useAppTheme } from '../theme/theme';
+import { ConflictComparison } from './ConflictComparison';
 type Props = { count: number; recovery: boolean; plan: OwnershipPlan | null; review: () => Promise<void>; commit: (choices: Record<string, 'local' | 'account'>, confirmation?: { fingerprint: string; deletedIds: string[] }) => Promise<void>; skip: () => Promise<void>; close: () => Promise<void> };
 export function OwnershipReconcilePanel({ count, recovery, plan, review, commit, skip, close }: Props) {
   const { colors } = useAppTheme();
@@ -26,8 +27,7 @@ export function OwnershipReconcilePanel({ count, recovery, plan, review, commit,
       {!!orderError && <Text style={{ color: colors.danger }}>{orderError}</Text>}
       {plan.items.map(item => <View key={item.id} style={{ gap: 8, padding: 10, backgroundColor: colors.surfaceAlt }}>
         <Text style={{ color: colors.text, fontWeight: 'bold' }}>{item.id === '$profile' ? '常設メモ・Idea設定' : String(item.local?.title ?? item.account?.value.title ?? '削除対象')} · {({ same: '同一内容（変更なし）', add: '追加候補', apply: '変更候補', conflict: '個別確認', purged: '削除済み・復活不可' })[item.kind]}</Text>
-        <Text selectable style={{ color: colors.text }}>ローカル内容:{'\n'}{JSON.stringify(item.id === '$profile' ? plan.source.profile : item.local, null, 2)}</Text>
-        <Text selectable style={{ color: colors.text }}>アカウント内容:{'\n'}{JSON.stringify(item.id === '$profile' ? { body: plan.targetProfile.pinnedNote?.value.body ?? '', ideasEnabled: plan.targetProfile.features?.value.ideasEnabled ?? false } : item.account?.value ?? null, null, 2)}</Text>
+        <ConflictComparison local={item.id === '$profile' ? plan.source.profile : item.local} account={item.id === '$profile' ? { body: plan.targetProfile.pinnedNote?.value.body ?? '', ideasEnabled: plan.targetProfile.features?.value.ideasEnabled ?? false } : item.account?.value ?? null} />
         {orderPreview?.adjustments.filter(a => a.id === item.id).map(a => <Text key={a.id} style={{ color: colors.textSecondary }}>取り込み先のsortKey: {a.before} → {a.after}（ローカル原本は変更しません）</Text>)}
         {!!item.account?.value.deletedAt && !!item.local && !item.local.deletedAt && <Text style={{ color: colors.textSecondary }}>アカウントのゴミ箱にあるNodeは、この取り込みで復元できません。通常のゴミ箱復元後に再確認してください。</Text>}
         {item.kind !== 'same' && <>{button(`${choices[item.id] === 'local' ? '✓ ' : ''}ローカルを採用`, () => setChoices(c => ({ ...c, [item.id]: 'local' })), item.kind === 'purged' || (item.id !== '$profile' && !item.local) || (!!item.account?.value.deletedAt && !!item.local && !item.local.deletedAt))}{button(`${choices[item.id] === 'account' ? '✓ ' : ''}アカウントを採用`, () => setChoices(c => ({ ...c, [item.id]: 'account' })))}</>}
