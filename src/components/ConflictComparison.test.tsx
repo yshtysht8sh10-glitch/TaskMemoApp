@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { ConflictComparison } from './ConflictComparison';
+import { OwnershipReconcilePanel } from './OwnershipReconcilePanel';
+import { planOwnershipReconcile } from '../sync/ownershipReconcile';
 vi.mock('react-native', () => ({ Platform: { OS: 'web' },
   View: ({ children, style }: { children: React.ReactNode; style: React.CSSProperties }) => <div style={style}>{children}</div>,
   Text: ({ children, style }: { children: React.ReactNode; style: React.CSSProperties | React.CSSProperties[] }) => <span style={Array.isArray(style) ? Object.assign({}, ...style) : style}>{children}</span>,
@@ -34,4 +36,22 @@ it('replaces only raw JSON display at the ownership boundary', () => {
   expect(source).toContain("setChoices(c => ({ ...c, [item.id]: 'local' }))");
   expect(source).toContain("setChoices(c => ({ ...c, [item.id]: 'account' }))");
   expect(source).toContain('commit(choices, { fingerprint: plan.fingerprint, deletedIds })');
+});
+it('Issue 94 hides the same profile from review and retains explicit choice for a real profile conflict', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  const source = { scope: 'anonymous', nodes: {}, profile: { body: 'same', ideasEnabled: true } };
+  const metadata = { revision: 8, lastOpId: 'op', lastDeviceId: 'd', lastLocalSeq: 8 };
+  const target = { pinnedNote: { ...metadata, value: { body: 'same' } }, features: { ...metadata, value: { ideasEnabled: true } } };
+  const callbacks = { review: vi.fn(async () => {}), commit: vi.fn(async () => {}), skip: vi.fn(async () => {}), close: vi.fn(async () => {}) };
+  try {
+    await act(async () => root.render(<OwnershipReconcilePanel count={1} recovery={false} plan={planOwnershipReconcile(source, {}, undefined, 'account', target)} {...callbacks} />));
+    expect(host.textContent).toContain('確認対象: 0件'); expect(host.textContent).not.toContain('ローカルを採用');
+    const plan = planOwnershipReconcile({ ...source, profile: { ...source.profile, body: 'different' } }, {}, undefined, 'account', target);
+    await act(async () => root.render(<OwnershipReconcilePanel count={1} recovery={false} plan={plan} {...callbacks} />));
+    expect(host.textContent).toContain('確認対象: 1件');
+    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === 'ローカルを採用')!.click());
+    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '選択内容を確認して取り込む')!.click());
+    expect(callbacks.commit).toHaveBeenCalledWith({ $profile: 'local' }, { fingerprint: plan.fingerprint, deletedIds: [] });
+  } finally { await act(async () => root.unmount()); host.remove(); }
 });

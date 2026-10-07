@@ -20,6 +20,11 @@ export function pendingAnonymousChanges(source: AnonymousSnapshot, ledger: Owner
 }
 export type ReconcileItem = { id: string; kind: 'same' | 'add' | 'apply' | 'conflict' | 'purged'; local: SyncNodeValue | null; account: VersionedNode | null };
 export type OwnershipPlan = { orderPolicy: typeof OWNERSHIP_ORDER_POLICY; source: AnonymousSnapshot; targetScope: string; target: Record<string, VersionedNode>; targetProfile: { pinnedNote: VersionedPinnedNote | null; features: VersionedFeatures | null }; items: ReconcileItem[]; needsReview: boolean; fingerprint: string };
+/** Content only; revision/operation metadata remains in the plan's freshness guard. */
+export function sameOwnershipProfile(profile: AnonymousSnapshot['profile'], account: OwnershipPlan['targetProfile']) {
+  return profile.body === (account.pinnedNote?.value.body ?? '') &&
+    profile.ideasEnabled === (account.features?.value.ideasEnabled ?? false);
+}
 /** Only an untouched empty Account can adopt an unambiguous initial snapshot.
  * The caller must obtain the target from the server after compatibility checks. */
 export function canAutoAdoptInitialOwnership(plan: OwnershipPlan, receiptDocumentCount: number) {
@@ -33,7 +38,7 @@ export function planOwnershipReconcile(source: AnonymousSnapshot, target: Record
   const history = applicable(ledger, source, targetScope);
   const items = pendingAnonymousChanges(source, ledger, targetScope).map((id): ReconcileItem => {
     const local = source.nodes[id] ?? null; const account = target[id] ?? null;
-    if (id === '$profile') return { id, local: null, account: null, kind: 'conflict' };
+    if (id === '$profile') return { id, local: null, account: null, kind: sameOwnershipProfile(source.profile, targetProfile) ? 'same' : 'conflict' };
     const ancestor = history?.ancestors[id];
     const kind = !local ? 'conflict' : equal(local, account?.value) ? 'same'
       : account?.value.purgedAt || local.purgedAt ? 'purged'

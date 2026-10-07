@@ -16,6 +16,47 @@ const node = (id: string, rank: string) => ({ id, type: 'category', title: id, p
 const source: AnonymousSnapshot = { scope: 'anonymous', nodes: { a: node('a', 'a0'), b: node('b', 'a1') }, profile: { body: '', ideasEnabled: false } };
 const open = async (p = new Memory()) => ({ p, store: await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'account-device' }) });
 describe('Phase D durable ownership application', () => {
+  it('Issue 94 mixed Node conflict and same profile requires only the Node choice, preserves account content and metadata', async () => {
+    const { p, store } = await open(); const metadata = { revision: 8, lastOpId: 'remote', lastDeviceId: 'remote', lastLocalSeq: 8 };
+    await store.receive({ ...metadata, operationType: 'update', value: { ...node('a', 'a0'), title: 'account title', opaque: { keep: true } } });
+    await store.receiveFeatures({ ...metadata, value: { ideasEnabled: true } });
+    const snapshot = { ...source, nodes: { a: node('a', 'a0') }, profile: { body: '', ideasEnabled: true } };
+    const before = JSON.parse(p.value!).domain;
+    const plan = store.prepareOwnership(snapshot, 'accountA');
+    expect(plan.items.map(i => [i.id, i.kind])).toEqual([['a', 'conflict'], ['$profile', 'same']]);
+    expect(store.unreconciledIds(snapshot, 'accountA')).toEqual(['a']);
+    await expect(store.commitOwnership(plan, {})).rejects.toThrow('採用先');
+    expect(await store.commitOwnership(plan, { a: 'account' })).toEqual([]);
+    expect(JSON.parse(p.value!).domain).toEqual(before); expect(store.historyDepths.past).toBe(0);
+    expect((await open(p)).store.unreconciledIds(snapshot, 'accountA')).toEqual([]);
+  });
+  it('Issue 94 same profile suppresses review counts across restart without changing revision History or Outbox', async () => {
+    const { p, store } = await open(); const metadata = { revision: 8, lastOpId: 'remote', lastDeviceId: 'remote', lastLocalSeq: 8 };
+    await store.receivePinnedNote({ ...metadata, value: { body: 'same' } });
+    await store.receiveFeatures({ ...metadata, value: { ideasEnabled: true } });
+    const snapshot = { ...source, nodes: {}, profile: { body: 'same', ideasEnabled: true } };
+    const before = p.value;
+    expect(store.unreconciledIds(snapshot, 'accountA')).toEqual([]);
+    const plan = store.prepareOwnership(snapshot, 'accountA'); expect(plan.needsReview).toBe(false);
+    expect(p.value).toBe(before); expect(store.outbox).toEqual([]); expect(store.historyDepths.past).toBe(0);
+    const restart = await open(p); expect(restart.store.unreconciledIds(snapshot, 'accountA')).toEqual([]);
+    expect(p.value).toBe(before);
+    const ops = await restart.store.commitOwnership(restart.store.prepareOwnership(snapshot, 'accountA'), {});
+    expect(ops).toEqual([]); expect(restart.store.historyDepths.past).toBe(0);
+    expect((await open(p)).store.prepareOwnership(snapshot, 'accountA').items).toEqual([]);
+    expect(JSON.parse(p.value!).profile.pinnedNote.synced.revision).toBe(8);
+  });
+  it('Issue 94 same-profile plan still rejects remote revision races and real differences still need explicit choice', async () => {
+    const { store } = await open(); const metadata = { revision: 8, lastOpId: 'remote', lastDeviceId: 'remote', lastLocalSeq: 8 };
+    await store.receivePinnedNote({ ...metadata, value: { body: 'same' } });
+    const snapshot = { ...source, nodes: {}, profile: { body: 'same', ideasEnabled: false } };
+    const plan = store.prepareOwnership(snapshot, 'accountA');
+    await store.receivePinnedNote({ ...metadata, revision: 9, lastOpId: 'new', value: { body: 'same' } });
+    await expect(store.commitOwnership(plan, {})).rejects.toThrow('変更');
+    const changed = { ...snapshot, profile: { ...snapshot.profile, body: 'different' } };
+    expect(store.unreconciledIds(changed, 'accountA')).toEqual(['$profile']);
+    await expect(store.commitOwnership(store.prepareOwnership(changed, 'accountA'), {})).rejects.toThrow('採用先');
+  });
   it('integrates the anonymized iPhone independent root/a0 pair without changing either original', async () => {
     const local = { ...iphoneOwnershipRanks.local, opaque: { keep: true }, routineHistory: { keep: [] }, deadlineSortKey: 'z9' };
     const account = iphoneOwnershipRanks.account;
