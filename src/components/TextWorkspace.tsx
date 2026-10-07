@@ -1,6 +1,6 @@
 import { FormTextInput } from './FormTextInput';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View, StyleSheet, type TextStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { useAppTheme } from '../theme/theme';
@@ -9,6 +9,9 @@ import { serializeText } from '../textFormat/session';
 import { planTextEdit } from '../textFormat/planner';
 import { closeTextChoices, renderTextView, textCellCandidates, textHighlights, textChangeLabels, TEXT_DETAIL_LABELS, type TextDetail, type TextViewSnapshot } from '../textFormat/presentation';
 import { TEXT_COLUMNS, type TextPlan, type TextSession } from '../textFormat/syntax';
+
+// Browser owns the resized height; React never controls it or replaces the input.
+const webEditorResize: TextStyle & { resize: 'vertical' } = { resize: 'vertical', overflow: 'scroll' };
 
 function ActionButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
   const { colors } = useAppTheme();
@@ -70,7 +73,7 @@ export function TextEditScreen({ session, excluded, prepare, commit, discard, on
         {excluded > 0 && <Text style={{ color: colors.textSecondary }}>Routine表示 {excluded}行は編集対象外です（仮想Occurrenceを含む）。Routine定義はツリーから編集してください。</Text>}
         <Text style={{ color: colors.textSecondary }}>ref | 種別 | タイトル | 期限 | 完了 | 本文 | Routine　　新規行はrefなし。1保存をまとめてUndoできます。</Text>
         <FormTextInput ref={input} accessibilityLabel="TaskMemoテキスト編集入力" multiline value={text} onChangeText={setText} onSelectionChange={event => setSelection(event.nativeEvent.selection.start)} editable={!busy && !dialog} autoCapitalize="none" autoCorrect={false} spellCheck={false}
-          style={[s.editor, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]} />
+          style={[s.editor, Platform.OS === 'web' && webEditorResize, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]} />
         {!!candidates.length && text === validatedText && <View style={s.actions}><Text style={{ color: colors.textSecondary }}>候補（{TEXT_COLUMNS[cellIndex]}）:</Text>{candidates.map(value => <ActionButton key={value} label={value} disabled={busy || !!dialog} onPress={() => {
           const cell = cursorRow!.cells[cellIndex], lineStart = text.split('\n').slice(0, cursorLine - 1).join('\n').length + (cursorLine > 1 ? 1 : 0);
           const raw = text.slice(lineStart + cell.start - 1, lineStart + cell.end - 1);

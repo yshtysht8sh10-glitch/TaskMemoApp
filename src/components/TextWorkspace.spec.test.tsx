@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { spec } from '../textFormat/specTestSupport';
 import { TextEditScreen, TextViewScreen } from './TextWorkspace';
@@ -53,6 +53,24 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); });
 const source = () => readFileSync('src/components/TextWorkspace.tsx', 'utf8');
+it('Issue 92 uses native vertical textarea resize without a height cap or replacing the editor during validation', async () => {
+  const p = props(); await mount(<TextEditScreen {...p} />);
+  const editor = host.querySelector('textarea')!;
+  expect(editor.style.resize).toBe('vertical'); expect(editor.style.overflow).toBe('scroll');
+  expect(editor.style.minHeight).toBe('260px'); expect(editor.style.maxHeight).toBe('');
+  expect(Number.parseFloat(editor.style.fontSize)).toBeGreaterThanOrEqual(16);
+  const draft = serializeText(p.session).replace('Title', 'Changed'); await input(draft);
+  editor.style.height = '1200px'; editor.focus(); editor.setSelectionRange(3, 8);
+  await validate();
+  expect(host.querySelector('textarea')).toBe(editor); expect(editor.style.height).toBe('1200px');
+  expect(editor.value).toBe(draft); expect(document.activeElement).toBe(editor);
+  expect([editor.selectionStart, editor.selectionEnd]).toEqual([3, 8]);
+  expect(p.commit).not.toHaveBeenCalled(); expect(text()).toContain('Changed');
+});
+it('Issue 92 leaves native editor resize styles unchanged', async () => {
+  state.platform = 'ios'; await mount(<TextEditScreen {...props()} />);
+  expect(host.querySelector('textarea')!.style.resize).toBe('');
+});
 spec('TW-UI-001', () => {
   for (const path of ['src/components/NodeTree.tsx', 'src/components/DeadlineView.tsx']) {
     const s = readFileSync(path, 'utf8'); expect(s).toContain('テキスト編集'); expect(s).toContain('テキストView');
