@@ -1,4 +1,5 @@
 import type { DuePreset, MemoStatus, Node } from "@/models/node";
+import { isValidSortKey } from '../domain/sortKeys';
 import { allDeadlineGroupIds, TODAY_GRANULARITIES, type DeadlineGroupKey, type TodayGranularity } from "../domain/deadlineView";
 import type { ReminderPreferences } from "@/domain/reminders";
 import type { FeaturePreferences } from "@/services/featurePreferences";
@@ -128,6 +129,9 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
       if (value.routineDueOverrides !== undefined &&
         (!isObject(value.routineDueOverrides) || Object.entries(value.routineDueOverrides).some(([key, due]) => !/^\d{4}-\d{2}-\d{2}$/.test(key) || !validDateString(due, true))))
         throw new Error(`${value.id}のルーティーン当日設定が不正です。`);
+      if (value.routineDeadlineSortKeys !== undefined &&
+        (!isObject(value.routineDeadlineSortKeys) || Object.entries(value.routineDeadlineSortKeys).some(([key, rank]) => !/^\d{4}-\d{2}-\d{2}$/.test(key) || typeof rank !== 'string' || !isValidSortKey(rank))))
+        throw new Error(`${value.id}のルーティーン一覧順が不正です。`);
     }
     return value;
   });

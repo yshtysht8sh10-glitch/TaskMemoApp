@@ -39,6 +39,7 @@ export function convertMemoType(
     const {
       routineHistory: _routineHistory,
       routineDueOverrides: _routineDueOverrides,
+      routineDeadlineSortKeys: _routineDeadlineSortKeys,
       deadlineSortKey: _deadlineSortKey,
       ...common
     } = node;

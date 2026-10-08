@@ -28,32 +28,32 @@ import {
   type DeadlineCreateContext,
   type DeadlineGroupKey,
   type TodayGranularity,
-} from "@/domain/deadlineView";
-import type { NodeDraft } from "@/domain/nodeOperations";
-import { beforeIdForInsertion } from "@/domain/insertionPosition";
-import { nativeDeadlineGroupForPlaceholder, nativeDeadlineInsertion } from "@/domain/nativeDeadlineDrop";
-import type { MemoNode, Node } from "@/models/node";
-import { formatDateTimeInput, parseLocalDateTime } from "@/utils/dueDates";
-import { formatDueLabel } from "@/utils/formatDueLabel";
-import { useAppTheme, type ThemeColors } from "@/theme/theme";
-import { useInlineTitleEdit } from "@/hooks/useInlineTitleEdit";
-import { CountBadge } from "@/components/CountBadge";
-import { MemoRowActions } from "@/components/MemoRowActions";
-import { CompletionMotion } from "@/components/CompletionMotion";
-import { WebSortableScrollList } from "@/components/WebSortableScrollList";
-import { clampPinnedNoteHeight } from "@/services/viewPreferences";
-import { dragActivationDelay, NATIVE_DRAG_ACTIVATION_DISTANCE_PX } from "@/domain/dragActivation";
-import { DRAG_AUTOSCROLL_THRESHOLD_PX, NATIVE_DRAG_AUTOSCROLL_SPEED } from "@/domain/dragAutoScroll";
+} from "../domain/deadlineView";
+import type { NodeDraft } from "../domain/nodeOperations";
+import { beforeIdForInsertion } from "../domain/insertionPosition";
+import { nativeDeadlineGroupForPlaceholder, nativeDeadlineInsertion } from "../domain/nativeDeadlineDrop";
+import type { MemoNode, Node } from "../models/node";
+import { formatDateTimeInput, parseLocalDateTime } from "../utils/dueDates";
+import { formatDueLabel } from "../utils/formatDueLabel";
+import { useAppTheme, type ThemeColors } from "../theme/theme";
+import { useInlineTitleEdit } from "../hooks/useInlineTitleEdit";
+import { CountBadge } from "../components/CountBadge";
+import { MemoRowActions } from "../components/MemoRowActions";
+import { CompletionMotion } from "../components/CompletionMotion";
+import { WebSortableScrollList } from "../components/WebSortableScrollList";
+import { clampPinnedNoteHeight } from "../services/viewPreferences";
+import { dragActivationDelay, NATIVE_DRAG_ACTIVATION_DISTANCE_PX } from "../domain/dragActivation";
+import { DRAG_AUTOSCROLL_THRESHOLD_PX, NATIVE_DRAG_AUTOSCROLL_SPEED } from "../domain/dragAutoScroll";
 import {
   repeatRuleLabel,
   routineCategoryForMemo,
   routineOccurrenceDueAt,
-} from "@/domain/routine";
-import { appAlert } from "@/utils/appAlert";
-import { MemoTitleTap } from "@/components/MemoTitleTap";
-import { QuickTitleEditor } from "@/components/QuickTitleEditor";
-import { isMobileTitleEditor } from "@/utils/memoTap";
-import { quickAddTitleNextStep } from "@/utils/quickAddTitle";
+} from "../domain/routine";
+import { appAlert } from "../utils/appAlert";
+import { MemoTitleTap } from "../components/MemoTitleTap";
+import { QuickTitleEditor } from "../components/QuickTitleEditor";
+import { isMobileTitleEditor } from "../utils/memoTap";
+import { quickAddTitleNextStep } from "../utils/quickAddTitle";
 
 type DeadlineRow =
   | {
@@ -501,17 +501,17 @@ export function DeadlineView({
     }, 0);
   };
   const setCandidate = (index: number) => {
-    const next = nativeDeadlineGroupForPlaceholder(rows, index, sourceGroups);
+    const next = nativeDeadlineGroupForPlaceholder(rows, index, sourceGroups, moving.current?.sourceGroup);
     targetRef.current = next;
     setTargetGroup(next);
   };
-  const finish = (_params: DragEndParams<DeadlineRow>) => {
+  const finish = (params: DragEndParams<DeadlineRow>) => {
     const active = moving.current;
     const target = targetRef.current;
     moving.current = null;
     targetRef.current = null;
     setTargetGroup(null);
-    const insertion = nativeDeadlineInsertion(active, target);
+    const insertion = nativeDeadlineInsertion(active, target, params.data);
     if (insertion) {
       const orderedIds = sourceGroups.find((group) => group.key === insertion.groupKey)
         ?.memos.map((memo) => memo.id) ?? [];
@@ -636,7 +636,7 @@ export function DeadlineView({
                   ? item.memo.routineOccurrenceKey ? undefined : toggleSelected(item.memo.id)
                   : onOpenMemo(sourceMemo(item.memo))
               }
-              onLongPress={selectionMode || item.memo.routineOccurrenceKey ? undefined : drag}
+              onLongPress={selectionMode ? undefined : drag}
               delayLongPress={dragActivationDelay(Platform.OS === "web")}
               style={({ pressed }) => [
                 styles.row,
@@ -691,7 +691,7 @@ export function DeadlineView({
                   selectionMode ? <Text style={styles.title} numberOfLines={1}>{routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}{item.memo.title}</Text> :
                   <View style={{ flexDirection: "row", alignItems: "center" }}>
                     <Text style={styles.title}>{routineCategoryForMemo(nodes, item.memo) ? "🔁 " : "・"}</Text>
-                    <MemoTitleTap onSingle={() => onOpenMemo(sourceMemo(item.memo))} onDouble={() => item.memo.routineOccurrenceKey ? onOpenMemo(sourceMemo(item.memo)) : mobileTitleEditor ? onQuickTitle(item.memo) : titleEdit.begin(item.memo.id, item.memo.title)} onLongPress={item.memo.routineOccurrenceKey ? () => {} : drag}>
+                    <MemoTitleTap onSingle={() => onOpenMemo(sourceMemo(item.memo))} onDouble={() => item.memo.routineOccurrenceKey ? onOpenMemo(sourceMemo(item.memo)) : mobileTitleEditor ? onQuickTitle(item.memo) : titleEdit.begin(item.memo.id, item.memo.title)} onLongPress={selectionMode ? () => {} : drag}>
                       <Text style={styles.title} numberOfLines={1}>{item.memo.title}</Text>
                     </MemoTitleTap>
                   </View>
@@ -863,7 +863,7 @@ export function DeadlineView({
           showDropIndicator={(_active, target) => target.kind === "memo"}
           canDropAfter={(target) => target.kind === "memo"}
           keyFor={(row) => row.id}
-          canDrag={(row) => !selectionMode && row.kind === "memo" && !row.memo.routineOccurrenceKey}
+          canDrag={(row) => !selectionMode && row.kind === "memo"}
           contentContainerStyle={[
             styles.list,
             selectionMode && styles.selectionList,
@@ -931,7 +931,7 @@ export function DeadlineView({
           const row = rows[index];
           moving.current =
             !selectionMode && row?.kind === "memo"
-              && !row.memo.routineOccurrenceKey ? { id: row.memo.id, sourceGroup: row.groupKey }
+              ? { id: row.memo.id, sourceGroup: row.groupKey }
               : null;
           setCandidate(index);
         }}

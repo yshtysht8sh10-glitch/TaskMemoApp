@@ -3,6 +3,7 @@ import type { DuePreset, MemoNode, Node } from "@/models/node";
 import { compareSortKeys } from "./nodeOperations";
 import { localDateKey, missedRoutineOccurrences, routineCategoryForMemo, routineOccurrenceDueAt } from "./routine";
 import { isTask } from "./memoType";
+import { isValidSortKey } from "./sortKeys";
 import { beforeIdForInsertion } from "./insertionPosition";
 
 export type TodayGranularity = "today" | "dayNight" | "amPm" | "threePart";
@@ -353,15 +354,9 @@ export function deadlineGroups(
       ...(!routineCategoryForMemo(nodes, memo) || occurrenceDueAt(memo) !== null ? [memo] : []),
       ...missedRoutineOccurrences(nodes, memo, now),
     ])
-    .sort((a, b) =>
-      a.deadlineSortKey && b.deadlineSortKey
-        ? compareSortKeys(a.deadlineSortKey, b.deadlineSortKey) ||
-          a.id.localeCompare(b.id)
-        : (occurrenceDueAt(a)?.getTime() ?? Infinity) -
-            (occurrenceDueAt(b)?.getTime() ?? Infinity) ||
-          compareSortKeys(a.sortKey, b.sortKey) ||
-          a.id.localeCompare(b.id),
-    );
+    .map((memo) => routineCategoryForMemo(nodes, memo)
+      ? { ...memo, deadlineSortKey: memo.routineDeadlineSortKeys?.[memo.routineOccurrenceKey ?? localDateKey(now)] ?? memo.deadlineSortKey }
+      : memo);
   for (const memo of memos) {
     const source = routineCategoryForMemo(nodes, memo)
       ? deadlineGroupForDueAt(occurrenceDueAt(memo), now, granularity)
@@ -374,7 +369,15 @@ export function deadlineGroups(
     .map((definition) => ({
       ...definition,
       key: definition.id,
-      memos: grouped.get(definition.id) ?? [],
+      memos: (grouped.get(definition.id) ?? []).sort((a, b) =>
+        a.deadlineSortKey && b.deadlineSortKey
+          ? compareSortKeys(a.deadlineSortKey, b.deadlineSortKey) ||
+            a.id.localeCompare(b.id)
+          : (occurrenceDueAt(a)?.getTime() ?? Infinity) -
+              (occurrenceDueAt(b)?.getTime() ?? Infinity) ||
+            compareSortKeys(a.sortKey, b.sortKey) ||
+            a.id.localeCompare(b.id),
+      ),
     }));
 }
 
@@ -555,50 +558,49 @@ export function moveMemoInDeadlineList(
   const target = deadlineGroupDefinitions(granularity).find(
     (group) => group.id === targetId,
   );
-  const moving = nodes.find(
-    (node): node is MemoNode => node.id === memoId && node.type === "memo",
-  );
-  if (
-    !moving ||
-    !isTask(moving) ||
-    moving.deletedAt !== null ||
-    moving.status !== "active" ||
-    !target
-  )
-    return nodes;
-  const same = (routineCategoryForMemo(nodes, moving)
-    ? deadlineGroupForDueAt(routineOccurrenceDueAt(nodes, moving, now), now, granularity)
-    : deadlineGroupForMemo(moving, now, granularity)) === targetId;
+  const groups = deadlineGroups(nodes, now, undefined, granularity);
+  const sourceGroup = groups.find((group) => group.memos.some((memo) => memo.id === memoId));
+  const moving = sourceGroup?.memos.find((memo) => memo.id === memoId);
+  if (!moving || !target) return nodes;
+  const same = sourceGroup!.key === targetId;
+  // Historical projections may only reorder; never reinterpret a date as a deadline move.
+  if (moving.routineOccurrenceKey && !same) return nodes;
   if (!same && (!target.create || target.create.editable)) return nodes;
-  const ordered = deadlineGroups(nodes, now, undefined, granularity).flatMap(
-    (group) => group.memos,
-  );
-  const keys = generateNKeysBetween(null, null, ordered.length);
-  const withKeys = nodes.map((node) => {
-    if (node.type !== "memo") return node;
-    const index = ordered.findIndex((memo) => memo.id === node.id);
-    return index >= 0
-      ? { ...node, deadlineSortKey: node.deadlineSortKey ?? keys[index] }
-      : node;
-  });
-  const changed = same
-    ? withKeys
-    : updateMemoDeadline(withKeys, memoId, targetId, now, granularity);
-  const targetMemos =
-    deadlineGroups(changed, now, undefined, granularity)
-      .find((group) => group.key === targetId)
-      ?.memos.filter((memo) => memo.id !== memoId) ?? [];
-  const found = beforeId
-    ? targetMemos.findIndex((memo) => memo.id === beforeId)
-    : targetMemos.length;
-  const index = found < 0 ? targetMemos.length : found;
-  const deadlineSortKey = generateKeyBetween(
-    targetMemos[index - 1]?.deadlineSortKey ?? null,
-    targetMemos[index]?.deadlineSortKey ?? null,
-  );
-  return changed.map((node) =>
-    node.id === memoId ? { ...node, deadlineSortKey, updatedAt: now } : node,
-  );
+  const changed = same ? nodes : updateMemoDeadline(nodes, memoId, targetId, now, granularity);
+  if (!same && changed === nodes) return nodes;
+  const targetMemos = deadlineGroups(changed, now, undefined, granularity)
+    .find((group) => group.key === targetId)?.memos ?? [];
+  const index = targetMemos.findIndex((memo) => memo.id === memoId);
+  if (index < 0 || beforeId === memoId) return nodes;
+  const remaining = targetMemos.filter((memo) => memo.id !== memoId);
+  const found = beforeId ? remaining.findIndex((memo) => memo.id === beforeId) : remaining.length;
+  const insertionIndex = found < 0 ? remaining.length : found;
+  const desired = [...remaining];
+  desired.splice(insertionIndex, 0, moving);
+  if (same && desired.every((memo, i) => memo.id === targetMemos[i].id)) return nodes;
+
+  // Initialize only this bucket. Missing/duplicate legacy ranks cannot safely bound a new key.
+  const valid = targetMemos.every((memo, i) => memo.deadlineSortKey && isValidSortKey(memo.deadlineSortKey)
+    && (i === 0 || compareSortKeys(targetMemos[i - 1].deadlineSortKey!, memo.deadlineSortKey) < 0));
+  const ranks = valid ? targetMemos.map((memo) => memo.deadlineSortKey!)
+    : generateNKeysBetween(null, null, targetMemos.length);
+  const byId = new Map(targetMemos.map((memo, i) => [memo.id, ranks[i]]));
+  byId.set(memoId, generateKeyBetween(
+    remaining[insertionIndex - 1] ? byId.get(remaining[insertionIndex - 1].id)! : null,
+    remaining[insertionIndex] ? byId.get(remaining[insertionIndex].id)! : null,
+  ));
+  let result = changed;
+  for (const memo of targetMemos) {
+    const rank = byId.get(memo.id)!;
+    if (rank === memo.deadlineSortKey) continue;
+    const routine = routineCategoryForMemo(nodes, memo);
+    const sourceId = memo.routineSourceId ?? memo.id;
+    result = result.map((node) => node.id !== sourceId || node.type !== 'memo' ? node : routine
+      ? { ...node, routineDeadlineSortKeys: { ...node.routineDeadlineSortKeys,
+          [memo.routineOccurrenceKey ?? localDateKey(now)]: rank }, updatedAt: now }
+      : { ...node, deadlineSortKey: rank, updatedAt: now });
+  }
+  return result;
 }
 
 export function deadlineBeforeIdForDrop(

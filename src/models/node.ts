@@ -64,6 +64,8 @@ export type MemoNode = BaseNode & {
   memoType?: MemoType;
   /** Manual ordering used by the deadline list, independent of tree order. */
   deadlineSortKey?: string;
+  /** Independent deadline-list ranks per Routine date; projections remain transient. */
+  routineDeadlineSortKeys?: Record<string, string>;
   body: string;
   /** The authoritative instant used for due-date checks. */
   dueAt: Date | null;

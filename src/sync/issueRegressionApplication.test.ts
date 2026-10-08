@@ -3,7 +3,8 @@ import { TaskMemoV2ApplicationStore } from './taskMemoApplicationStore';
 import type { ApplicationJournalPersistence } from './applicationStore';
 import { createNode, moveNode, siblingsOf } from '../domain/nodeOperations';
 import { dropCandidateFor } from '../domain/treeDrop';
-import { deadlineGroups } from '../domain/deadlineView';
+import { deadlineGroups, moveMemoInDeadlineList } from '../domain/deadlineView';
+import { InMemoryRevisionServer } from './revisionModel';
 import { toggleRoutineCompletion } from '../domain/routine';
 class Memory implements ApplicationJournalPersistence {
   value: string | null = null; journal: string | null = null; fail = false;
@@ -16,6 +17,41 @@ class Memory implements ApplicationJournalPersistence {
   };
 }
 const at = new Date(2026, 9, 3, 8);
+it('[96-APPLICATION] occurrence order survives atomic persistence, restart, V2 sync and Undo/Redo', async () => {
+  const p = new Memory();
+  let a = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'a', now: () => at });
+  const b = await TaskMemoV2ApplicationStore.open(new Memory(), [], { deviceId: 'b', now: () => at });
+  const server = new InMemoryRevisionServer();
+  const flush = async () => {
+    for (const op of a.outbox) {
+      const ack = server.apply(op);
+      expect(ack.record).toBeDefined();
+      await a.acknowledge(op.opId, ack.record);
+      await b.receive(ack.record!);
+    }
+  };
+  const parentId = await a.ensureRoutineRoot();
+  await a.command('routine', 'create', nodes => createNode(nodes, 'memo', { title: 'daily', parentId, repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-10-03' }, dueAt: new Date(2026, 9, 3, 9), duePreset: 'custom' }, at, 'routine'));
+  await flush();
+  const now = new Date(2026, 9, 5, 8);
+  const order = (store: TaskMemoV2ApplicationStore) => deadlineGroups(store.nodes, now).find(g => g.key === 'overdue')!.memos.map(n => n.id);
+  const original = a.nodes, before = order(a), depth = a.historyDepths.past;
+  const reorder = () => a.command('reorder', 'update', nodes => moveMemoInDeadlineList(nodes, before[0], 'overdue', undefined, now));
+  p.fail = true;
+  await expect(reorder()).rejects.toThrow('atomic');
+  expect(a.nodes).toEqual(original); expect(a.outbox).toHaveLength(0);
+  p.fail = false;
+  await reorder();
+  expect(a.historyDepths.past).toBe(depth + 1);
+  expect(a.outbox).toHaveLength(1); expect(a.outbox[0].targetNodeId).toBe('routine');
+  expect(order(a)).toEqual([...before].reverse());
+  await flush(); expect(order(b)).toEqual(order(a));
+  a = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'ignored' });
+  expect(order(a)).toEqual([...before].reverse());
+  await a.undo(new Date(now.getTime() + 1)); await flush(); expect(order(b)).toEqual(before);
+  await a.redo(new Date(now.getTime() + 2)); await flush(); expect(order(b)).toEqual([...before].reverse());
+  expect(a.nodes).toHaveLength(2);
+});
 it('[65-APPLICATION] domain category drop is atomic with one History, Outbox, Undo/Redo and restart', async () => {
   const p = new Memory();
   let store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'local', now: () => at });

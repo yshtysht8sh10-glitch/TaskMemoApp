@@ -3,6 +3,7 @@ import { collection, getDocs, doc, getDoc, runTransaction, setDoc, Timestamp, ty
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
+import { deadlineGroups, moveMemoInDeadlineList } from '../domain/deadlineView';
 import type { Node } from "../models/node";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { createFirebaseSyncAdapter } from "./firebaseSyncAdapter";
@@ -37,6 +38,40 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('syncs independent missed Routine ranks through real SDK receipts, second device and restart', async () => {
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const persistence = new MemoryPersistence();
+    Object.assign(persistence, { writeAtomic: async (expected: string | null, value: string) => {
+      if (persistence.committed !== expected || persistence.journal) throw new Error('CAS'); persistence.committed = value;
+    } });
+    let a = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'rank-A' });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: 'rank-B' });
+    let ca = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    const cb = new TaskMemoV2SyncController(b, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    const start = new Date(2026, 9, 3, 9), current = new Date(2026, 9, 5, 8);
+    const order = (store: TaskMemoV2ApplicationStore) => deadlineGroups(store.nodes, current).find(g => g.key === 'overdue')!.memos.map(m => m.id);
+    try {
+      await Promise.all([ca.start(), cb.start()]);
+      const parentId = await ca.ensureRoutineRoot();
+      await a.command('create', 'create', nodes => createNode(nodes, 'memo', { title: 'daily', parentId, repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-10-03' }, dueAt: start, duePreset: 'custom' }, start, 'daily'));
+      await ca.flush(); await waitFor(() => order(b).length === 2);
+      const before = order(a);
+      await a.command('reorder', 'update', nodes => moveMemoInDeadlineList(nodes, before[0], 'overdue', undefined, current));
+      await ca.flush(); await waitFor(() => order(b)[0] === before[1]);
+      expect(order(b)).toEqual([...before].reverse());
+      const cloud = (await getDoc(doc(db, 'users/owner/nodesV2/daily'))).data()!.record.value;
+      expect(Object.keys(cloud.routineDeadlineSortKeys)).toEqual(['2026-10-03', '2026-10-04']);
+      expect(cloud).toMatchObject({ status: 'active', completedAt: null, dueAt: start.toISOString(), repeatRule: { startsOn: '2026-10-03' } });
+      ca.stop();
+      a = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'ignored' });
+      ca = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+      await ca.start(); expect(order(a)).toEqual([...before].reverse());
+      await a.undo(new Date(current.getTime() + 1)); await ca.flush(); await waitFor(() => order(b)[0] === before[0]);
+      await a.redo(new Date(current.getTime() + 2)); await ca.flush(); await waitFor(() => order(b)[0] === before[1]);
+      expect(a.nodes).toHaveLength(2); expect(a.outbox).toHaveLength(0);
+    } finally { ca.stop(); cb.stop(); }
+  }, 30_000);
 
   it('provisions a fresh system Routine area concurrently using strict V2 receipts without rewriting the winner', async () => {
     const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
