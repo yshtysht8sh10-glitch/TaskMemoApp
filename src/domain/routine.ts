@@ -1,4 +1,4 @@
-import type { CategoryNode, MemoNode, Node, RepeatRule } from "@/models/node";
+import type { CategoryNode, MemoNode, Node, RepeatRule, RoutineOutcome } from "../models/node";
 
 export const localDateKey = (date = new Date()) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -47,7 +47,40 @@ export const routineCategoryForMemo = (nodes: Node[], memo: MemoNode) =>
     ? null
     : routineCategoryForParent(nodes, memo.parentId);
 export const isRoutineCompletedOn = (memo: MemoNode, date = new Date()) =>
-  !!memo.routineHistory?.[localDateKey(date)];
+  routineOutcomeOn(memo, localDateKey(date)) === 'completed';
+
+export const routineOutcomeOn = (memo: MemoNode, key: string): RoutineOutcome['state'] =>
+  memo.routineOutcomes?.[key]?.state ?? (memo.routineHistory?.[key] ? 'completed' : 'pending');
+export const isRoutineSkippedOn = (memo: MemoNode, date = new Date()) =>
+  routineOutcomeOn(memo, localDateKey(date)) === 'skipped';
+
+export function nextRoutineOutcome(memo: MemoNode, key: string, state: RoutineOutcome['state'], now: Date): RoutineOutcome {
+  return { state, changedAt: now.toISOString(), version: (memo.routineOutcomes?.[key]?.version ?? 0) + 1 };
+}
+
+function setRoutineOutcome(nodes: Node[], memoId: string, date: Date, state: RoutineOutcome['state'], now: Date) {
+  const memo = nodes.find((n): n is MemoNode => n.id === memoId && n.type === 'memo');
+  if (!memo || memo.deletedAt || memo.purgedAt || !isRoutineDueOn(nodes, memo, date))
+    throw new Error('対象日のルーティーンが見つかりません。');
+  const key = localDateKey(date);
+  if (routineOutcomeOn(memo, key) === state) return nodes;
+  const routineHistory = { ...memo.routineHistory };
+  // Keep old completion data intact except the selected date when it changes.
+  if (state === 'completed') routineHistory[key] = now.toISOString();
+  else if (routineHistory[key]) routineHistory[key] = null;
+  return nodes.map(n => n.id !== memoId ? n : { ...memo,
+    ...(Object.keys(routineHistory).length ? { routineHistory } : {}),
+    routineOutcomes: { ...memo.routineOutcomes, [key]: nextRoutineOutcome(memo, key, state, now) }, updatedAt: now });
+}
+
+export const skipRoutineOccurrence = (nodes: Node[], memoId: string, date: Date, now = new Date()) =>
+  setRoutineOutcome(nodes, memoId, date, 'skipped', now);
+export const completeRoutineOccurrence = (nodes: Node[], memoId: string, date: Date, now = new Date()) =>
+  setRoutineOutcome(nodes, memoId, date, 'completed', now);
+export function clearRoutineSkip(nodes: Node[], memoId: string, date: Date, now = new Date()) {
+  const memo = nodes.find((n): n is MemoNode => n.id === memoId && n.type === 'memo');
+  return memo && isRoutineSkippedOn(memo, date) ? setRoutineOutcome(nodes, memoId, date, 'pending', now) : nodes;
+}
 
 const endOfDay = (date: Date) =>
   new Date(
@@ -113,7 +146,7 @@ export function routineOccurrenceDueAt(
     return null;
   if (
     !isRepeatRuleDate(memo.repeatRule, now) ||
-    isRoutineCompletedOn(memo, now)
+    isRoutineCompletedOn(memo, now) || isRoutineSkippedOn(memo, now)
   )
     return null;
   const overridden = memo.routineDueOverrides?.[localDateKey(now)];
@@ -143,7 +176,7 @@ export function missedRoutineOccurrences(nodes: Node[], memo: MemoNode, now = ne
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const missed: MemoNode[] = [];
   for (let date = start; date < today; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)) {
-    if (!isRepeatRuleDate(memo.repeatRule, date) || isRoutineCompletedOn(memo, date)) continue;
+    if (!isRepeatRuleDate(memo.repeatRule, date) || isRoutineCompletedOn(memo, date) || isRoutineSkippedOn(memo, date)) continue;
     const dueAt = routineOccurrenceDueAt(nodes, memo, date);
     if (!dueAt) continue;
     const key = localDateKey(date);
@@ -168,18 +201,13 @@ export function toggleRoutineCompletion(
   date = new Date(),
   now = date,
 ) {
-  const key = localDateKey(date);
-  return nodes.map((node) => {
-    if (
-      node.id !== memoId ||
-      node.type !== "memo" ||
-      !routineCategoryForMemo(nodes, node)
-    )
-      return node;
-    const routineHistory = { ...node.routineHistory };
-    routineHistory[key] = routineHistory[key] ? null : now.toISOString();
-    return { ...node, routineHistory, updatedAt: now };
-  });
+  const memo = nodes.find((n): n is MemoNode => n.id === memoId && n.type === 'memo');
+  if (!memo || !routineCategoryForMemo(nodes, memo)) return nodes;
+  // Legacy routines without rules can still cancel an existing completion.
+  const completed = isRoutineCompletedOn(memo, date);
+  if (completed) return clearRoutineCompletion(nodes, memoId, date, now);
+  if (!isRoutineDueOn(nodes, memo, date)) return nodes;
+  return completeRoutineOccurrence(nodes, memoId, date, now);
 }
 
 export function clearRoutineCompletion(
@@ -193,11 +221,13 @@ export function clearRoutineCompletion(
     if (
       node.id !== memoId ||
       node.type !== "memo" ||
-      !node.routineHistory?.[key]
+      !isRoutineCompletedOn(node, date)
     )
       return node;
     const routineHistory = { ...node.routineHistory, [key]: null };
-    return { ...node, routineHistory, updatedAt: now };
+    return { ...node, routineHistory, ...(node.routineOutcomes?.[key] ? {
+      routineOutcomes: { ...node.routineOutcomes, [key]: nextRoutineOutcome(node, key, 'pending', now) },
+    } : {}), updatedAt: now };
   });
 }
 

@@ -232,7 +232,8 @@ describe("TaskMemo V2 application store", () => {
     const store = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [root, memo], { deviceId: "device-a", now: () => at(9) });
     await store.command("complete routine", "complete", nodes => completeMemo(nodes, "routine-memo", at(1)));
     expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).not.toEqual({});
-    await store.undo(at(2)); expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).toEqual({});
+    // Cancellation is durable so an older completion cannot resurrect after sync.
+    await store.undo(at(2)); expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).toEqual({ '2026-09-18': null });
     await store.redo(at(3)); expect((store.nodes.find(node => node.id === "routine-memo") as MemoNode).routineHistory).not.toEqual({});
   });
 

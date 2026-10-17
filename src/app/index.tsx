@@ -116,6 +116,7 @@ import { selectedChoiceStyle } from "@/utils/choiceStyle";
 import { installEditorDiagnostics, recordEditorDiagnostic } from "@/utils/editorDiagnostics";
 import { editorKeyboardDismissMode } from "@/utils/editorScroll";
 import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
+import { completeFromDeadlineList, removeFromDeadlineList, routineListTarget } from '@/domain/routineListActions';
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
@@ -123,6 +124,8 @@ import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigati
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
   clearRoutineCompletion,
+  clearRoutineSkip,
+  routineCategoryForMemo,
   localDateKey,
   parseLocalDateKey,
   repeatRuleLabel,
@@ -241,6 +244,7 @@ export default function HomeScreen() {
   }, [editor]);
   const [quickTitleTarget, setQuickTitleTarget] = useState<{ id: string; title: string } | null>(null);
   const [menuNode, setMenuNode] = useState<Node | null>(null);
+  const [menuRoutineDate, setMenuRoutineDate] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [revealMemoId, setRevealMemoId] = useState<string | null>(null);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
@@ -616,7 +620,10 @@ export default function HomeScreen() {
   const askDelete = (node: Node) => {
     setMenuNode(null);
     if (node.type === "memo")
-      appAlert("Memoを削除", `「${node.title}」をゴミ箱へ移動します。`, [
+      appAlert(routineCategoryForMemo(nodes, node) ? "ルーティーン本体を削除" : "Memoを削除",
+        routineCategoryForMemo(nodes, node)
+          ? `「${node.title}」\nこのルーティーン自体を削除します。今後の繰り返しも停止します。`
+          : `「${node.title}」をゴミ箱へ移動します。`, [
         { text: "キャンセル", style: "cancel" },
         {
           text: "削除",
@@ -765,7 +772,7 @@ export default function HomeScreen() {
             onOpenMemo={openMemoEditor}
             onQuickTitle={(memo) => setQuickTitleTarget({ id: memo.id, title: memo.title })}
             onComplete={completeWithUndo}
-            onMenu={setMenuNode}
+            onMenu={(node) => { setMenuRoutineDate(null); setMenuNode(node); }}
             onDrop={onDrop}
             onBulkMove={(nodeIds, onSuccess) =>
               setBulkMove({ nodeIds, onSuccess })
@@ -782,7 +789,7 @@ export default function HomeScreen() {
                 .filter(Boolean);
               appAlert(
                 `${roots.length}件を削除`,
-                `${titles.join("、")} をゴミ箱へ移動します。Categoryは配下のNodeも一緒に削除されます。`,
+                `${titles.join("、")} をゴミ箱へ移動します。Categoryは配下のNodeも一緒に削除されます。${nodes.some(n => roots.includes(n.id) && n.type === 'memo' && routineCategoryForMemo(nodes, n)) ? '\nこのルーティーン自体を削除します。今後の繰り返しも停止します。' : ''}`,
                 [
                   { text: "キャンセル", style: "cancel" },
                   {
@@ -847,7 +854,11 @@ export default function HomeScreen() {
             onOpenMemo={openMemoEditor}
             onQuickTitle={(memo) => setQuickTitleTarget({ id: memo.id, title: memo.title })}
             onComplete={completeWithUndo}
-            onMenu={setMenuNode}
+            onMenu={(memo) => {
+              const target = routineListTarget(nodes, memo, new Date());
+              setMenuRoutineDate(target.dateKey);
+              setMenuNode(nodes.find(n => n.id === target.memoId) ?? null);
+            }}
             onDueDrop={(id, group, beforeId) =>
               apply("一覧でMemoを移動", (current) =>
                 moveMemoInDeadlineList(
@@ -868,10 +879,14 @@ export default function HomeScreen() {
                 completeSelectedNodes(current, ids),
               )
             }
-            onBulkDelete={(ids, onSuccess) =>
+            onBulkDelete={(ids, onSuccess) => {
+              const selectedAt = new Date();
+              const targets = ids.map(id => nodes.find((n): n is MemoNode => n.id === id && n.type === 'memo'))
+                .filter((n): n is MemoNode => !!n).map(m => routineCategoryForMemo(nodes, m)
+                  ? { ...m, routineSourceId: m.id, routineOccurrenceKey: localDateKey(selectedAt) } : m);
               appAlert(
-                `${ids.length}件を削除`,
-                "選択したTaskをゴミ箱へ移動します。",
+                `${ids.length}件を削除・スキップ`,
+                "通常Taskはゴミ箱へ移動し、ルーティーンは今回分だけスキップします。",
                 [
                   { text: "キャンセル", style: "cancel" },
                   {
@@ -880,15 +895,15 @@ export default function HomeScreen() {
                     onPress: () => {
                       if (
                         applyBatch("選択Taskを削除", (current) =>
-                          deleteSelectedNodes(current, ids),
+                          targets.reduce((next, memo) => removeFromDeadlineList(next, memo, selectedAt), current),
                         )
                       )
                         onSuccess();
                     },
                   },
                 ],
-              )
-            }
+              );
+            }}
             onOpenDisplaySettings={() => setSettingsOpen(true)}
           />
         ) : (
@@ -899,7 +914,7 @@ export default function HomeScreen() {
             onRestoreCompleted={(item) =>
               apply("完了を未完了に戻す", (current) =>
                 item.kind === "routineOccurrence"
-                  ? clearRoutineCompletion(
+                  ? (item.outcome === 'skipped' ? clearRoutineSkip : clearRoutineCompletion)(
                       current,
                       item.memo.id,
                       item.occurrenceDate!,
@@ -930,7 +945,7 @@ export default function HomeScreen() {
                   items.reduce(
                     (next, item) =>
                       item.kind === "routineOccurrence"
-                        ? clearRoutineCompletion(
+                        ? (item.outcome === 'skipped' ? clearRoutineSkip : clearRoutineCompletion)(
                             next,
                             item.memo.id,
                             item.occurrenceDate!,
@@ -1052,7 +1067,7 @@ export default function HomeScreen() {
       </Sheet>
       <Sheet
         visible={!!menuNode}
-        title={menuNode?.title ?? ""}
+        title={`${menuNode?.title ?? ''}${menuRoutineDate ? `（${menuRoutineDate}分）` : ''}`}
         onClose={() => setMenuNode(null)}
       >
         {menuNode?.type !== "category" ||
@@ -1089,7 +1104,9 @@ export default function HomeScreen() {
                       ? "Memoを未完了に戻す"
                       : "Memoを完了",
                     (n) =>
-                      menuNode.status === "completed"
+                      menuRoutineDate
+                        ? completeFromDeadlineList(n, { ...menuNode, routineSourceId: menuNode.id, routineOccurrenceKey: menuRoutineDate }, new Date())
+                        : menuNode.status === "completed"
                         ? restoreMemo(n, menuNode.id)
                         : completeMemo(n, menuNode.id),
                   );
@@ -1163,9 +1180,16 @@ export default function HomeScreen() {
               }}
             />
             <Action
-              label="削除"
+              label={menuRoutineDate ? "今回だけスキップ" : "削除"}
               danger
-              onPress={() => menuNode && askDelete(menuNode)}
+              onPress={() => {
+                if (!menuNode) return;
+                if (menuRoutineDate && menuNode.type === 'memo') {
+                  const target = { ...menuNode, routineSourceId: menuNode.id, routineOccurrenceKey: menuRoutineDate };
+                  apply('ルーティーン今回だけスキップ', current => removeFromDeadlineList(current, target, new Date()));
+                  setMenuNode(null);
+                } else askDelete(menuNode);
+              }}
             />
           </>
         ) : null}
@@ -2358,15 +2382,15 @@ function ListPanel({
                           </Text>
                         </Pressable>
                       )}
-                      <Text style={styles.cardTitle}>・{item.memo.title}</Text>
+                      <Text style={[styles.cardTitle, item.outcome === 'skipped' && styles.danger]}>{item.outcome === 'skipped' ? '↷ ' : '✓ '}{item.memo.title}</Text>
                     </View>
                     <Text style={styles.meta}>
                       {item.kind === "routineOccurrence"
-                        ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分`
+                        ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分 ${item.outcome === 'skipped' ? 'スキップ' : '完了'}`
                         : `元: ${parentName(item.memo.parentId)}`}
                     </Text>
                     <Text style={styles.meta}>
-                      完了: {item.completedAt.toLocaleString()}
+                      {item.outcome === 'skipped' ? 'スキップ' : '完了'}: {item.completedAt.toLocaleString()}
                     </Text>
                     {!selectionMode && (
                       <View style={styles.cardActions}>
@@ -2374,7 +2398,7 @@ function ListPanel({
                           onPress={() => onRestoreCompleted(item)}
                           style={styles.smallButton}
                         >
-                          <Text style={styles.buttonText}>未完了へ戻す</Text>
+                          <Text style={styles.buttonText}>{item.outcome === 'skipped' ? 'スキップを取り消す' : '未完了へ戻す'}</Text>
                         </Pressable>
                         {item.kind === "memo" && (
                           <Pressable

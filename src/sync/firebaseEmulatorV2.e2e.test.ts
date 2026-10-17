@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
 import { deadlineGroups, moveMemoInDeadlineList } from '../domain/deadlineView';
-import type { Node } from "../models/node";
+import type { Node, MemoNode } from "../models/node";
 import type { ApplicationJournalPersistence } from "./applicationStore";
 import { createFirebaseSyncAdapter } from "./firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
@@ -14,6 +14,8 @@ import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplication
 import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, getSelfRepairDiagnostics } from "./selfRepairDiagnostics";
 import { applyRevisionOperation } from "./revisionModel";
 import type { SyncOperation } from "./types";
+import { skipRoutineOccurrence, clearRoutineSkip, completeRoutineOccurrence } from '../domain/routine';
+import { completionHistoryGroups } from '../domain/completionHistory';
 
 const enabled = process.env.TASKMEMO_EMULATOR_E2E === "1";
 const waitFor = async (predicate: () => boolean, timeout = 5_000) => {
@@ -38,6 +40,44 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('persists running skips via SDK/Rules/receipts, merges offline dates and supports restart and Undo/Redo', async () => {
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const day = new Date(2026, 9, 17, 10), past = new Date(2026, 9, 16, 10), next = new Date(2026, 9, 18, 10);
+    const root: Node = { id: 'system-routine', type: 'category', categoryKind: 'routineRoot', parentId: null, sortKey: 'a0', title: 'ルーティーン', createdAt: day, updatedAt: day, deletedAt: null };
+    const running: MemoNode = { ...root, id: 'running', type: 'memo', parentId: root.id, title: 'ランニング', body: '30分', dueAt: day, duePreset: 'custom', status: 'active', completedAt: null,
+      repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-10-15' }, routineHistory: { '2026-10-15': past.toISOString() } };
+    const persistence = new MemoryPersistence();
+    let a = await TaskMemoV2ApplicationStore.open(persistence, [root, running], { deviceId: 'skip-A', now: () => day });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [root, running], { deviceId: 'skip-B', now: () => day });
+    const api = createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true });
+    await api.connect();
+    const sync = async (store: TaskMemoV2ApplicationStore) => {
+      for (const op of store.outbox) { const ack = await api.upload(op); await store.acknowledge(op.opId, ack.record); }
+      const cloud = (await getDoc(doc(db, 'users/owner/nodesV2/running'))).data()!.record;
+      await store.receive(cloud); return cloud;
+    };
+    await a.command('今回だけスキップ', 'update', n => skipRoutineOccurrence(n, 'running', day, day));
+    await sync(a);
+    a = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'ignored' });
+    expect(completionHistoryGroups(a.nodes, 'completedAt').flatMap(g => g.items).some(i => i.outcome === 'skipped')).toBe(true);
+    await a.undo(); await sync(a);
+    expect(deadlineGroups(a.nodes, day).flatMap(g => g.memos).map(m => m.id)).toContain('running');
+    await a.redo(); await sync(a);
+    // b was offline: its update must preserve A's independent date.
+    await b.command('昨日だけスキップ', 'update', n => skipRoutineOccurrence(n, 'running', past, day));
+    const cloud = await sync(b); await a.receive(cloud);
+    expect(completionHistoryGroups(b.nodes, 'completedAt').flatMap(g => g.items).filter(i => i.outcome === 'skipped')).toHaveLength(2);
+    expect(deadlineGroups(a.nodes, next).flatMap(g => g.memos).map(m => m.id)).toEqual(['running']);
+    expect((a.nodes.find(n => n.id === 'running') as MemoNode).routineHistory).toEqual(running.routineHistory);
+    expect(cloud.value).toMatchObject({ deletedAt: null, repeatRule: running.repeatRule, title: 'ランニング', body: '30分', parentId: root.id });
+    await b.command('スキップ取消', 'update', n => clearRoutineSkip(n, 'running', past, day)); await sync(b);
+    expect(deadlineGroups(b.nodes, day).flatMap(g => g.memos).some(m => m.routineOccurrenceKey === '2026-10-16')).toBe(true);
+    await b.command('過去回を完了', 'complete', n => completeRoutineOccurrence(n, 'running', past, day)); await sync(b);
+    expect(completionHistoryGroups(b.nodes, 'completedAt').flatMap(g => g.items).find(i => i.occurrenceDate?.getDate() === 16)?.outcome).toBe('completed');
+    const receipts = await getDocs(collection(db, 'users/owner/syncOperationsV2'));
+    expect(receipts.docs.every(d => d.data().operation.type !== 'softDelete' && !d.data().operation.payload.node.deletedAt)).toBe(true);
+  }, 30_000);
 
   it('syncs independent missed Routine ranks through real SDK receipts, second device and restart', async () => {
     const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;

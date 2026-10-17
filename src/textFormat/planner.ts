@@ -1,6 +1,7 @@
 import { generateKeyBetween } from 'fractional-indexing';
+import { nextRoutineOutcome } from '../domain/routine';
 import { isValidSortKey } from '../domain/sortKeys';
-import type { RepeatRule } from '../models/node';
+import type { RepeatRule, MemoNode } from '../models/node';
 import type { SyncNodeValue, VersionedNode } from '../sync/types';
 import { sessionDate } from './deadlines';
 import { parseText } from './parser';
@@ -69,7 +70,11 @@ export function planTextEdit(session: TextSession, text: string, current: Versio
         const completed = row.completion === '完了';
         if (routineParent) {
           const key = sessionDate(session.context), history = n.routineHistory as Record<string, string | null> | undefined;
-          if (Boolean(history?.[key]) !== completed) n.routineHistory = { ...history, [key]: completed ? now : null };
+          if (Boolean(history?.[key]) !== completed) {
+            n.routineHistory = { ...history, [key]: completed ? now : null };
+            if (n.routineOutcomes) n.routineOutcomes = { ...(n.routineOutcomes as MemoNode['routineOutcomes']),
+              [key]: nextRoutineOutcome(n as unknown as MemoNode, key, completed ? 'completed' : 'pending', new Date(now)) };
+          }
         } else if ((n.status === 'completed') !== completed) { n.status = completed ? 'completed' : 'active'; n.completedAt = completed ? now : null; }
       }
     }

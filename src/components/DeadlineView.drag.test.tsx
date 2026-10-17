@@ -20,7 +20,7 @@ vi.mock('../theme/theme', () => ({ useAppTheme: () => ({ colors: {} }) }));
 vi.mock('../domain/dragAutoScroll', () => ({ createDragAutoScroller: () => ({ start() {}, stop() {}, update() {} }) }));
 vi.mock('../hooks/useInlineTitleEdit', () => ({ useInlineTitleEdit: () => ({ target: null, editing: null, begin() {}, propsFor: () => ({}) }) }));
 vi.mock('./FormTextInput', () => ({ FormTextInput: () => null }));
-vi.mock('./MemoRowActions', () => ({ MemoRowActions: () => null }));
+vi.mock('./MemoRowActions', () => ({ MemoRowActions: ({ onMenu }: { onMenu: () => void }) => <span data-menu onClick={e => { e.stopPropagation(); onMenu(); }}>•••</span> }));
 vi.mock('./QuickTitleEditor', () => ({ QuickTitleEditor: () => null }));
 vi.mock('./VerticalResizeHandle.web', () => ({ VerticalResizeHandle: () => null }));
 vi.mock('./CountBadge', () => ({ CountBadge: () => null }));
@@ -38,10 +38,14 @@ it.each(['mouse', 'touch'] as const)('DeadlineView %s enables missed Routine dra
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   const drop = vi.fn((id, group, beforeId) => { nodes = moveMemoInDeadlineList(nodes, id, group, beforeId, now); });
   const noop = () => {};
+  const menu = vi.fn();
   const props = { nodes, visibleGroupIds: new Set(['overdue' as const, 'am' as const]), todayGranularity: 'amPm' as const, completingIds: new Set<string>(), onCompletionAnimationFinished: noop, showPinnedNote: false, pinnedNote: '', pinnedNoteHeight: 100, onPinnedNoteChange: noop, onPinnedNoteHeightChange: noop, expandedGroups: new Set(['overdue' as const]), onExpandedGroupsChange: noop, onQuickAdd: async () => true, onRenameMemo: async () => true, onOpenMemo: noop, onQuickTitle: noop, onComplete: noop, onMenu: noop, onDueDrop: drop, onBulkMove: noop, onBulkComplete: () => true, onBulkDelete: noop, onOpenDisplaySettings: noop };
   const dispatch = async (target: EventTarget, type: string, patch = {}) => { const event = new Event(type, { bubbles: true, cancelable: true }); Object.assign(event, patch); await act(async () => { target.dispatchEvent(event); }); };
   try {
     await act(async () => root.render(<DeadlineView {...props} />));
+    await act(async () => root.render(<DeadlineView {...props} onMenu={menu} />));
+    await act(async () => (host.querySelector(`[data-taskmemo-dnd-key="${old}"] [data-menu]`) as HTMLElement).click());
+    expect(menu).toHaveBeenLastCalledWith(expect.objectContaining({ routineSourceId: 'm', routineOccurrenceKey: '2026-10-03' }));
     const moving = host.querySelector(`[data-taskmemo-dnd-key="${old}"] [draggable]`) as HTMLElement;
     const target = host.querySelector(`[data-taskmemo-dnd-key="${next}"]`) as HTMLElement;
     expect(moving.draggable).toBe(true);

@@ -48,6 +48,7 @@ import {
   repeatRuleLabel,
   routineCategoryForMemo,
   routineOccurrenceDueAt,
+  localDateKey,
 } from "../domain/routine";
 import { appAlert } from "../utils/appAlert";
 import { MemoTitleTap } from "../components/MemoTitleTap";
@@ -705,7 +706,10 @@ export function DeadlineView({
                   title={item.memo.title}
                   completing={completingIds.has(item.memo.id)}
                   onComplete={() => onComplete(item.memo)}
-                  onMenu={() => onMenu(sourceMemo(item.memo))}
+                  onMenu={() => onMenu(routineCategoryForMemo(nodes, item.memo)
+                    ? { ...item.memo, routineSourceId: item.memo.routineSourceId ?? item.memo.id,
+                        routineOccurrenceKey: item.memo.routineOccurrenceKey ?? localDateKey(currentDate) }
+                    : item.memo)}
                 />
               )}
             </Pressable>

@@ -1,4 +1,5 @@
 import type { Node } from '@/models/node';
+import { nextRoutineOutcome } from './routine';
 
 export const NODE_HISTORY_LIMIT = 75;
 
@@ -42,11 +43,17 @@ function replayNodes(current: Node[], target: Node[], now: Date) {
       for (const key of Object.keys(previous.routineHistory ?? {}))
         if (!(key in routineHistory)) routineHistory[key] = null;
       const routineDueOverrides = { ...node.routineDueOverrides };
+      const routineOutcomes = { ...previous.routineOutcomes };
+      for (const key of new Set([...Object.keys(previous.routineOutcomes ?? {}), ...Object.keys(node.routineOutcomes ?? {})])) {
+        if (!sameValue(previous.routineOutcomes?.[key], node.routineOutcomes?.[key]))
+          routineOutcomes[key] = nextRoutineOutcome(previous, key, node.routineOutcomes?.[key]?.state ?? (node.routineHistory?.[key] ? 'completed' : 'pending'), now);
+      }
       for (const key of Object.keys(previous.routineDueOverrides ?? {}))
         if (!(key in routineDueOverrides)) routineDueOverrides[key] = null;
       return {
         ...node,
         ...(Object.keys(routineHistory).length ? { routineHistory } : {}),
+        ...(Object.keys(routineOutcomes).length ? { routineOutcomes } : {}),
         ...(Object.keys(routineDueOverrides).length ? { routineDueOverrides } : {}),
         updatedAt,
       };

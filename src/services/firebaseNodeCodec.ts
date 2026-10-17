@@ -1,5 +1,6 @@
 import { Timestamp } from "firebase/firestore";
 import type { MemoNode, Node } from "@/models/node";
+import { mergeRoutineOutcomes } from '../domain/routineOutcomeMerge';
 
 const DATE_FIELDS = [
   "createdAt",
@@ -71,6 +72,13 @@ export function mergeNodesByUpdatedAt(local: Node[], remote: Node[]) {
           ? { ...cloud.routineHistory, ...node.routineHistory }
           : { ...node.routineHistory, ...cloud.routineHistory };
       const mergedMemo = { ...(chosen as MemoNode) };
+      if (node.routineOutcomes || cloud.routineOutcomes) {
+        mergedMemo.routineOutcomes = mergeRoutineOutcomes(node.routineOutcomes, cloud.routineOutcomes);
+        for (const [key, outcome] of Object.entries(mergedMemo.routineOutcomes)) {
+          if (outcome.state === 'completed') routineHistory[key] = outcome.changedAt;
+          else if (key in routineHistory) routineHistory[key] = null;
+        }
+      }
       if (Object.keys(routineHistory).length) mergedMemo.routineHistory = routineHistory;
       else delete mergedMemo.routineHistory;
       const routineDueOverrides = chosen === node

@@ -2,7 +2,7 @@ import { findRoutineRoot, newRoutineRoot, isRoutineRoot, assertRoutineRootTransi
 import type { NodeHistory } from "../domain/nodeHistory";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
 import { recordSortKeyPass } from "./sortKeyDiagnostics";
-import type { Node } from "../models/node";
+import type { Node, MemoNode, RoutineOutcome } from "../models/node";
 import { assertSafeNodeTransition, assertSafeTextTransition } from "./destructiveSyncGuard";
 import { createTextSession, type SessionOptions } from "../textFormat/session";
 import { planTextEdit } from "../textFormat/planner";
@@ -14,6 +14,7 @@ import { candidateForFeaturesOperation, candidateForOperation, candidateForPinne
 import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import { decodeLegacyNodes } from './legacyLocalCodec';
 import { integrateOwnershipSortKeys } from './ownershipSortKeys';
+import { nextRoutineOutcome } from '../domain/routine';
 import { pendingAnonymousChanges, planOwnershipReconcile, sameOwnershipProfile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
 
 type NodeHistoryTarget = {
@@ -581,7 +582,7 @@ export class TaskMemoV2ApplicationStore {
         (current?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
     const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
     const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
-    const winner = selfEcho ? current : chooseVersionedNode(current, incoming);
+    const winner = selfEcho && !incoming.value.routineOutcomes ? current : chooseVersionedNode(current, incoming);
     let next: Envelope = {
       ...this.envelope,
       nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
@@ -614,7 +615,7 @@ export class TaskMemoV2ApplicationStore {
         isRoutineRoot(operation.payload.node as SyncNodeValue) && domain[record.value.id]?.lastOpId === opId) {
       findRoutineRoot([record.value]);
       domain = { ...domain, [record.value.id]: record };
-    } else if (record && record.lastDeviceId !== this.envelope.deviceId) {
+    } else if (record && (record.lastDeviceId !== this.envelope.deviceId || record.value.routineOutcomes)) {
       const current = domain[record.value.id];
       const winner = chooseVersionedNode(current, record);
       domain = { ...domain, [record.value.id]: winner };
@@ -694,6 +695,31 @@ export class TaskMemoV2ApplicationStore {
     return value;
   }
 
+  private replayRoutineDates(current: VersionedNode, target: NodeHistoryTarget, direction: 'undo' | 'redo', value: SyncNodeValue, now: Date) {
+    const before = target.before?.routineOutcomes as MemoNode['routineOutcomes'];
+    const after = target.after.routineOutcomes as MemoNode['routineOutcomes'];
+    const changed = [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])]
+      .filter(key => !same(before?.[key], after?.[key]));
+    const memo = nodeFromV2Value(current.value) as MemoNode;
+    if (!changed.length && !memo.routineOutcomes) return value;
+    const outcomes = { ...memo.routineOutcomes };
+    const history = { ...(value.routineHistory as MemoNode['routineHistory']) };
+    // Even a title-only Undo must carry cancellation registers learned later.
+    for (const key of Object.keys(outcomes)) {
+      if (key in (memo.routineHistory ?? {})) history[key] = memo.routineHistory![key];
+      else delete history[key];
+    }
+    for (const key of changed) {
+      const desired = (direction === 'undo' ? before : after)?.[key];
+      const legacy = (direction === 'undo' ? target.before : target.after)?.routineHistory as MemoNode['routineHistory'];
+      const state: RoutineOutcome['state'] = desired?.state ?? (legacy?.[key] ? 'completed' : 'pending');
+      outcomes[key] = nextRoutineOutcome(memo, key, state, now);
+      if (state === 'completed') history[key] = desired?.changedAt ?? legacy![key]!;
+      else if (key in history) history[key] = null;
+    }
+    return { ...value, routineOutcomes: outcomes, ...(Object.keys(history).length ? { routineHistory: history } : {}) };
+  }
+
   private async replayHistory(entry: StoredHistoryEntry, direction: "undo" | "redo", now: Date) {
     let localSeq = this.envelope.nextLocalSeq;
     let domain = { ...this.envelope.domain };
@@ -705,8 +731,9 @@ export class TaskMemoV2ApplicationStore {
       if (target.resourceType === "node") {
         const current = domain[target.resourceId];
         if (current && isRoutineRoot(current.value)) { nextTargets.push(target); continue; }
-        const value = this.historyNodeValue(current, direction === "undo" ? target.before : target.after, now);
+        let value = this.historyNodeValue(current, direction === "undo" ? target.before : target.after, now);
         if (!value) return [];
+        value = this.replayRoutineDates(current, target, direction, value, now);
         const operation: SyncOperation = {
           opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
           targetNodeId: target.resourceId, type: direction, baseRevision: current.revision, payload: { node: value },
@@ -777,7 +804,7 @@ export class TaskMemoV2ApplicationStore {
       if (current && same(current.value, value)) continue;
       const operation: SyncOperation = {
         opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
-        targetNodeId: id, type: textTypes.get(id) ?? type, baseRevision: current?.revision ?? 0, payload: { node: value },
+        targetNodeId: id, type: textTypes.get(id) ?? (type === 'softDelete' && !value.deletedAt && value.routineOutcomes ? 'update' : type), baseRevision: current?.revision ?? 0, payload: { node: value },
         createdAt: commandTime.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
       };
       localSeq += 1; operations.push(operation); domain[id] = candidateForOperation(operation);

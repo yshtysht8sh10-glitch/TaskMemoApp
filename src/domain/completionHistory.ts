@@ -3,6 +3,7 @@ import {
   localDateKey,
   parseLocalDateKey,
   routineCategoryForMemo,
+  routineOutcomeOn,
 } from "./routine";
 import { isIdea } from "./memoType";
 
@@ -20,6 +21,7 @@ export type CompletionHistoryItem = {
   memo: MemoNode;
   occurrenceDate?: Date;
   completedAt: Date;
+  outcome?: 'completed' | 'skipped';
 };
 export type CompletionHistoryGroup = {
   key: string;
@@ -51,9 +53,10 @@ export function completionHistoryGroups(
         completedAt: node.completedAt ?? node.updatedAt,
       });
     if (routineCategoryForMemo(nodes, node))
-      for (const [dateKey, timestamp] of Object.entries(
-        node.routineHistory ?? {},
-      )) {
+      for (const dateKey of new Set([...Object.keys(node.routineHistory ?? {}), ...Object.keys(node.routineOutcomes ?? {})])) {
+        const outcome = routineOutcomeOn(node, dateKey);
+        if (outcome === 'pending') continue;
+        const timestamp = node.routineOutcomes?.[dateKey]?.changedAt ?? node.routineHistory?.[dateKey];
         const occurrenceDate = parseLocalDateKey(dateKey);
         const completedAt = timestamp ? new Date(timestamp) : null;
         if (
@@ -67,6 +70,7 @@ export function completionHistoryGroups(
             memo: node,
             occurrenceDate,
             completedAt,
+            outcome,
           });
       }
   }

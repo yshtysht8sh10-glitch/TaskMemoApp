@@ -1,6 +1,8 @@
 import { isRoutineRoot, ROUTINE_ROOT_ID, findRoutineRoot } from '../domain/routineRoot';
 import type { FeaturesValue, PinnedNoteValue, SyncAcknowledgement, SyncNodeValue, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import { canonical } from '../textFormat/syntax';
+import { mergeRoutineOutcomes } from '../domain/routineOutcomeMerge';
+import type { MemoNode } from '../models/node';
 
 export function assertOwnershipCurrent(operation: SyncOperation, current: VersionedNode | VersionedPinnedNote | VersionedFeatures | null | undefined) {
   if (operation.ownership && canonical(current ?? null) !== canonical(operation.ownership.expectedCurrent))
@@ -24,6 +26,21 @@ export function candidateForOperation(operation: SyncOperation): VersionedNode {
 
 /** Order-independent Node-level winner selection. */
 export function chooseVersionedNode(current: VersionedNode | undefined, candidate: VersionedNode) {
+  const winner = chooseNodeWinner(current, candidate);
+  if (!current || winner.value.purgedAt || winner.value.type !== 'memo' ||
+      (!current.value.routineOutcomes && !candidate.value.routineOutcomes)) return winner;
+  const loser = winner === current ? candidate : current;
+  const routineOutcomes = mergeRoutineOutcomes(current.value.routineOutcomes as MemoNode['routineOutcomes'], candidate.value.routineOutcomes as MemoNode['routineOutcomes']);
+  const routineHistory = { ...(loser.value.routineHistory as MemoNode['routineHistory']), ...(winner.value.routineHistory as MemoNode['routineHistory']) };
+  for (const [key, value] of Object.entries(routineOutcomes)) {
+    if (value.state === 'completed') routineHistory[key] = value.changedAt;
+    else if (key in routineHistory) routineHistory[key] = null;
+  }
+  return { ...winner, value: { ...winner.value, routineOutcomes,
+    ...(Object.keys(routineHistory).length ? { routineHistory } : {}) } };
+}
+
+function chooseNodeWinner(current: VersionedNode | undefined, candidate: VersionedNode) {
   if (!current) return candidate;
   const currentPurged = deletionRank(current.value) === 2;
   const candidatePurged = deletionRank(candidate.value) === 2;
@@ -46,7 +63,13 @@ export function applyRevisionOperation(current: VersionedNode | undefined, opera
       return { opId: operation.opId, revision: current.revision, result: 'superseded', record: current };
     }
   }
-  const winner = chooseVersionedNode(current, candidate);
+  let winner = chooseVersionedNode(current, candidate);
+  // A concurrent date register may contribute even if the whole Node lost.
+  // Persist that contribution under this operation/receipt without deleting the source.
+  if (current && winner.lastOpId !== operation.opId && canonical(winner.value) !== canonical(current.value)) {
+    winner = { ...winner, revision: Math.max(current.revision, candidate.revision) + 1,
+      lastOpId: operation.opId, lastDeviceId: operation.deviceId, lastLocalSeq: operation.localSeq, operationType: operation.type };
+  }
   return {
     opId: operation.opId,
     revision: winner.revision,

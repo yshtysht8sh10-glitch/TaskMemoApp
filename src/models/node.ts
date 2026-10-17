@@ -76,6 +76,9 @@ export type MemoNode = BaseNode & {
   /** Completion timestamps keyed by the local calendar date (YYYY-MM-DD). */
   /** ISO completion timestamp, or null as a synchronized completion-cancellation tombstone. */
   routineHistory?: Record<string, string | null>;
+  /** Atomic per-date result. Missing dates fall back to legacy routineHistory.
+   * Pending is a durable cancellation; version advances for Undo/Redo too. */
+  routineOutcomes?: Record<string, RoutineOutcome>;
   /** Per-occurrence due time. Null cancels an override during sync/undo. */
   routineDueOverrides?: Record<string, string | null>;
   /** Transient list projection for a missed occurrence; never persisted. */
@@ -85,3 +88,9 @@ export type MemoNode = BaseNode & {
 };
 
 export type Node = CategoryNode | MemoNode;
+
+export type RoutineOutcome = {
+  state: 'completed' | 'skipped' | 'pending';
+  changedAt: string;
+  version: number;
+};

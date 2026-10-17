@@ -1,5 +1,7 @@
 import type { DuePreset, MemoStatus, Node } from "@/models/node";
 import { isValidSortKey } from '../domain/sortKeys';
+import { validRoutineOutcome } from '../domain/routineOutcomeMerge';
+import { parseLocalDateKey } from '../domain/routine';
 import { allDeadlineGroupIds, TODAY_GRANULARITIES, type DeadlineGroupKey, type TodayGranularity } from "../domain/deadlineView";
 import type { ReminderPreferences } from "@/domain/reminders";
 import type { FeaturePreferences } from "@/services/featurePreferences";
@@ -126,6 +128,9 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
         !validDateString(value.completedAt, true)
       )
         throw new Error(`${value.id}のMemo日付が不正です。`);
+      if (value.routineOutcomes !== undefined && (!isObject(value.routineOutcomes) ||
+        Object.entries(value.routineOutcomes).some(([key, outcome]) => !parseLocalDateKey(key) || !validRoutineOutcome(outcome))))
+        throw new Error(`${value.id}のルーティーン実施状態が不正です。`);
       if (value.routineDueOverrides !== undefined &&
         (!isObject(value.routineDueOverrides) || Object.entries(value.routineDueOverrides).some(([key, due]) => !/^\d{4}-\d{2}-\d{2}$/.test(key) || !validDateString(due, true))))
         throw new Error(`${value.id}のルーティーン当日設定が不正です。`);
