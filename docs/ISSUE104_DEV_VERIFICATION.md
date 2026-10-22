@@ -50,3 +50,16 @@ Routineの🔁/5件と無所属の◇を維持し、Routineのメニューには
 
 実機・実Firebaseの確認結果をIssue #104へ記録するまでOPENを維持。
 Productionは実機確認とユーザーの明示承認後に別途配信する。
+
+## Production配信（2026-10-22）
+
+- ユーザーから「バッチリ！ 本番の方も更新し、IssueをCloseしてください」と確認・配信・Closeの明示承認を受領。
+- 配信前Production manifestは870a5e6。今回との差分が#104と確認文書のみであることを確認。
+- `npm run web:export:production-v2` PASS（production / taskmemoapp-eabc3、公開設定検証PASS）。
+- `npx firebase-tools deploy --only hosting --project taskmemoapp-eabc3 --config firebase.cutover.json --non-interactive` 成功。
+- 本番URL: https://taskmemoapp-eabc3.web.app/
+- 配信SHA: 238ca8c6d0a56dce63d74609d865b3d074975115（実装e1391c7 + DEV確認文書）。
+- 配信後のHTML 200 / JSファイル参照を確認。配信JSのSHA256がローカル成果物と一致。
+- 本番manifestのcommit・project・成果物hashが一致。成果物hash: e3da8913a511928f0fd176ddbb3366b8c05f2e5ee529db48ced634b67245af49。
+- Hostingのみ配信。Firestore Rules / Functionsの再配信やProductionユーザーデータを用いた変更試験は実施していない。
+- iPhone実機・実Firebase 2端末の追加試験は代理実施していない。ユーザー確認と明示指示に基づきIssueをCloseする。
