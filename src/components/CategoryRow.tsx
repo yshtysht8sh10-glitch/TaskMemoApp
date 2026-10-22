@@ -1,5 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { CategoryNode } from "@/models/node";
+import { FOLDER_COLORS } from '@/domain/folderColor';
+import { FolderIcon } from './FolderIcon';
 import { TREE_LAYOUT, TreeRowLayout } from "@/components/TreeRowLayout";
 import { useAppTheme, type ThemeColors } from "@/theme/theme";
 
@@ -48,6 +50,7 @@ export function CategoryRow({
 }: Props) {
   const styles = createStyles(useAppTheme().colors);
   const routine = !!category.categoryKind;
+  const tint = !virtual && !routine && FOLDER_COLORS.find(c => c.value === category.folderColor)?.hex;
   return (
     <TreeRowLayout
       depth={depth}
@@ -111,9 +114,9 @@ export function CategoryRow({
         <Text style={styles.icon}>
           {collapsedChildCount === 0 ? "•" : isExpanded ? "▼" : "▶"}
         </Text>
-        <Text style={styles.kindIcon}>
+        {tint ? <FolderIcon color={tint} /> : <Text style={styles.kindIcon}>
           {virtual ? "◇" : routine ? "🔁" : "📁"}
-        </Text>
+        </Text>}
         <Text style={styles.title} numberOfLines={2}>
           {category.title}
         </Text>

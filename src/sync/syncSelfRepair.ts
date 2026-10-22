@@ -17,7 +17,7 @@ async function diagnosticHash(value: unknown) {
 
 const knownFields = new Set(["id", "sortKey", "type", "parentId", "title", "body", "memoType",
   "deadlineSortKey", "dueAt", "duePreset", "status", "completedAt", "routineHistory", "routineOutcomes", "routineDueOverrides", "repeatRule",
-  "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt",
+  "folderColor", "categoryKind", "routineWeekday", "routineDayOfMonth", "routineMonth", "deletedAt",
   "deletionBatchId", "purgedAt", "createdAt", "updatedAt"]);
 
 export function planSyncSelfRepair(localRecords: VersionedNode[], remoteRecords: VersionedNode[]) {

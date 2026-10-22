@@ -20,6 +20,8 @@ export type BaseNode = {
 
 export type CategoryNode = BaseNode & {
   type: "category";
+  /** Null restores the legacy icon. */
+  folderColor?: "blue" | "yellow" | "green" | "red" | "purple" | "gray" | null;
   categoryKind?:
     | "routineRoot"
     | "routineDaily"

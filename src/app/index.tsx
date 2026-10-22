@@ -112,6 +112,8 @@ import {
 import { appAlert } from "@/utils/appAlert";
 import { memoCreationNotice, type MemoCreationNotice } from "@/utils/memoCreationFeedback";
 import { SheetDismissHeader } from "@/components/SheetDismissHeader";
+import { FOLDER_COLORS, setFolderColor } from '@/domain/folderColor';
+import { FolderIcon } from '@/components/FolderIcon';
 import { selectedChoiceStyle } from "@/utils/choiceStyle";
 import { installEditorDiagnostics, recordEditorDiagnostic } from "@/utils/editorDiagnostics";
 import { editorKeyboardDismissMode } from "@/utils/editorScroll";
@@ -244,6 +246,7 @@ export default function HomeScreen() {
   }, [editor]);
   const [quickTitleTarget, setQuickTitleTarget] = useState<{ id: string; title: string } | null>(null);
   const [menuNode, setMenuNode] = useState<Node | null>(null);
+  const [folderColorId, setFolderColorId] = useState<string | null>(null);
   const [menuRoutineDate, setMenuRoutineDate] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [revealMemoId, setRevealMemoId] = useState<string | null>(null);
@@ -1065,6 +1068,22 @@ export default function HomeScreen() {
             <Action label="カテゴリ" onPress={() => openCreate("category")} />
           )}
       </Sheet>
+      <Sheet visible={!!folderColorId} title="フォルダの色を変更" onClose={() => setFolderColorId(null)}>
+        {[...FOLDER_COLORS, { value: null, label: '標準色に戻す', hex: '' }].map(color => {
+          const current = nodes.find(n => n.id === folderColorId);
+          const selected = current?.type === 'category' && (current.folderColor ?? null) === color.value;
+          return <Pressable key={color.value ?? 'default'} accessibilityRole="radio"
+            accessibilityLabel={color.label} accessibilityState={{ checked: selected }}
+            style={{ flexDirection: 'row', alignItems: 'center', minHeight: 48, paddingHorizontal: 16, gap: 12 }}
+            onPress={async () => {
+              if (folderColorId && await applyConfirmed('フォルダの色を変更', current => setFolderColor(current, folderColorId, color.value)))
+                setFolderColorId(null);
+            }}>
+            {color.hex ? <FolderIcon color={color.hex} /> : <Text>📁</Text>}
+            <Text style={{ color: colors.text }}>{color.label}{selected ? ' ✓' : ''}</Text>
+          </Pressable>;
+        })}
+      </Sheet>
       <Sheet
         visible={!!menuNode}
         title={`${menuNode?.title ?? ''}${menuRoutineDate ? `（${menuRoutineDate}分）` : ''}`}
@@ -1091,6 +1110,11 @@ export default function HomeScreen() {
             }}
           />
         ) : null}
+        {menuNode?.type === 'category' && !menuNode.categoryKind && (
+          <Action label="フォルダの色を変更" onPress={() => {
+            setFolderColorId(menuNode.id); setMenuNode(null);
+          }} />
+        )}
         {menuNode?.type === "memo" ? (
           <>
             {!isIdea(menuNode) && (
