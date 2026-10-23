@@ -193,7 +193,7 @@ export default function HomeScreen() {
   useEffect(() => installEditorDiagnostics(), []);
   const { colors, resolved, mode, setMode } = useAppTheme();
   const styles = createStyles(colors);
-  const [history, setHistory] = useState(() => createNodeHistory(mockNodes));
+  const [history, setHistory] = useState(() => createNodeHistory([]));
   const nodes = history.nodes;
   const [ready, setReady] = useState(false);
   const [pinnedNote, setPinnedNote] = useState("");
@@ -281,6 +281,13 @@ export default function HomeScreen() {
     setIdeasEnabled(value);
 
   });
+  const [editorScope, setEditorScope] = useState(sync.activeScope);
+  if (editorScope !== sync.activeScope) {
+    setEditorScope(sync.activeScope);
+    setEditor(null); setQuickTitleTarget(null); setMenuNode(null); setCreateOpen(false);
+    setFolderColorId(null); setMovingNode(null); setBulkMove(null); setBulkDeadlineMove(null);
+    setTextEdit(null); setTextView(null);
+  }
   const openTextEdit = async (entrance: 'tree' | 'list', groups: ListTextGroup[] = []) => {
     try {
       const editNodes = entrance === 'tree' ? (await sync.ensureRoutineRoot()).nodes : nodes;
@@ -687,13 +694,13 @@ export default function HomeScreen() {
           <HistoryButton
             label="↶"
             accessibilityLabel="元に戻す"
-            disabled={!history.past.length}
+            disabled={!sync.startup.editable || !history.past.length}
             onPress={() => { if (!sync.undo()) setHistory(undoNodeHistory); }}
           />
           <HistoryButton
             label="↷"
             accessibilityLabel="やり直す"
-            disabled={!history.future.length}
+            disabled={!sync.startup.editable || !history.future.length}
             onPress={() => { if (!sync.redo()) setHistory(redoNodeHistory); }}
           />
           <TopButton label="設定" onPress={() => setSettingsOpen(true)} />
@@ -742,8 +749,14 @@ export default function HomeScreen() {
           onPress={() => setView("trash")}
         />
       </View>
-      <View style={styles.tree} pointerEvents={ready ? "auto" : "none"}>
-        {view === "tree" ? (
+      <View accessibilityLiveRegion="polite" style={{ paddingHorizontal: 16, paddingVertical: 8 }}>
+        <Text style={{ color: colors.textSecondary }}>{sync.startup.message}</Text>
+        {sync.startup.canUseCache && <Pressable accessibilityRole="button" onPress={sync.useCachedData} style={{ paddingVertical: 12 }}>
+          <Text style={{ color: colors.accent }}>最新未確認の端末データを使って編集する</Text>
+        </Pressable>}
+      </View>
+      <View style={styles.tree} pointerEvents={sync.startup.editable ? "auto" : "none"}>
+        {!sync.startup.showData ? <Text style={{ color: colors.textSecondary, padding: 16 }}>{sync.startup.message}</Text> : view === "tree" ? (
           <NodeTree
             onAddRoutine={() => {
               void sync.ensureRoutineRoot().then(({ id: parentId }) => {
@@ -1038,8 +1051,8 @@ export default function HomeScreen() {
       </View>
       {(view === "deadline" || view === "tree") && (
         <Pressable
-          disabled={!ready}
-          style={[styles.fab, !ready && { opacity: 0.4 }]}
+          disabled={!sync.startup.editable}
+          style={[styles.fab, !sync.startup.editable && { opacity: 0.4 }]}
           onPress={() => {
             setCreateParentId(null);
             if (view === "deadline")

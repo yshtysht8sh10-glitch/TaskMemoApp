@@ -34,6 +34,8 @@ import { appAlert } from "../utils/appAlert";
 import { confirmedSave } from "../utils/confirmedSave";
 import type { SessionOptions } from '../textFormat/session';
 import type { TextSession, TextPlan } from '../textFormat/syntax';
+import { startupPresentation } from '../sync/startupPresentation';
+import { beginStartupDiagnostics, recordStartupSnapshot } from '../sync/startupDiagnostics';
 
 export type TaskMemoSyncStatus = FirebaseSyncStatus | SyncPhase | "diagnostic" | "local-recovery" | "self-repairing" | "ownership-review" | "ownership-importing" | "onboarding";
 
@@ -63,6 +65,12 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   const [authReady, setAuthReady] = useState(!configured);
   const [networkPaused, setNetworkPaused] = useState(false);
   const [applicationState, setApplicationState] = useState<'opening' | 'ready' | 'error'>('opening');
+  const [snapshotSource, setSnapshotSource] = useState<'checking' | 'cache' | 'server'>('checking');
+  const [startupElapsed, setStartupElapsed] = useState(false);
+  const [cacheEditing, setCacheEditing] = useState(false);
+  const startupEditableRef = useRef(false);
+  const authResolvedRef = useRef(!configured);
+  const cacheEditingRef = useRef(false);
   const [ownershipReview, setOwnershipReview] = useState<OwnershipPlan | null>(null);
   const [ownershipPendingCount, setOwnershipPendingCount] = useState(0);
   const [ownershipRecovery, setOwnershipRecovery] = useState(false);
@@ -108,6 +116,10 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
 
   const publish = useCallback(() => {
     const store = storeRef.current; const controller = controllerRef.current;
+    if (controller) setSnapshotSource(controller.snapshotSource);
+    if (store && controller) recordStartupSnapshot(activeLocalRef.current ? 'anonymous-local' :
+      `${Platform.OS === 'web' ? 'account-indexeddb' : 'account-native'}+${controller.snapshotSource}`,
+      store.nodes.map(node => store.versionedNode(node.id)!), store.pendingCount, store.historyDepths);
     if (store) onHistoryRef.current(store.history);
     if (store && store.pinnedNote.body !== publishedPinnedNoteRef.current) {
       publishedPinnedNoteRef.current = store.pinnedNote.body;
@@ -133,11 +145,18 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setOwnershipRecovery(presentation.recovery);
       ownershipStatus = presentation.status;
     } else { setOwnershipPendingCount(0); setOwnershipRecovery(false); }
-    if (controller) { setStatus(activeLocalRef.current ? configured ? 'signed-out' : 'disabled' : repairRunningRef.current ? "self-repairing" : localRecoveryModeRef.current ? "local-recovery" : ownershipStatus ?? controller.state.phase); setError(controller.state.lastError); }
+    if (controller) {
+      const currentStatus = activeLocalRef.current ? configured ? 'signed-out' : 'disabled' : repairRunningRef.current ? 'self-repairing' : localRecoveryModeRef.current ? 'local-recovery' : ownershipStatus ?? controller.state.phase;
+      startupEditableRef.current = startupPresentation({ preferencesReady: true, authReady: authResolvedRef.current,
+        applicationState: store ? 'ready' : 'opening', account: !activeLocalRef.current, snapshotSource: controller.snapshotSource,
+        status: currentStatus, elapsed: true, cacheEditing: cacheEditingRef.current }).editable;
+      setStatus(currentStatus); setError(controller.state.lastError);
+    }
   }, [configured]);
 
   useEffect(() => {
     if (!ready) return;
+    beginStartupDiagnostics();
     const repairGeneration = repairGenerationRef;
     let generation = 0;
     let unsubscribe = () => {};
@@ -151,6 +170,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       setApplicationState('ready'); await controller.start(); publish();
     };
     const authChanged = async (nextUser: User | null) => {
+      startupEditableRef.current = false; authResolvedRef.current = true; cacheEditingRef.current = false;
       recordSyncActivity("authChanged");
       const currentGeneration = ++generation;
       repairGeneration.current++;
@@ -158,6 +178,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       const previousWriter = accountWriterRef.current; accountWriterRef.current = null;
       controllerRef.current?.stop(); controllerRef.current = null; storeRef.current = null;
       setApplicationState('opening'); setOwnershipReview(null);
+      setSnapshotSource('checking'); setStartupElapsed(false); setCacheEditing(false);
       await previousStore?.whenIdle();
       previousWriter?.release();
       if (currentGeneration !== generation) return;
@@ -330,7 +351,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     };
     void activateLocal(++generation).then(() => {
       if (!generation) return;
-      setAuthReady(true);
+      if (!configured) setAuthReady(true);
       if (configured) unsubscribe = onAuthStateChanged(getFirebaseClient().auth, nextUser => { void authChanged(nextUser).catch(reason => { setApplicationState('error'); setError(message(reason)); }); });
     }).catch(reason => { setApplicationState('error'); setStatus('error'); setError(message(reason)); });
     const reconnect = () => { void controllerRef.current?.start(); };
@@ -351,7 +372,15 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     manualAuthoritativeExecution, manualBuildMatches, receiptReadMode, receiptLookupIntervalMs, publish]);
   useEffect(() => () => controllerRef.current?.stop(), []);
 
+  useEffect(() => {
+    if (applicationState !== 'ready' || !authReady || !user) return;
+    const timer = setTimeout(() => setStartupElapsed(true), 3000);
+    return () => clearTimeout(timer);
+  }, [applicationState, authReady, user]);
+  const startup = startupPresentation({ preferencesReady: ready, authReady, applicationState,
+    account: !!user, snapshotSource, status, elapsed: startupElapsed, cacheEditing });
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
+    if (!startupEditableRef.current) { setError('読み込み・クラウド確認中は編集できません。'); return true; }
     if (repairRunningRef.current) { recordSyncActivity("blockedCommand"); recordNormalOperationGenerationBlockedByRepair(); return true; }
     const controller = controllerRef.current;
     if (!controller) {
@@ -368,6 +397,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     return true;
   };
   const commandConfirmed = async (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => {
+    if (!startupEditableRef.current) { setError('読み込み・クラウド確認中は保存できません。'); return false; }
     if (repairRunningRef.current) {
       appAlert("保存できません", "同期自己修復中です。完了後に再試行してください。");
       return false;
@@ -442,6 +472,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     return { nodes: Object.fromEntries(snapshot.nodes.map(r => [r.value.id, r])), profile: { pinnedNote: snapshot.pinnedNote ?? null, features: snapshot.features ?? null } };
   };
   const reviewOwnership = async () => {
+    if (!startupEditableRef.current) throw new Error('クラウド確認が完了するまで取り込みを確定できません。');
     const controller = controllerRef.current, store = storeRef.current, local = localApplicationRef.current;
     if (!controller || !store || !local || activeLocalRef.current) throw new Error('Accountの初期化が必要です。');
     const scope = activeScopeRef.current;
@@ -476,6 +507,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     } catch (reason) { if (generation === repairGenerationRef.current && !store.pendingOwnership) await controller.resume(); throw reason; }
   };
   const commitOwnership = async (choices: Record<string, 'local' | 'account'>, confirmation?: { fingerprint: string; deletedIds: string[] }) => {
+    if (!startupEditableRef.current) throw new Error('クラウド確認が完了するまで取り込みを確定できません。');
     const plan = ownershipReview, store = storeRef.current, controller = controllerRef.current;
     if (!plan || !store || !controller || plan.targetScope !== activeScopeRef.current) throw new Error('取り込みplanがありません。');
     const generation = repairGenerationRef.current;
@@ -487,6 +519,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     setOwnershipReview(null); publish(); await controller.resume(); publish();
   };
   const skipOwnership = async () => {
+    if (!startupEditableRef.current) throw new Error('クラウド確認が完了するまで取り込みを変更できません。');
     const store = storeRef.current, local = localApplicationRef.current, controller = controllerRef.current;
     if (!store || !local || activeLocalRef.current) return;
     const generation = repairGenerationRef.current;
@@ -497,6 +530,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
   };
   const closeOwnershipReview = async () => { setOwnershipReview(null); if (!storeRef.current?.pendingOwnership) await controllerRef.current?.resume(); };
   const textController = () => {
+    if (!startupEditableRef.current) throw new Error('読み込み・クラウド確認中はテキスト編集できません。');
     if (repairRunningRef.current || localRecoveryModeRef.current) throw new Error('同期復旧中はテキストを保存できません。入力は保持されています。');
     if (!controllerRef.current) throw new Error('Applicationの初期化・復旧が完了するまでテキスト編集できません。');
     return controllerRef.current;
@@ -513,7 +547,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       },
     } : undefined,
     configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, legacyPinnedNoteCandidates,
-    applicationState, activeScope: activeScopeRef.current, ownershipReview, ownershipPendingCount, ownershipRecovery,
+    applicationState, startup, useCachedData: () => { cacheEditingRef.current = true; setCacheEditing(true); publish(); }, activeScope: activeScopeRef.current, ownershipReview, ownershipPendingCount, ownershipRecovery,
     reviewOwnership, commitOwnership, skipOwnership, closeOwnershipReview,
     selfRepairProgress, repairSync,
     signOut: () => signOut(getFirebaseClient().auth),

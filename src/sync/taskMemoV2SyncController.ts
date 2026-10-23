@@ -23,6 +23,7 @@ const classify = (reason: unknown): { kind: SyncFailureKind; message: string } =
 
 /** Common V2 Application bridge. Durable local state precedes network I/O. */
 export class TaskMemoV2SyncController {
+  snapshotSource: 'checking' | 'cache' | 'server' = 'checking';
   state: SyncState;
   ownershipAssessment: 'checking' | 'ready' | 'unavailable';
   private unsubscribe?: () => void;
@@ -79,6 +80,7 @@ export class TaskMemoV2SyncController {
           this.onChange();
         },
         (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (source) => { if (generation !== this.generation) return; this.snapshotSource = source; this.onChange(); },
       );
       const unsubscribePinnedNote = this.adapter.subscribePinnedNote?.(
         async (record) => {
@@ -133,9 +135,11 @@ export class TaskMemoV2SyncController {
   }
 
   pause(reason: 'network' | 'ownership' = 'network') {
+    const snapshotSource = this.snapshotSource;
     this.paused = true;
     this.pauseReason = reason;
     this.stop();
+    if (reason === 'ownership') this.snapshotSource = snapshotSource;
     this.state = reason === 'ownership'
       ? { phase: this.store.pendingCount ? 'pending' : 'synced', pendingCount: this.store.pendingCount, lastError: null }
       : transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, kind: "offline", message: "Development offline simulation" });
@@ -147,7 +151,7 @@ export class TaskMemoV2SyncController {
     await this.start();
   }
 
-  stop() { recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
+  stop() { this.snapshotSource = 'checking'; recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
 
   async updatePinnedNote(body: string, debounceMs = 500) {
     await this.store.setPinnedNoteDraft(body);

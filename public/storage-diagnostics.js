@@ -623,6 +623,7 @@
       displayMode: metadata.displayMode,
       firebaseReceiptComparison: 'not-performed',
       recoveryObservation: metadata.recoveryObservation,
+      startupObservation: metadata.startupObservation,
       selfRepairDiagnostics: metadata.selfRepairDiagnostics,
       sortKeyDiagnostics: metadata.sortKeyDiagnostics,
       previousReadOnlySelfRepairDiagnostics: metadata.previousReadOnlySelfRepairDiagnostics,
@@ -651,6 +652,20 @@
         origin: location.origin,
         displayMode: navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser-or-unknown',
         recoveryObservation: recoveryObservation(window.sessionStorage),
+        startupObservation: (() => {
+          try {
+            const events = JSON.parse(window.sessionStorage.getItem('taskmemo-startup-diagnostics-v1') || '[]');
+            if (!Array.isArray(events)) return [];
+            const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+            const hash = value => typeof value === 'string' && /^[0-9a-f]{8}$/.test(value) ? value : null;
+            return events.slice(-80).filter(event => event && /^(anonymous-local|account-(indexeddb|native)\+(checking|cache|server))$/.test(event.source)).map(event => ({
+              at: typeof event.at === 'string' && Number.isFinite(Date.parse(event.at)) ? new Date(event.at).toISOString() : null,
+              source: event.source, count: count(event.count), dataFingerprint: hash(event.dataFingerprint),
+              revisionFingerprint: hash(event.revisionFingerprint), pendingCount: count(event.pendingCount),
+              history: { past: count(event.history?.past), future: count(event.history?.future) },
+            }));
+          } catch { return []; }
+        })(),
         selfRepairDiagnostics: selfRepairDiagnostics(window.sessionStorage) ?? selfRepairDiagnostics(window.localStorage),
         sortKeyDiagnostics: sortKeyDiagnostics(window.localStorage),
         previousReadOnlySelfRepairDiagnostics: selfRepairDiagnostics(window.localStorage, '@taskmemo/self-repair-read-only-evidence/v1') ??

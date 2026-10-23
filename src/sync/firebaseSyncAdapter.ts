@@ -550,15 +550,24 @@ export function createFirebaseSyncAdapter(
       return snapshot.exists() ? snapshot.data().record as VersionedFeatures : undefined;
     },
 
-    subscribe(onRecord, onError) {
-      return onSnapshot(collection(db, "users", uid, "nodesV2"), { includeMetadataChanges: true }, (snapshot) => {
-        for (const change of snapshot.docChanges()) {
-          if (change.type === "removed") continue;
-          const record = change.doc.data().record as VersionedNode | undefined;
-          recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
-          if (record) void Promise.resolve(onRecord(record)).catch(onError);
-        }
+    subscribe(onRecord, onError, onSnapshotApplied) {
+      let active = true;
+      let failed = false;
+      let queue = Promise.resolve();
+      const unsubscribe = onSnapshot(collection(db, "users", uid, "nodesV2"), { includeMetadataChanges: true }, (snapshot) => {
+        queue = queue.then(async () => {
+          if (!active || failed) return;
+          for (const change of snapshot.docChanges()) {
+            if (!active) return;
+            if (change.type === "removed") continue;
+            const record = change.doc.data().record as VersionedNode | undefined;
+            recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
+            if (record) await onRecord(record);
+          }
+          if (active) onSnapshotApplied?.(snapshot.metadata.fromCache ? 'cache' : 'server');
+        }).catch(reason => { failed = true; if (active) onError(reason); });
       }, onError);
+      return () => { active = false; unsubscribe(); };
     },
     subscribePinnedNote(onRecord, onError) {
       return onSnapshot(doc(db, "users", uid, "profileV2", "pinnedNote"), { includeMetadataChanges: true }, (snapshot) => {

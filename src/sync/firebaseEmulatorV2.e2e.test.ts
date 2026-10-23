@@ -9,6 +9,7 @@ import type { ApplicationJournalPersistence } from "./applicationStore";
 import { createFirebaseSyncAdapter } from "./firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import { TaskMemoV2SyncController } from "./taskMemoV2SyncController";
+import { nodeToV2Value } from './nodeV2Codec';
 import { runSyncSelfRepair } from "./syncSelfRepair";
 import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplicationStorage";
 import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, getSelfRepairDiagnostics } from "./selfRepairDiagnostics";
@@ -40,6 +41,35 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('confirms startup only after the real server snapshot is durable and never queues a stale cache as an edit', async () => {
+    const value: MemoNode = { id: 'startup-memo', type: 'memo', parentId: null, sortKey: 'a0', title: 'Old local', body: '', dueAt: null,
+      duePreset: 'none', status: 'active', completedAt: null, createdAt: now(0), updatedAt: now(0), deletedAt: null };
+    const record = { value: nodeToV2Value({ ...value, title: 'Latest server', updatedAt: now(2) }), revision: 2,
+      lastOpId: 'remote:2', lastDeviceId: 'remote', lastLocalSeq: 2, operationType: 'update' as const };
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(doc(context.firestore(), 'users/owner/nodesV2/startup-memo'), { record });
+    });
+    const persistence = new MemoryPersistence();
+    const store = await TaskMemoV2ApplicationStore.open(persistence, [value], { deviceId: 'startup-reader' });
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const adapter = createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true });
+    await adapter.connect();
+    let confirmed = false, failure: unknown;
+    const stop = adapter.subscribe!(async incoming => { await store.receive(incoming); }, reason => { failure = reason; }, source => {
+      if (source === 'server') confirmed = true;
+    });
+    try {
+      await waitFor(() => confirmed || !!failure);
+      expect(failure).toBeUndefined();
+      const restarted = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'ignored' });
+      expect(restarted.nodes[0].title).toBe('Latest server');
+      await store.receive({ ...record, revision: 1, lastOpId: 'remote:1', value: nodeToV2Value(value) });
+      expect(store.nodes[0].title).toBe('Latest server');
+      expect(store.outbox).toEqual([]);
+      expect(store.historyDepths).toEqual({ past: 0, future: 0 });
+    } finally { stop(); }
+  });
 
   it('persists running skips via SDK/Rules/receipts, merges offline dates and supports restart and Undo/Redo', async () => {
     const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
