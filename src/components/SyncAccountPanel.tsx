@@ -4,7 +4,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { User } from 'firebase/auth';
 import type { TaskMemoSyncStatus } from '@/hooks/useTaskMemoSync';
 import type { TaskMemoEnvironment } from '@/services/firebaseConfig';
-import { useAppTheme, type ThemeColors } from '@/theme/theme';
+import { useAppTheme, type ThemeColors } from '../theme/theme';
 
 type Props = { protocol: 1 | 2; devNetwork?: { paused: boolean; toggle: () => Promise<void> }; configured: boolean; environment: TaskMemoEnvironment | null; configurationError: string | null; user: User | null; status: TaskMemoSyncStatus; error: string | null; onSignIn: (email: string, password: string) => Promise<void>; onSignUp: (email: string, password: string) => Promise<void>; onSignOut: () => Promise<void> };
 const labels: Record<TaskMemoSyncStatus, string> = { onboarding: 'クラウド利用を準備中…', disabled: '未設定', 'signed-out': '未ログイン', connecting: '接続中…', diagnostic: '復旧診断のため安全停止', 'local-recovery': 'ローカル復旧モード・停止中', 'self-repairing': '自己修復中・同期停止中', 'ownership-review': 'ローカル変更の取り込み確認待ち', 'ownership-importing': 'ローカル変更を取り込み中…', synced: '同期済み', pending: '送信待ち', retrying: '再送中', offline: 'オフライン（ローカル保存中）', error: '同期エラー' };

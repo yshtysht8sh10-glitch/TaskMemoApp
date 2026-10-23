@@ -1840,9 +1840,7 @@ function Sheet({
               style={styles.sheetContent}
               contentContainerStyle={styles.sheetScrollContent}
               keyboardShouldPersistTaps="handled"
-              keyboardDismissMode={
-                Platform.OS === "ios" ? "interactive" : "on-drag"
-              }
+              keyboardDismissMode={editorKeyboardDismissMode(Platform.OS)}
               automaticallyAdjustKeyboardInsets
             >
               {children}
