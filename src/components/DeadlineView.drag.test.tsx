@@ -68,4 +68,3 @@ it.each(['mouse', 'touch'] as const)('DeadlineView %s enables missed Routine dra
     expect((host.querySelector(`[data-taskmemo-dnd-key="${old}"] [draggable]`) as HTMLElement).draggable).toBe(false);
   } finally { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(document, 'elementFromPoint'); vi.useRealTimers(); }
 });
-
