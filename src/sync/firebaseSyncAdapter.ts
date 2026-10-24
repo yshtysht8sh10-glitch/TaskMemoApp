@@ -83,7 +83,7 @@ const adapterError = (reason: unknown) => {
     reason && typeof reason === "object" ? "Firebase operation failed." : String(reason);
   const recoveryReason = typeof source.recoveryReason === "string" ? source.recoveryReason : undefined;
   const firestoreSdkError = reason instanceof Error;
-  if (code.includes("permission-denied") || code.includes("invalid-argument") || code.includes("unauthenticated"))
+  if (code.includes("permission-denied") || code.includes("invalid-argument") || code.includes("unauthenticated") || code.includes("failed-precondition"))
     return { kind: "permanent" as const, code, message, recoveryReason, firestoreSdkError };
   if (code.includes("unavailable") || code.includes("network") || code.includes("deadline-exceeded"))
     return { kind: "offline" as const, code, message, recoveryReason, firestoreSdkError };

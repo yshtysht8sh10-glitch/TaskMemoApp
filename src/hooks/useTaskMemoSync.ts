@@ -535,6 +535,18 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     if (!controllerRef.current) throw new Error('Applicationの初期化・復旧が完了するまでテキスト編集できません。');
     return controllerRef.current;
   };
+  const retrySync = async () => {
+    const controller = controllerRef.current, scope = activeScopeRef.current;
+    if (!controller || activeLocalRef.current || repairRunningRef.current || localRecoveryModeRef.current ||
+        ownershipReview || storeRef.current?.pendingOwnership) {
+      setError('現在は同期を再確認できません。初期化または取り込み・復旧状態を確認してください。');
+      return;
+    }
+    const task = controller.start();
+    publish();
+    await task;
+    if (controller === controllerRef.current && scope === activeScopeRef.current) publish();
+  };
   return {
     devNetwork: enabled && process.env.EXPO_PUBLIC_FIREBASE_EMULATOR === "true" ? {
       paused: networkPaused,
@@ -548,7 +560,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     } : undefined,
     configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, legacyPinnedNoteCandidates,
     applicationState, startup, useCachedData: () => { cacheEditingRef.current = true; setCacheEditing(true); publish(); }, activeScope: activeScopeRef.current, ownershipReview, ownershipPendingCount, ownershipRecovery,
-    reviewOwnership, commitOwnership, skipOwnership, closeOwnershipReview,
+    reviewOwnership, commitOwnership, skipOwnership, closeOwnershipReview, retrySync,
     selfRepairProgress, repairSync,
     signOut: () => signOut(getFirebaseClient().auth),
     command: (label: string, operation: (nodes: Node[]) => Node[], recordHistory = true) => run((controller) => controller.command(label, inferSyncOperationType(label), operation, { recordHistory })),

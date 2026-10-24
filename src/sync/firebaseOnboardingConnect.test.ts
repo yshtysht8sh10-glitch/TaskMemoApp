@@ -17,6 +17,12 @@ const adapter = (ensureAccountReady?: () => Promise<void>) => createFirebaseSync
   { app: { options: { projectId: 'taskmemoapp-dev' } } } as never, 'new-user', 'development', { ensureAccountReady });
 
 describe('real SDK adapter missing-gate onboarding order', () => {
+  it('reports a legacy-account precondition refusal as an error, not a transient resend', async () => {
+    state.documents.set(globalPath, { schemaVersion: 1, writesEnabled: true });
+    await expect(adapter(async () => { throw { code: 'functions/failed-precondition', message: '既存アカウントには管理者による移行確認が必要です。' }; }).connect())
+      .rejects.toMatchObject({ kind: 'permanent', message: '既存アカウントには管理者による移行確認が必要です。' });
+    expect(state.documents.has(gatePath)).toBe(false);
+  });
   beforeEach(() => {
     state.documents.clear(); state.reads = []; state.failure = null;
     state.documents.set(globalPath, { schemaVersion: 1, writesEnabled: true });

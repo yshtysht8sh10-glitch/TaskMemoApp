@@ -121,6 +121,7 @@ import { useTaskMemoSync } from "@/hooks/useTaskMemoSync";
 import { completeFromDeadlineList, removeFromDeadlineList, routineListTarget } from '@/domain/routineListActions';
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
+import { MemoCreateButton } from '../components/MemoCreateButton';
 import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
 import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
@@ -751,6 +752,10 @@ export default function HomeScreen() {
       </View>
       <View accessibilityLiveRegion="polite" style={{ paddingHorizontal: 16, paddingVertical: 8 }}>
         <Text style={{ color: colors.textSecondary }}>{sync.startup.message}</Text>
+        {!!sync.user && !!sync.error && <Text accessibilityRole="alert" style={{ color: colors.danger }}>{sync.error}</Text>}
+        {!!sync.user && !sync.startup.editable && <Pressable accessibilityRole="button" onPress={() => setSyncOpen(true)} style={{ paddingVertical: 12 }}>
+          <Text style={{ color: colors.accent }}>追加できない理由・同期状態を確認する</Text>
+        </Pressable>}
         {sync.startup.canUseCache && <Pressable accessibilityRole="button" onPress={sync.useCachedData} style={{ paddingVertical: 12 }}>
           <Text style={{ color: colors.accent }}>最新未確認の端末データを使って編集する</Text>
         </Pressable>}
@@ -1050,19 +1055,18 @@ export default function HomeScreen() {
         )}
       </View>
       {(view === "deadline" || view === "tree") && (
-        <Pressable
-          disabled={!sync.startup.editable}
-          style={[styles.fab, !sync.startup.editable && { opacity: 0.4 }]}
-          onPress={() => {
+        <MemoCreateButton
+          editable={sync.startup.editable}
+          style={styles.fab}
+          textStyle={styles.fabText}
+          onBlocked={() => setSyncOpen(true)}
+          onCreate={() => {
             setCreateParentId(null);
             if (view === "deadline")
               changeEditor({ type: "memo", parentId: null }, 'create-memo');
             else setCreateOpen(true);
           }}
-          accessibilityLabel="新規作成"
-        >
-          <Text style={styles.fabText}>＋</Text>
-        </Pressable>
+        />
       )}
       <Sheet
         visible={createOpen}
@@ -1535,6 +1539,7 @@ export default function HomeScreen() {
           onSignIn={sync.signIn}
           onSignUp={sync.signUp}
           onSignOut={sync.signOut}
+          onRetry={sync.retrySync}
           protocol={sync.protocol}
           devNetwork={sync.devNetwork}
         />
