@@ -1,4 +1,5 @@
 import type { DuePreset } from '../models/node';
+import { daysUntilWeekEnd } from '../utils/calendarWeek';
 import { RELATIVE_DUE_VALUES, type ResolvedDue, type TextContext } from './syntax';
 
 type Parts = { year: number; month: number; day: number; hour: number; minute: number; second: number; millisecond: number };
@@ -33,7 +34,7 @@ export function resolveDeadline(value: string, context: TextContext): ResolvedDu
       let preset: DuePreset = 'custom';
       if (value === '今日') preset = 'today';
       if (value === '明日' || value === '明後日') { date.setUTCDate(date.getUTCDate() + (value === '明日' ? 1 : 2)); if (value === '明日') preset = 'tomorrow'; }
-      if (value === '今週' || value === '来週') { date.setUTCDate(date.getUTCDate() + ((7 - date.getUTCDay()) % 7) + (value === '来週' ? 7 : 0)); if (value === '今週') preset = 'thisWeek'; }
+      if (value === '今週' || value === '来週') { date.setUTCDate(date.getUTCDate() + daysUntilWeekEnd(date.getUTCDay()) + (value === '来週' ? 7 : 0)); if (value === '今週') preset = 'thisWeek'; }
       if (value === '今月' || value === '来月') { date.setUTCMonth(date.getUTCMonth() + (value === '来月' ? 2 : 1), 0); if (value === '今月') preset = 'thisMonth'; }
       if (value === '今年') { date.setUTCMonth(11, 31); preset = 'thisYear'; }
       if (value === '午前') preset = 'morning';

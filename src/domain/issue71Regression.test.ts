@@ -44,7 +44,8 @@ it('[71-OVERRIDE-FUTURE] a postponed old occurrence retains its occurrence key a
   const now = new Date(2026, 9, 3, 8);
   const nextDay = new Date(2026, 9, 4, 8);
   const groups = deadlineGroups([root, postponed], nextDay, new Set(['today', 'thisWeek', 'nextWeek']), 'today');
-  const occurrence = groups.find(g => g.key === 'nextWeek')!.memos[0];
+  // October 4 is Sunday: October 6 belongs to this week after the short bucket is hidden.
+  const occurrence = groups.find(g => g.key === 'thisWeek')!.memos[0];
   expect(occurrence).toMatchObject({ routineSourceId: 'm', routineOccurrenceKey: '2026-10-03', dueAt: new Date(2026, 9, 6, 12) });
   expect(groups.find(g => g.key === 'overdue')).toBeUndefined();
   expect(postponed.routineHistory).toBeUndefined();

@@ -2,19 +2,20 @@ import { expect, it } from 'vitest';
 import type { MemoNode } from '../models/node';
 import { deadlineDisplayGroups, deadlineGroupDefinitions, deadlineGroups, hiddenDeadlineSummary } from './deadlineView';
 
-it.each([new Date(2026, 9, 3, 8), new Date(2026, 8, 26, 8), new Date(2026, 11, 26, 8)])('[60-WEEK] Saturday forward containment preserves Monday through Sunday (%s)', now => {
+it.each([new Date(2026, 9, 3, 8), new Date(2026, 8, 26, 8), new Date(2026, 11, 26, 8)])('[60-WEEK] Saturday forward containment preserves Sunday through Saturday (%s)', now => {
   const visible = new Set(deadlineGroupDefinitions('today').map(g => g.id).filter(id => !['tomorrow', 'twoThreeDays'].includes(id)));
   const nodes: MemoNode[] = [0, 1, 2, 3, 8].map(offset => ({ id: `${offset}`, type: 'memo', parentId: null, sortKey: `a${offset}`, title: 'fixture', body: '', duePreset: 'custom', dueAt: new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, 12), status: 'active', completedAt: null, deletedAt: null, createdAt: now, updatedAt: now }));
   const original = structuredClone(nodes);
   const groups = deadlineDisplayGroups(deadlineGroups(nodes, now, visible, 'today'), now, 'today');
   expect(groups.find(g => g.key === 'today')?.memos.map(m => m.id)).toEqual(['0']);
-  expect(groups.find(g => g.key === 'thisWeek')?.memos.map(m => m.id)).toEqual(['1']);
-  expect(groups.find(g => g.key === 'nextWeek')?.memos.map(m => m.id)).toEqual(['2', '3', '8']);
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
-  const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 8);
+  expect(groups.some(g => g.key === 'thisWeek')).toBe(false);
+  expect(groups.find(g => g.key === 'nextWeek')?.memos.map(m => m.id)).toEqual(['1', '2', '3']);
+  expect(groups.flatMap(g => g.memos).filter(m => m.id === '8')).toHaveLength(1);
+  const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const saturday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
   const label = groups.find(g => g.key === 'nextWeek')!.label;
-  expect(label).toContain(`${monday.getMonth()+1}/${monday.getDate()}`);
   expect(label).toContain(`${sunday.getMonth()+1}/${sunday.getDate()}`);
+  expect(label).toContain(`${saturday.getMonth()+1}/${saturday.getDate()}`);
   expect(hiddenDeadlineSummary(nodes, now, visible, 'today').total).toBe(0);
   expect(nodes).toEqual(original);
 });

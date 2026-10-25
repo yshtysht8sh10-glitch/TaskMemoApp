@@ -1,4 +1,5 @@
 import type { DuePreset } from '@/models/node';
+import { daysUntilWeekEnd } from './calendarWeek';
 
 type CalculatedDuePreset = Exclude<DuePreset, 'none' | 'custom'>;
 
@@ -7,7 +8,7 @@ const DUE_DATE_CALCULATORS: Record<CalculatedDuePreset, (date: Date) => void> = 
   afternoon: (date) => date.setHours(17, 0, 0, 0),
   today: (date) => date.setHours(23, 59, 0, 0),
   tomorrow: (date) => { date.setDate(date.getDate() + 1); date.setHours(23, 59, 0, 0); },
-  thisWeek: (date) => { date.setDate(date.getDate() + ((7 - date.getDay()) % 7)); date.setHours(23, 59, 0, 0); },
+  thisWeek: (date) => { date.setDate(date.getDate() + daysUntilWeekEnd(date.getDay())); date.setHours(23, 59, 0, 0); },
   thisMonth: (date) => { date.setMonth(date.getMonth() + 1, 0); date.setHours(23, 59, 0, 0); },
   thisYear: (date) => { date.setMonth(11, 31); date.setHours(23, 59, 0, 0); },
 };

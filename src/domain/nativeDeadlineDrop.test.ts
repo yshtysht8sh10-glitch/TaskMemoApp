@@ -38,9 +38,9 @@ describe('Native deadline drop policy', () => {
   });
 
   it('表示上統合されたbucketでもmemo行の元bucketを使う', () => {
-    const sunday = new Date(2026, 8, 13, 8);
-    const original = deadlineGroups([], sunday);
-    const displayed = deadlineDisplayGroups(original, sunday);
+    const saturday = new Date(2026, 8, 12, 8);
+    const original = deadlineGroups([], saturday);
+    const displayed = deadlineDisplayGroups(original, saturday);
     expect(displayed.some((group) => group.key === 'thisWeek')).toBe(false);
     expect(nativeDeadlineGroupForPlaceholder([{ groupKey: 'thisWeek' }], 0, original)).toBe('thisWeek');
   });

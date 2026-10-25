@@ -5,6 +5,7 @@ import { localDateKey, missedRoutineOccurrences, routineCategoryForMemo, routine
 import { isTask } from "./memoType";
 import { isValidSortKey } from "./sortKeys";
 import { beforeIdForInsertion } from "./insertionPosition";
+import { daysUntilWeekEnd } from '../utils/calendarWeek';
 
 export type TodayGranularity = "today" | "dayNight" | "amPm" | "threePart";
 export const TODAY_GRANULARITIES: readonly {
@@ -159,21 +160,21 @@ const common: readonly DeadlineGroupDefinition[] = [
   {
     id: "twoThreeDays",
     label: "2〜3日以内",
-    create: custom((now) => dayEnd(now, Math.min(3, (7 - now.getDay()) % 7))),
+    create: custom((now) => dayEnd(now, Math.min(3, daysUntilWeekEnd(now.getDay())))),
     fallbackGroupId: "thisWeek",
     dropLabel: "3日以内に変更",
   },
   {
     id: "thisWeek",
     label: "今週",
-    create: fixed("thisWeek", (now) => dayEnd(now, (7 - now.getDay()) % 7)),
+    create: fixed("thisWeek", (now) => dayEnd(now, daysUntilWeekEnd(now.getDay()))),
     fallbackGroupId: "nextWeek",
     dropLabel: "今週までに変更",
   },
   {
     id: "nextWeek",
     label: "来週",
-    create: custom((now) => dayEnd(now, ((7 - now.getDay()) % 7) + 7)),
+    create: custom((now) => dayEnd(now, daysUntilWeekEnd(now.getDay()) + 7)),
     fallbackGroupId: "thisMonth",
     dropLabel: "来週までに変更",
   },
@@ -223,7 +224,7 @@ export const allDeadlineGroupIds = () => [
 ];
 
 const boundaries = (now: Date) => {
-  const weekOffset = (7 - now.getDay()) % 7;
+  const weekOffset = daysUntilWeekEnd(now.getDay());
   return {
     todayEnd: dayEnd(now, 0),
     tomorrowEnd: dayEnd(now, 1),
@@ -267,11 +268,13 @@ export const deadlineGroupForMemo = (
   const byDate = deadlineGroupForDueAt(memo.dueAt, now, granularity);
   // Late in the week, the calendar-week endpoint overlaps the earlier
   // "today / tomorrow / 2-3 days" buckets. Preserve the explicit quick-add or
-  // drop intent while the generated deadline is still in the current week.
+  // drop intent only for a deadline on this week's Saturday. Older Sunday
+  // deadlines keep their saved date and must not move into a later date range.
   if (
     memo.duePreset === "thisWeek" &&
     memo.dueAt &&
     memo.dueAt.getTime() >= now.getTime() &&
+    localDateKey(memo.dueAt) === localDateKey(boundaries(now).weekEnd) &&
     memo.dueAt.getTime() <= boundaries(now).weekEnd.getTime()
   )
     return "thisWeek";
