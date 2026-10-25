@@ -1,5 +1,6 @@
 import { FormTextInput } from '../components/FormTextInput';
 import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
+import { useEditorAutosave } from '../hooks/useEditorAutosave';
 import { TextEditScreen, TextViewScreen } from '@/components/TextWorkspace';
 import { listEditProjection, listTextSnapshot, treeTextSnapshot, type TextViewSnapshot, type ListTextGroup } from '@/textFormat/presentation';
 import type { TextSession } from '@/textFormat/syntax';
@@ -1926,7 +1927,6 @@ function EditorModal({
     ? `${String(initialMemo.dueAt.getHours()).padStart(2, '0')}:${String(initialMemo.dueAt.getMinutes()).padStart(2, '0')}`
     : '23:59');
   const signature = JSON.stringify([title, body, preset, custom, status, repeatFrequency, repeatInterval, repeatStartsOn, routineTime]);
-  const initialSignature = useRef(signature);
   const committedSignature = useRef(signature);
   const savingRef = useRef(false);
   useEffect(() => {
@@ -2038,13 +2038,7 @@ function EditorModal({
       memoType: "task",
     });
   };
-  useEffect(() => {
-    if (!editor?.node || signature === initialSignature.current || signature === committedSignature.current) return;
-    const timer = setTimeout(() => save(false), 600);
-    return () => clearTimeout(timer);
-  // save reads the current render's validated draft; unrelated renders must not restart the debounce.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, editor?.node?.id]);
+  useEditorAutosave(signature, editor?.node?.id, committedSignature, () => save(false));
   const dismiss = (reason: string) => {
     recordEditorDiagnostic('sheet-dismiss-request', { reason });
     if (editor?.node) return save();
