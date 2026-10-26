@@ -6,6 +6,7 @@ import { isTask } from "./memoType";
 import { isValidSortKey } from "./sortKeys";
 import { beforeIdForInsertion } from "./insertionPosition";
 import { daysUntilWeekEnd } from '../utils/calendarWeek';
+import { flattenVisibleNodes } from './treeView';
 
 export type TodayGranularity = "today" | "dayNight" | "amPm" | "threePart";
 export const TODAY_GRANULARITIES: readonly {
@@ -346,6 +347,39 @@ export function deadlineGroups(
     memo.routineOccurrenceKey ? memo.dueAt : routineCategoryForMemo(nodes, memo)
       ? routineOccurrenceDueAt(nodes, memo, now)
       : memo.dueAt;
+  const treeOrder = new Map(flattenVisibleNodes(nodes,
+    new Set(nodes.filter(node => node.type === 'category').map(node => node.id)))
+    .map((row, index) => [row.node.id, index]));
+  const rank = (memo: MemoNode) => memo.deadlineSortKey && isValidSortKey(memo.deadlineSortKey)
+    ? memo.deadlineSortKey : null;
+  const sortGroup = (memos: MemoNode[]) => {
+    // A total ordering: mixing pairwise rank/date comparisons creates cycles
+    // when an unranked occurrence arrives between manually ordered rows.
+    const ordered = [...memos].sort((a, b) => {
+      const ar = rank(a), br = rank(b);
+      if (ar && br) return compareSortKeys(ar, br) || a.id.localeCompare(b.id);
+      if (ar || br) return ar ? -1 : 1;
+      return (occurrenceDueAt(a)?.getTime() ?? Infinity) -
+        (occurrenceDueAt(b)?.getTime() ?? Infinity) ||
+        compareSortKeys(a.sortKey, b.sortKey) || a.id.localeCompare(b.id);
+    });
+    // Reorder only Routine slots with equal saved rank, by deadline then tree.
+    // Ordinary Task slots/order and explicit distinct manual ranks stay intact.
+    const ties = new Map<string, number[]>();
+    ordered.forEach((memo, index) => {
+      if (!routineCategoryForMemo(nodes, memo)) return;
+      const key = rank(memo) ?? '';
+      ties.set(key, [...(ties.get(key) ?? []), index]);
+    });
+    for (const slots of ties.values()) {
+      const routines = slots.map(index => ordered[index]).sort((a, b) =>
+        (occurrenceDueAt(a)?.getTime() ?? Infinity) - (occurrenceDueAt(b)?.getTime() ?? Infinity) ||
+        (treeOrder.get(a.routineSourceId ?? a.id) ?? Infinity) -
+        (treeOrder.get(b.routineSourceId ?? b.id) ?? Infinity));
+      slots.forEach((slot, index) => { ordered[slot] = routines[index]; });
+    }
+    return ordered;
+  };
   const memos = nodes
     .filter(
       (node): node is MemoNode =>
@@ -373,15 +407,7 @@ export function deadlineGroups(
     .map((definition) => ({
       ...definition,
       key: definition.id,
-      memos: (grouped.get(definition.id) ?? []).sort((a, b) =>
-        a.deadlineSortKey && b.deadlineSortKey
-          ? compareSortKeys(a.deadlineSortKey, b.deadlineSortKey) ||
-            a.id.localeCompare(b.id)
-          : (occurrenceDueAt(a)?.getTime() ?? Infinity) -
-              (occurrenceDueAt(b)?.getTime() ?? Infinity) ||
-            compareSortKeys(a.sortKey, b.sortKey) ||
-            a.id.localeCompare(b.id),
-      ),
+      memos: sortGroup(grouped.get(definition.id) ?? []),
     }));
 }
 
