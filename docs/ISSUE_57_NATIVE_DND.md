@@ -1,5 +1,14 @@
 # #57 Native一覧DnDの挿入位置表現
 
+## #102での更新
+
+日時入力が必要なlaterもNative/Webのdrop候補に含める。通常Memoの別bucketからのdropは、
+翌年1月1日23:59を候補とする確認画面を開く。「別の日時を指定する」で変更でき、確定前は保存しない。
+対象bucketに含まれない候補（年末の明日/来週との重複など）は確定せず、日時指定を案内する。
+キャンセルは元の期限と位置を保持。確定は共通Applicationの1 commandで保存し、Undo/Redo・Outboxを利用する。
+Routineは当日内の期限変更制約、過去回は別bucket移動の拒否を維持する。
+以下は#57時点の経路・差分の記録。
+
 ## 変更前の経路
 
 1. `DeadlineView.tsx` のmemo行の `Pressable.onLongPress` がライブラリの `drag` を呼ぶ。Nativeの長押しは180ms、activationDistanceは8px。選択モードとRoutine過去occurrenceは開始不可。

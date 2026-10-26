@@ -31,10 +31,11 @@ describe('Native deadline drop policy', () => {
     expect(nativeDeadlineGroupForPlaceholder(rows, rows.length, groups)).toBeNull();
   });
 
-  it('期限切れ・日時入力が必要なbucket・非表示bucketを移動先にしない', () => {
-    for (const groupKey of ['overdue', 'later', 'daytime'] as const) {
+  it('期限切れ・非表示bucketを移動先にしないが日時確認のlaterは候補にする', () => {
+    for (const groupKey of ['overdue', 'daytime'] as const) {
       expect(nativeDeadlineGroupForPlaceholder([{ groupKey }], 0, groups)).toBeNull();
     }
+    expect(nativeDeadlineGroupForPlaceholder([{ groupKey: 'later' }], 0, groups)).toBe('later');
   });
 
   it('表示上統合されたbucketでもmemo行の元bucketを使う', () => {

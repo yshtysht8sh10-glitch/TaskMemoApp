@@ -1,8 +1,8 @@
 import { webFormTypography } from '../theme/formTypography';
 import React from 'react';
 import { View } from 'react-native';
-import { useAppTheme } from '@/theme/theme';
-import { formatDateTimeInput, parseLocalDateTime } from '@/utils/dueDates';
+import { useAppTheme } from '../theme/theme';
+import { formatDateTimeInput, parseLocalDateTime } from '../utils/dueDates';
 
 export function DateTimeField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const { colors } = useAppTheme();

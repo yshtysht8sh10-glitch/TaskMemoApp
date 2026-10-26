@@ -201,6 +201,7 @@ const common: readonly DeadlineGroupDefinition[] = [
     label: "それ以降",
     create: custom((now) => new Date(now.getFullYear() + 1, 0, 1), true),
     fallbackGroupId: null,
+    dropLabel: '日時を確認して変更',
   },
   {
     id: "none",
@@ -517,6 +518,7 @@ export function updateMemoDeadline(
   targetId: DeadlineGroupKey,
   now = new Date(),
   granularity: TodayGranularity = "amPm",
+  confirmedDueAt?: Date,
 ) {
   const target = deadlineGroupDefinitions(granularity).find(
     (group) => group.id === targetId,
@@ -524,7 +526,7 @@ export function updateMemoDeadline(
   const memo = nodes.find((node) => node.id === memoId);
   if (
     !target?.create ||
-    target.create.editable ||
+    (target.create.editable && !confirmedDueAt) ||
     !memo ||
     memo.type !== "memo" ||
     !isTask(memo) ||
@@ -532,6 +534,9 @@ export function updateMemoDeadline(
     memo.status !== "active"
   )
     return nodes;
+  if (target.create.editable && (!confirmedDueAt || !Number.isFinite(confirmedDueAt.getTime()) ||
+    deadlineGroupForDueAt(confirmedDueAt, now, granularity) !== targetId))
+    throw new Error('移動先の期間に含まれる日時を指定してください。');
   if (routineCategoryForMemo(nodes, memo)) {
     const dueAt = target.create.dueAt(now);
     if (!dueAt || localDateKey(dueAt) !== localDateKey(now)) return nodes;
@@ -544,7 +549,7 @@ export function updateMemoDeadline(
       ? {
           ...node,
           duePreset: target.create!.preset,
-          dueAt: target.create!.dueAt(now),
+          dueAt: target.create!.editable ? confirmedDueAt! : target.create!.dueAt(now),
           updatedAt: now,
         }
       : node,
@@ -557,6 +562,7 @@ export function moveMemoInDeadlineList(
   beforeId?: string,
   now = new Date(),
   granularity: TodayGranularity = "amPm",
+  confirmedDueAt?: Date,
 ) {
   const target = deadlineGroupDefinitions(granularity).find(
     (group) => group.id === targetId,
@@ -564,12 +570,15 @@ export function moveMemoInDeadlineList(
   const groups = deadlineGroups(nodes, now, undefined, granularity);
   const sourceGroup = groups.find((group) => group.memos.some((memo) => memo.id === memoId));
   const moving = sourceGroup?.memos.find((memo) => memo.id === memoId);
-  if (!moving || !target) return nodes;
-  const same = sourceGroup!.key === targetId;
+  if (!moving || !target) {
+    if (confirmedDueAt) throw new Error('移動対象のMemoが変更されました。一覧を確認してください。');
+    return nodes;
+  }
+  const same = sourceGroup!.key === targetId && !confirmedDueAt;
   // Historical projections may only reorder; never reinterpret a date as a deadline move.
   if (moving.routineOccurrenceKey && !same) return nodes;
-  if (!same && (!target.create || target.create.editable)) return nodes;
-  const changed = same ? nodes : updateMemoDeadline(nodes, memoId, targetId, now, granularity);
+  if (!same && (!target.create || (target.create.editable && !confirmedDueAt))) return nodes;
+  const changed = same ? nodes : updateMemoDeadline(nodes, memoId, targetId, now, granularity, confirmedDueAt);
   if (!same && changed === nodes) return nodes;
   const targetMemos = deadlineGroups(changed, now, undefined, granularity)
     .find((group) => group.key === targetId)?.memos ?? [];

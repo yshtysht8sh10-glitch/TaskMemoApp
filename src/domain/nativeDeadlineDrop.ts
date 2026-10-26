@@ -9,7 +9,7 @@ export function nativeDeadlineGroupForPlaceholder(
   sourceGroup?: DeadlineGroupKey,
 ): DeadlineGroupKey | null {
   const group = groups.find((item) => item.key === rows[index]?.groupKey);
-  return group && (group.key === sourceGroup || (group.create && !group.create.editable)) ? group.key : null;
+  return group && (group.key === sourceGroup || group.create) ? group.key : null;
 }
 
 /** Same-bucket reorders use final rows; cross-bucket moves retain append policy. */

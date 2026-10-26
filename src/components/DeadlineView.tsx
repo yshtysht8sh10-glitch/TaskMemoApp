@@ -881,8 +881,7 @@ export function DeadlineView({
             const group = sourceGroups.find((item) => item.key === target.groupKey);
             const next =
               target.kind === "heading" &&
-              group?.create &&
-              !group.create.editable
+              group?.create
                 ? group.key
                 : null;
             targetRef.current = next;

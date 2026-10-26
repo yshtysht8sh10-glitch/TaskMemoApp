@@ -52,6 +52,7 @@ import {
   categoryPath,
   deadlineGroupDefinitions,
   deadlineGroupForDueAt,
+  deadlineGroups,
   moveMemoInDeadlineList,
   updateMemoDeadline,
   TODAY_GRANULARITIES,
@@ -123,6 +124,7 @@ import { completeFromDeadlineList, removeFromDeadlineList, routineListTarget } f
 import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { MemoCreateButton } from '../components/MemoCreateButton';
+import { LaterDeadlineDialog } from '../components/LaterDeadlineDialog';
 import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
 import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
@@ -237,6 +239,7 @@ export default function HomeScreen() {
     () => !!initialExternalAiAuthorization(),
   );
   const [editor, setEditor] = useState<Editor>(null);
+  const [laterDrop, setLaterDrop] = useState<{ id: string; title: string; beforeId?: string; now: Date; scope: string } | null>(null);
   const changeEditor = (next: Editor, reason: string) => {
     recordEditorDiagnostic('editor-state-change-request', { reason, nextOpen: !!next });
     setEditor(next);
@@ -286,7 +289,7 @@ export default function HomeScreen() {
   const [editorScope, setEditorScope] = useState(sync.activeScope);
   if (editorScope !== sync.activeScope) {
     setEditorScope(sync.activeScope);
-    setEditor(null); setQuickTitleTarget(null); setMenuNode(null); setCreateOpen(false);
+    setEditor(null); setLaterDrop(null); setQuickTitleTarget(null); setMenuNode(null); setCreateOpen(false);
     setFolderColorId(null); setMovingNode(null); setBulkMove(null); setBulkDeadlineMove(null);
     setTextEdit(null); setTextView(null);
   }
@@ -881,7 +884,19 @@ export default function HomeScreen() {
               setMenuRoutineDate(target.dateKey);
               setMenuNode(nodes.find(n => n.id === target.memoId) ?? null);
             }}
-            onDueDrop={(id, group, beforeId) =>
+            onDueDrop={(id, group, beforeId) => {
+              const source = deadlineGroups(nodes, new Date(), visibleGroupIds, todayGranularity)
+                .find(item => item.memos.some(memo => memo.id === id));
+              if (group === 'later' && source?.key !== 'later') {
+                const memo = source?.memos.find(item => item.id === id);
+                if (!memo) return;
+                if (routineCategoryForMemo(nodes, memo)) {
+                  appAlert('移動できません', 'Routineの期限変更は対象の当日内に限られます。周期や実績は変更しません。');
+                  return;
+                }
+                setLaterDrop({ id, title: memo.title, beforeId, now: new Date(), scope: sync.activeScope });
+                return;
+              }
               apply("一覧でMemoを移動", (current) =>
                 moveMemoInDeadlineList(
                   current,
@@ -891,8 +906,8 @@ export default function HomeScreen() {
                   new Date(),
                   todayGranularity,
                 ),
-              )
-            }
+              );
+            }}
             onBulkMove={(ids, onSuccess) =>
               setBulkDeadlineMove({ nodeIds: ids, onSuccess })
             }
@@ -1267,6 +1282,15 @@ export default function HomeScreen() {
           return succeeded;
         }}
       />
+      {laterDrop && <LaterDeadlineDialog key={`${laterDrop.scope}-${laterDrop.id}-${laterDrop.now.getTime()}`}
+        title={laterDrop.title} now={laterDrop.now} onCancel={() => setLaterDrop(null)}
+        onConfirm={async dueAt => {
+          if (laterDrop.scope !== sync.activeScope) return false;
+          const succeeded = await applyConfirmed('一覧でMemoを移動', current =>
+            moveMemoInDeadlineList(current, laterDrop.id, 'later', laterDrop.beforeId, new Date(), todayGranularity, dueAt));
+          if (succeeded) setLaterDrop(null);
+          return succeeded;
+        }} />}
       <QuickTitleEditor
         target={quickTitleTarget}
         onClose={() => setQuickTitleTarget(null)}
