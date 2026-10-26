@@ -2,6 +2,15 @@
 
 2026-10-09。Issue: https://github.com/yshtysht8sh10-glitch/TaskMemoApp/issues/96
 
+## 2026-10-26 再検証
+
+現行main `08e7347` は既存修正 `7f2123c` を含む。現行のマウス操作と既存mouse/touchテストで不具合は再現せず、アプリコードは追加変更しない。
+異なる2定義のRoutineと通常Taskの混在、および同一定義の過去回と当日分が同時に期限切れとなる条件を追加検証する。
+IndexedDB adapter、V2別端末ストア、1 History、Undo/Redo、他bucket・周期・期限・完了/スキップ履歴保持を確認。
+隔離した修正前のdeadlineView（`7f2123c^`）でも回帰テストを実行し、並び替えの失敗を確認した。現行版の失敗とは扱わない。
+DEV実画面では過去回を通常Taskの前へ移動、Undo/Redo、再読込を確認。DEV Firestore上の日付別rankと、周期・期限・履歴・別groupのデータ不変も読取で確認。
+#102の候補確認付きDnDとRoutine過去回の別bucket拒否は維持。iPhone実タッチとNative実機はユーザー確認待ち。
+
 ## 原因と調査
 
 - 通常Taskは保存済みNode IDでドラッグ・並び替えする。過去の未完了Routineは `missedRoutineOccurrences` が生成する `routine-overdue:<sourceId>:<date>` の表示行で、Nodeとして保存されない。
