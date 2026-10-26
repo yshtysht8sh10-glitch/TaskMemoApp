@@ -5,6 +5,14 @@ import { useAppTheme } from '../theme/theme';
 import { formatDateTimeInput, parseLocalDateTime } from '../utils/dueDates';
 import { deadlineGroupForDueAt } from '../domain/deadlineView';
 
+function DeadlineChoice({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
+  const { colors } = useAppTheme();
+  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress}
+    style={{ padding: 14, borderRadius: 10, backgroundColor: colors.surfaceAlt, opacity: disabled ? 0.4 : 1 }}>
+    <Text style={{ color: colors.text, fontSize: 16 }}>{label}</Text>
+  </Pressable>;
+}
+
 export function LaterDeadlineDialog({ title, now, onConfirm, onCancel }: {
   title: string; now: Date; onConfirm: (dueAt: Date) => Promise<boolean>; onCancel: () => void;
 }) {
@@ -23,11 +31,6 @@ export function LaterDeadlineDialog({ title, now, onConfirm, onCancel }: {
     catch (reason) { setError(reason instanceof Error ? reason.message : '保存できませんでした。'); }
     finally { saving.current = false; setBusy(false); }
   };
-  const button = (label: string, onPress: () => void, disabled = false) =>
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress}
-      style={{ padding: 14, borderRadius: 10, backgroundColor: colors.surfaceAlt, opacity: disabled ? 0.4 : 1 }}>
-      <Text style={{ color: colors.text, fontSize: 16 }}>{label}</Text>
-    </Pressable>;
   return <Modal transparent visible animationType="fade" onRequestClose={() => { if (!busy) onCancel(); }}>
     <View style={{ flex: 1, justifyContent: 'center', padding: 20, backgroundColor: colors.backdrop }}>
       <ScrollView style={{ maxHeight: '90%', flexGrow: 0, borderRadius: 16, backgroundColor: colors.surface }}
@@ -40,9 +43,9 @@ export function LaterDeadlineDialog({ title, now, onConfirm, onCancel }: {
           この日時は「それ以降」以外のグループに分類されます。日時を指定してください。
         </Text>}
         {error && <Text accessibilityRole="alert" style={{ color: colors.danger }}>{error}</Text>}
-        {button(custom ? 'この日時に変更する' : 'この期限に変更する', () => { void confirm(); }, busy || !valid)}
-        {!custom && button('別の日時を指定する', () => setCustom(true), busy)}
-        {button('キャンセル', onCancel, busy)}
+        <DeadlineChoice label={custom ? 'この日時に変更する' : 'この期限に変更する'} onPress={() => { void confirm(); }} disabled={busy || !valid} />
+        {!custom && <DeadlineChoice label="別の日時を指定する" onPress={() => setCustom(true)} disabled={busy} />}
+        <DeadlineChoice label="キャンセル" onPress={onCancel} disabled={busy} />
       </ScrollView>
     </View>
   </Modal>;
