@@ -50,3 +50,28 @@ Firestoreにアカウント別表示設定はなく、設定の端末間共有�
 設定の新規／既存／旧journal／IndexedDB移行／バックアップ／古いアカウント／明示設定保持を確認。
 全体・タイムゾーン別検証の最終結果はIssueへ記録する。
 実Firebaseの端末間同期とiPhone実機操作はユーザー確認待ち。main/DEV SHAと配信結果はIssueへ記録する。
+
+## 2026-10-27 編集画面の追加対応
+
+iPhoneのf17764a実機確認で、通常Memo編集の固定プリセットに来週・来月・来年がないと判明。
+一覧のgroup定義とは別の配列だった。既存配列の欠落をassertするfocused testでFAILを確認した。
+初回test実行の未作成helperによるimport失敗は再現証跡に含めず、既存配列を抽出した後の期待値不一致を採用した。
+
+3項目は日時指定へのショートカットとし、選択した瞬間に共通group定義から候補を取得、秒・ミリ秒を0にする。
+来週は翌週土曜23:59、来月は翌月末23:59、来年は翌年12/31 23:59。
+選択後は日時指定の入力欄で確認・変更でき、保存後も具体的な日時として表示する。
+既存duePreset=customを使い、Node schema、Backupの許容値、Firestore Rules、Functionsの変更は不要。
+保存時に相対候補を再計算しないため、選択後に日付が変わっても期限を動かさない。
+
+Memoの期限UIだけをMemoDeadlineFieldへ抽出して実コンポーネントのイベントを検証する。
+保存前の期限解決はmemoDeadlineDraftへ集約し、既存期限を操作していない場合は元のDateを秒・ミリ秒まで保持する。
+開いただけの場合の既存signatureガードを維持し、タイトル・本文だけの保存でも相対期限を再計算しない。
+関連して、editableなgroupクイック追加で入力日時ではなく現在時刻を使っていた経路を修正し、期間検証も維持する。
+
+Routine編集は別分岐で周期・間隔・開始日・基本時刻を扱い、Memo期限プリセットを描画も保存もしていない。
+Routine branchは変更せず、既存routineEditor / useEditorAutosave / #96 / #91テストを維持する。
+
+追加18件：プリセット一覧、土日/月末/年末/うるう年、既存秒精度、固定/編集可能context、実UI選択、
+選択後の日付変更、IndexedDB再起動、V2別端末store同期、Backup、Undo/Redoと原本保持。
+全体1,198 PASS / 44 conditional SKIP、America/Los_Angelesの関連33 PASS。
+最終配信SHA、Web build、実DEV smokeの範囲はIssueへ記録する。

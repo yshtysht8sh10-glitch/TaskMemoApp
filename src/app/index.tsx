@@ -51,7 +51,6 @@ import {
 import {
   categoryPath,
   deadlineGroupDefinitions,
-  deadlineGroupForDueAt,
   deadlineGroups,
   moveMemoInDeadlineList,
   updateMemoDeadline,
@@ -99,7 +98,6 @@ import {
 } from "@/services/viewPreferences";
 import { loadPinnedNote, savePinnedNote } from "@/services/pinnedNoteStorage";
 import {
-  dueDateForPreset,
   formatDateTimeInput,
   parseLocalDateTime,
 } from "@/utils/dueDates";
@@ -126,6 +124,8 @@ import { useWebFocusedInputVisibility } from "@/hooks/useWebKeyboardVisibility";
 import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { MemoCreateButton } from '../components/MemoCreateButton';
 import { LaterDeadlineDialog } from '../components/LaterDeadlineDialog';
+import { MemoDeadlineField } from '../components/MemoDeadlineField';
+import { MEMO_DEADLINE_PRESETS as presets, memoDeadlineDraft } from '../utils/memoDeadline';
 import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
 import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
@@ -176,17 +176,6 @@ type Editor = {
   memoType?: MemoType;
   dueContext?: DeadlineCreateContext;
 } | null;
-const presets: { key: DuePreset; label: string }[] = [
-  { key: "none", label: "期限なし" },
-  { key: "today", label: "今日中" },
-  { key: "tomorrow", label: "明日中" },
-  { key: "morning", label: "午前中" },
-  { key: "afternoon", label: "午後まで" },
-  { key: "thisWeek", label: "今週中" },
-  { key: "thisMonth", label: "今月中" },
-  { key: "thisYear", label: "今年中" },
-  { key: "custom", label: "日時指定" },
-];
 const initialExternalAiAuthorization = () =>
   Platform.OS === "web" && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("externalAiAuthorization")
@@ -2049,31 +2038,17 @@ function EditorModal({
         memoType: "task",
       });
     }
-    let dueAt =
-      dueContext && !dueContext.dueEditable
-        ? dueContext.initialDueAt
-        : dueDateForPreset(preset);
-    if (preset === "custom" && !dueContext) {
-      dueAt = parseLocalDateTime(custom);
-      if (!dueAt) {
-        if (close) appAlert("入力エラー", "日時を YYYY/MM/DD HH:mm 形式で入力してください。");
-        return false;
-      }
-    }
-    if (
-      dueContext?.dueEditable &&
-      deadlineGroupForDueAt(dueAt, new Date(), dueContext.granularity) !==
-        dueContext.targetGroup
-    ) {
-      if (close) appAlert("入力エラー", `「${dueContext.label}」に入る期限を指定してください。`);
+    let deadline;
+    try { deadline = memoDeadlineDraft(preset, custom, dueContext, new Date(), memo); }
+    catch (error) {
+      if (close) appAlert("入力エラー", (error as Error).message);
       return false;
     }
     return commit({
       title,
       parentId: editor.parentId,
       body,
-      duePreset: dueContext?.initialDuePreset ?? preset,
-      dueAt,
+      ...deadline,
       status,
       memoType: "task",
     });
@@ -2237,30 +2212,8 @@ function EditorModal({
                       )
                     ) : (
                       <>
-                        <View style={styles.chips}>
-                          {presets.map((item) => (
-                            <Pressable
-                              key={item.key}
-                              onPress={() => setPreset(item.key)}
-                              style={[
-                                styles.chip,
-                                preset === item.key && styles.chipOn,
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.chipText,
-                                  preset === item.key && styles.chipTextOn,
-                                ]}
-                              >
-                                {item.label}
-                              </Text>
-                            </Pressable>
-                          ))}
-                        </View>
-                        {preset === "custom" && (
-                          <DateTimeField value={custom} onChange={setCustom} />
-                        )}
+                        <MemoDeadlineField preset={preset} custom={custom} styles={styles}
+                          onChange={(next, value) => { setPreset(next); if (value !== undefined) setCustom(value); }} />
                       </>
                     )}
                     {memo && (
