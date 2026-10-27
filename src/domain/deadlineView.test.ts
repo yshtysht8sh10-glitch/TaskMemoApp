@@ -55,12 +55,14 @@ describe('deadline view', () => {
     const current = new Date(2026, 8, 21, 8);
     const labels = deadlineDisplayGroups(deadlineGroups([], current), current).map((group) => group.label);
     expect(labels).toContain('来週・今月（9/27〜10/3）');
-    expect(labels).toContain('今年（10/4〜12/31）');
-    expect(labels).toContain('それ以降（2027/1/1〜）');
+    expect(labels).toContain('来月（10/4〜10/31）');
+    expect(labels).toContain('今年（11/1〜12/31）');
+    expect(labels).toContain('来年（2027/1/1〜2027/12/31）');
+    expect(labels).toContain('それ以降（2028/1/1〜）');
   });
   it('未来の中間bucket OFFは次のON bucketへ包含し、それ以降まで連続表示する', () => {
     const current = new Date(2026, 8, 21, 8);
-    const visible = new Set(deadlineGroupDefinitions('amPm').map((group) => group.id).filter((id) => !['twoThreeDays', 'thisMonth', 'thisYear'].includes(id)));
+    const visible = new Set(deadlineGroupDefinitions('amPm').map((group) => group.id).filter((id) => !['twoThreeDays', 'thisMonth', 'nextMonth', 'thisYear', 'nextYear'].includes(id)));
     const twoDays = base('two-days', new Date(2026, 8, 23, 12));
     const november = base('november', new Date(2026, 10, 1, 12));
     const groups = deadlineGroups([twoDays, november], current, visible);
@@ -75,10 +77,10 @@ describe('deadline view', () => {
   it('OFFの未来bucketに属するMemoを次のON bucketへ表示しNodeは変更しない', () => { const memo = base('memo', new Date(2026, 8, 13, 11)); const original = { ...memo }; const groups = deadlineGroups([memo], now, new Set(['pm']), 'amPm'); expect(groups.find((group) => group.key === 'pm')?.memos.map((item) => item.id)).toEqual(['memo']); expect(memo).toEqual(original); });
   it('それ以降・期限切れ・期限なしをOFFにして受け皿がないMemoだけを非表示集計する', () => {
     const current = new Date(2026, 8, 21, 8);
-    const visible = new Set(deadlineGroupDefinitions('amPm').map((group) => group.id).filter((id) => !['overdue', 'thisYear', 'later', 'none'].includes(id)));
+    const visible = new Set(deadlineGroupDefinitions('amPm').map((group) => group.id).filter((id) => !['overdue', 'thisYear', 'nextYear', 'later', 'none'].includes(id)));
     const overdue = base('overdue', new Date(2026, 8, 20, 12));
     const future = base('future', new Date(2026, 10, 1, 12));
-    const later = base('later', new Date(2027, 0, 2, 12));
+    const later = base('later', new Date(2028, 0, 2, 12));
     const none = base('none', null);
     const deleted = { ...base('deleted', null), deletedAt: current };
     const idea = { ...base('idea', null), memoType: 'idea' as const };
@@ -108,7 +110,7 @@ describe('deadline view', () => {
     expect(created.type === 'memo' && created.duePreset).toBe('thisWeek');
     expect(groups.find((group) => group.key === 'thisWeek')?.memos.map((memo) => memo.id)).toEqual(['created']);
   });
-  it('それ以降の追加だけ期限編集を要求し同じbucketで検証する', () => { const definition = deadlineGroupDefinitions('today').find((group) => group.id === 'later')!; const context = deadlineCreateContext(definition, now, 'today')!; expect(deadlineDraftForCreateContext(context, new Date(2027, 0, 2), now).duePreset).toBe('custom'); expect(() => deadlineDraftForCreateContext(context, new Date(2026, 11, 31), now)).toThrow(/それ以降/); });
+  it('それ以降の追加は期限編集を要求し翌々年以降で検証する', () => { const definition = deadlineGroupDefinitions('today').find((group) => group.id === 'later')!; const context = deadlineCreateContext(definition, now, 'today')!; expect(deadlineDraftForCreateContext(context, new Date(2028, 0, 2), now).duePreset).toBe('custom'); expect(() => deadlineDraftForCreateContext(context, new Date(2026, 11, 31), now)).toThrow(/それ以降/); });
   it('グループ間移動で期限と順序を更新する', () => { const a = base('a', new Date(2026, 8, 13, 11)); const b = base('b', new Date(2026, 8, 14, 18)); const moved = moveMemoInDeadlineList([a, b], 'b', 'am', 'a', now, 'amPm'); expect(deadlineGroups(moved, now, undefined, 'amPm').find((group) => group.key === 'am')?.memos.map((memo) => memo.id)).toEqual(['b', 'a']); });
   it('期限グループ最後のMemo下端へのdropをグループ末尾として解決する', () => {
     const a = base('a', new Date(2026, 11, 31, 12));

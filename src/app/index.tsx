@@ -92,6 +92,7 @@ import {
   DEFAULT_LIST_DISPLAY_PREFERENCES,
   DEFAULT_TREE_DISPLAY_PREFERENCES,
   loadListDisplayPreferences,
+  reconcileListDisplayAccount,
   loadTreeDisplayPreferences,
   saveListDisplayPreferences,
   saveTreeDisplayPreferences,
@@ -203,6 +204,7 @@ export default function HomeScreen() {
   const [pinnedNote, setPinnedNote] = useState("");
   const [pinnedNoteUpdatedAt, setPinnedNoteUpdatedAt] = useState(new Date(0));
   const pinnedSaveQueue = useRef(Promise.resolve());
+  const listDisplayEditRevision = useRef(0);
   const [visibleGroupIds, setVisibleGroupIds] = useState<Set<DeadlineGroupKey>>(
     () => new Set(DEFAULT_LIST_DISPLAY_PREFERENCES.visibleGroupIds),
   );
@@ -239,7 +241,7 @@ export default function HomeScreen() {
     () => !!initialExternalAiAuthorization(),
   );
   const [editor, setEditor] = useState<Editor>(null);
-  const [laterDrop, setLaterDrop] = useState<{ id: string; title: string; beforeId?: string; now: Date; scope: string } | null>(null);
+  const [laterDrop, setLaterDrop] = useState<{ id: string; title: string; group: 'nextMonth' | 'nextYear' | 'later'; beforeId?: string; now: Date; scope: string } | null>(null);
   const changeEditor = (next: Editor, reason: string) => {
     recordEditorDiagnostic('editor-state-change-request', { reason, nextOpen: !!next });
     setEditor(next);
@@ -361,6 +363,17 @@ export default function HomeScreen() {
       .finally(() => setReady(true));
   }, [sync.protocol]);
   useEffect(() => {
+    if (!ready || !sync.user) return;
+    const revision = listDisplayEditRevision.current;
+    let cancelled = false;
+    listDisplaySaveQueue.current = listDisplaySaveQueue.current.then(async () => {
+      const adjusted = await reconcileListDisplayAccount(sync.user?.metadata.creationTime);
+      if (adjusted && !cancelled && revision === listDisplayEditRevision.current)
+        setVisibleGroupIds(new Set(adjusted.visibleGroupIds));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [ready, sync.user]);
+  useEffect(() => {
     if (!ready || sync.protocol === 2) return;
     const traceId = currentTreeTraceId();
     const revision = nodesRevision(nodes);
@@ -474,6 +487,7 @@ export default function HomeScreen() {
     granularity: TodayGranularity,
     height: number,
   ) => {
+    listDisplayEditRevision.current += 1;
     const value = {
       visibleGroupIds: [...groups],
       showPinnedNote: pinned,
@@ -887,14 +901,14 @@ export default function HomeScreen() {
             onDueDrop={(id, group, beforeId) => {
               const source = deadlineGroups(nodes, new Date(), visibleGroupIds, todayGranularity)
                 .find(item => item.memos.some(memo => memo.id === id));
-              if (group === 'later' && source?.key !== 'later') {
+              if ((group === 'later' || group === 'nextMonth' || group === 'nextYear') && source?.key !== group) {
                 const memo = source?.memos.find(item => item.id === id);
                 if (!memo) return;
                 if (routineCategoryForMemo(nodes, memo)) {
                   appAlert('移動できません', 'Routineの期限変更は対象の当日内に限られます。周期や実績は変更しません。');
                   return;
                 }
-                setLaterDrop({ id, title: memo.title, beforeId, now: new Date(), scope: sync.activeScope });
+                setLaterDrop({ id, title: memo.title, group, beforeId, now: new Date(), scope: sync.activeScope });
                 return;
               }
               apply("一覧でMemoを移動", (current) =>
@@ -905,6 +919,8 @@ export default function HomeScreen() {
                   beforeId,
                   new Date(),
                   todayGranularity,
+                  undefined,
+                  visibleGroupIds,
                 ),
               );
             }}
@@ -1283,11 +1299,11 @@ export default function HomeScreen() {
         }}
       />
       {laterDrop && <LaterDeadlineDialog key={`${laterDrop.scope}-${laterDrop.id}-${laterDrop.now.getTime()}`}
-        title={laterDrop.title} now={laterDrop.now} onCancel={() => setLaterDrop(null)}
+        title={laterDrop.title} now={laterDrop.now} group={laterDrop.group} onCancel={() => setLaterDrop(null)}
         onConfirm={async dueAt => {
           if (laterDrop.scope !== sync.activeScope) return false;
           const succeeded = await applyConfirmed('一覧でMemoを移動', current =>
-            moveMemoInDeadlineList(current, laterDrop.id, 'later', laterDrop.beforeId, new Date(), todayGranularity, dueAt));
+            moveMemoInDeadlineList(current, laterDrop.id, laterDrop.group, laterDrop.beforeId, new Date(), todayGranularity, dueAt, visibleGroupIds));
           if (succeeded) setLaterDrop(null);
           return succeeded;
         }} />}

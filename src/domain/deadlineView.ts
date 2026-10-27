@@ -33,7 +33,9 @@ export type DeadlineGroupKey =
   | "thisWeek"
   | "nextWeek"
   | "thisMonth"
+  | "nextMonth"
   | "thisYear"
+  | "nextYear"
   | "later"
   | "none";
 export type DeadlineCreateContext = {
@@ -185,8 +187,13 @@ const common: readonly DeadlineGroupDefinition[] = [
     create: fixed("thisMonth", (now) =>
       endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
     ),
-    fallbackGroupId: "thisYear",
+    fallbackGroupId: "nextMonth",
     dropLabel: "今月までに変更",
+  },
+  {
+    id: 'nextMonth', label: '来月',
+    create: custom(now => new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59), true),
+    fallbackGroupId: 'thisYear', dropLabel: '日時を確認して変更',
   },
   {
     id: "thisYear",
@@ -194,13 +201,18 @@ const common: readonly DeadlineGroupDefinition[] = [
     create: fixed("thisYear", (now) =>
       endOfDay(new Date(now.getFullYear(), 11, 31)),
     ),
-    fallbackGroupId: "later",
+    fallbackGroupId: "nextYear",
     dropLabel: "今年までに変更",
+  },
+  {
+    id: 'nextYear', label: '来年',
+    create: custom(now => new Date(now.getFullYear() + 1, 11, 31, 23, 59), true),
+    fallbackGroupId: 'later', dropLabel: '日時を確認して変更',
   },
   {
     id: "later",
     label: "それ以降",
-    create: custom((now) => new Date(now.getFullYear() + 1, 0, 1), true),
+    create: custom((now) => new Date(now.getFullYear() + 2, 0, 1, 23, 59), true),
     fallbackGroupId: null,
     dropLabel: '日時を確認して変更',
   },
@@ -235,7 +247,9 @@ const boundaries = (now: Date) => {
     weekEnd: dayEnd(now, weekOffset),
     nextWeekEnd: dayEnd(now, weekOffset + 7),
     monthEnd: endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+    nextMonthEnd: endOfDay(new Date(now.getFullYear(), now.getMonth() + 2, 0)),
     yearEnd: endOfDay(new Date(now.getFullYear(), 11, 31)),
+    nextYearEnd: endOfDay(new Date(now.getFullYear() + 1, 11, 31)),
   };
 };
 export function deadlineGroupForDueAt(
@@ -259,7 +273,9 @@ export function deadlineGroupForDueAt(
   if (time <= b.weekEnd.getTime()) return "thisWeek";
   if (time <= b.nextWeekEnd.getTime()) return "nextWeek";
   if (time <= b.monthEnd.getTime()) return "thisMonth";
+  if (time <= b.nextMonthEnd.getTime()) return "nextMonth";
   if (time <= b.yearEnd.getTime()) return "thisYear";
+  if (time <= b.nextYearEnd.getTime()) return "nextYear";
   return "later";
 }
 export const deadlineGroupForMemo = (
@@ -420,7 +436,9 @@ const FUTURE_GROUP_KEYS: readonly DeadlineGroupKey[] = [
   "thisWeek",
   "nextWeek",
   "thisMonth",
+  "nextMonth",
   "thisYear",
+  "nextYear",
   "later",
 ];
 
@@ -432,7 +450,9 @@ const futureGroupEnds = (now: Date): Partial<Record<DeadlineGroupKey, Date>> => 
     thisWeek: b.weekEnd,
     nextWeek: b.nextWeekEnd,
     thisMonth: b.monthEnd,
+    nextMonth: b.nextMonthEnd,
     thisYear: b.yearEnd,
+    nextYear: b.nextYearEnd,
   };
 };
 
@@ -589,11 +609,12 @@ export function moveMemoInDeadlineList(
   now = new Date(),
   granularity: TodayGranularity = "amPm",
   confirmedDueAt?: Date,
+  visibleGroupIds?: ReadonlySet<DeadlineGroupKey>,
 ) {
   const target = deadlineGroupDefinitions(granularity).find(
     (group) => group.id === targetId,
   );
-  const groups = deadlineGroups(nodes, now, undefined, granularity);
+  const groups = deadlineGroups(nodes, now, visibleGroupIds, granularity);
   const sourceGroup = groups.find((group) => group.memos.some((memo) => memo.id === memoId));
   const moving = sourceGroup?.memos.find((memo) => memo.id === memoId);
   if (!moving || !target) {
@@ -606,7 +627,7 @@ export function moveMemoInDeadlineList(
   if (!same && (!target.create || (target.create.editable && !confirmedDueAt))) return nodes;
   const changed = same ? nodes : updateMemoDeadline(nodes, memoId, targetId, now, granularity, confirmedDueAt);
   if (!same && changed === nodes) return nodes;
-  const targetMemos = deadlineGroups(changed, now, undefined, granularity)
+  const targetMemos = deadlineGroups(changed, now, visibleGroupIds, granularity)
     .find((group) => group.key === targetId)?.memos ?? [];
   const index = targetMemos.findIndex((memo) => memo.id === memoId);
   if (index < 0 || beforeId === memoId) return nodes;

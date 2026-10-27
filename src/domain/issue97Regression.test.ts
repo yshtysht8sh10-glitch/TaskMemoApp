@@ -47,7 +47,8 @@ it.each([
     const due = new Date(year, month, day + days, 12);
     const expected = days <= Math.min(3, offset) ? 'twoThreeDays' : days <= offset ? 'thisWeek'
       : days <= offset + 7 ? 'nextWeek' : due.getFullYear() === year && due.getMonth() === month ? 'thisMonth'
-      : due.getFullYear() === year ? 'thisYear' : 'later';
+      : due.getFullYear() === new Date(year, month + 1, 1).getFullYear() && due.getMonth() === (month + 1) % 12 ? 'nextMonth'
+      : due.getFullYear() === year ? 'thisYear' : due.getFullYear() === year + 1 ? 'nextYear' : 'later';
     expect(deadlineGroupForDueAt(due, now), localDateKey(due)).toBe(expected);
   }
   expect(deadlineGroupForDueAt(new Date(year, month, day + 1, 12), now)).toBe('tomorrow');

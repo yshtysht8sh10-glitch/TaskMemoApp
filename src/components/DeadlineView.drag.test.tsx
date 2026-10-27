@@ -69,12 +69,12 @@ it.each(['mouse', 'touch'] as const)('DeadlineView %s enables missed Routine dra
   } finally { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(document, 'elementFromPoint'); vi.useRealTimers(); }
 });
 
-it.each(['mouse', 'touch'] as const)('DeadlineView %s delivers a later drop for confirmation without mutating nodes (#102)', async mode => {
+it.each([['mouse', 'later'], ['touch', 'later'], ['mouse', 'nextMonth'], ['touch', 'nextMonth'], ['mouse', 'nextYear'], ['touch', 'nextYear']] as const)('DeadlineView %s delivers a %s drop for confirmation without mutating nodes (#102/#103)', async (mode, group) => {
   vi.useFakeTimers(); const now = new Date(2026, 9, 26, 8); vi.setSystemTime(now);
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const memo: MemoNode = { id: 'm', type: 'memo', parentId: null, sortKey: 'a0', title: 'task', body: '', dueAt: new Date(2026, 11, 31, 23, 59), duePreset: 'custom', status: 'active', completedAt: null, createdAt: now, updatedAt: now, deletedAt: null };
   const nodes = [memo], original = structuredClone(nodes), drop = vi.fn(), noop = () => {};
-  const props = { nodes, visibleGroupIds: new Set(['thisYear' as const, 'later' as const]), todayGranularity: 'amPm' as const, completingIds: new Set<string>(), onCompletionAnimationFinished: noop, showPinnedNote: false, pinnedNote: '', pinnedNoteHeight: 100, onPinnedNoteChange: noop, onPinnedNoteHeightChange: noop, expandedGroups: new Set(['thisYear' as const]), onExpandedGroupsChange: noop, onQuickAdd: async () => true, onRenameMemo: async () => true, onOpenMemo: noop, onQuickTitle: noop, onComplete: noop, onMenu: noop, onDueDrop: drop, onBulkMove: noop, onBulkComplete: () => true, onBulkDelete: noop, onOpenDisplaySettings: noop };
+  const props = { nodes, visibleGroupIds: new Set(['thisYear' as const, group]), todayGranularity: 'amPm' as const, completingIds: new Set<string>(), onCompletionAnimationFinished: noop, showPinnedNote: false, pinnedNote: '', pinnedNoteHeight: 100, onPinnedNoteChange: noop, onPinnedNoteHeightChange: noop, expandedGroups: new Set(['thisYear' as const]), onExpandedGroupsChange: noop, onQuickAdd: async () => true, onRenameMemo: async () => true, onOpenMemo: noop, onQuickTitle: noop, onComplete: noop, onMenu: noop, onDueDrop: drop, onBulkMove: noop, onBulkComplete: () => true, onBulkDelete: noop, onOpenDisplaySettings: noop };
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   const dispatch = async (target: EventTarget, type: string, patch = {}) => {
     const event = new Event(type, { bubbles: true, cancelable: true }); Object.assign(event, patch);
@@ -83,7 +83,7 @@ it.each(['mouse', 'touch'] as const)('DeadlineView %s delivers a later drop for 
   try {
     await act(async () => root.render(<DeadlineView {...props} />));
     const moving = host.querySelector('[data-taskmemo-dnd-key="m"] [draggable]') as HTMLElement;
-    const target = host.querySelector('[data-taskmemo-dnd-key="group-later"]') as HTMLElement;
+    const target = host.querySelector(`[data-taskmemo-dnd-key="group-${group}"]`) as HTMLElement;
     target.getBoundingClientRect = () => ({ top: 100, bottom: 200, left: 0, right: 300, width: 300, height: 100, x: 0, y: 100, toJSON() {} });
     if (mode === 'mouse') {
       await dispatch(moving, 'dragstart', { clientX: 10, clientY: 10 });
@@ -96,7 +96,7 @@ it.each(['mouse', 'touch'] as const)('DeadlineView %s delivers a later drop for 
       await dispatch(document, 'touchmove', { touches: [{ identifier: 1, clientX: 10, clientY: 150 }] });
       await dispatch(document, 'touchend', { changedTouches: [{ identifier: 1, clientX: 10, clientY: 150 }] });
     }
-    expect(drop).toHaveBeenCalledWith('m', 'later', undefined);
+    expect(drop).toHaveBeenCalledWith('m', group, undefined);
     expect(nodes).toEqual(original);
   } finally { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(document, 'elementFromPoint'); vi.useRealTimers(); }
 });

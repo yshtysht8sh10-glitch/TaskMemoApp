@@ -11,7 +11,7 @@ const now = new Date(2026, 9, 26, 10);
 const memo: MemoNode = { id: 'm', type: 'memo', parentId: null, sortKey: 'a0', title: 'fixture', body: 'keep',
   dueAt: new Date(2026, 11, 31, 23, 59), duePreset: 'custom', status: 'active', completedAt: null,
   createdAt: now, updatedAt: now, deletedAt: null, routineHistory: { '2026-10-01': now.toISOString() } };
-it.each([new Date(2027, 0, 1, 23, 59), new Date(2032, 1, 29, 15, 30)])(
+it.each([new Date(2028, 0, 1, 23, 59), new Date(2032, 1, 29, 15, 30)])(
   'moves to later only with an explicitly confirmed deadline %s (#102)', dueAt => {
     const source = [memo], original = structuredClone(source);
     expect(moveMemoInDeadlineList(source, 'm', 'later', undefined, now)).toBe(source);
@@ -35,7 +35,7 @@ it('keeps confirmed moves, Undo/Redo and multiple-year dates through IndexedDB a
   const flush = async () => { for (const op of a.outbox) { const ack = server.apply(op); await a.acknowledge(op.opId, ack.record); await b.receive(ack.record!); } };
   await a.command('create', 'create', n => [...n, memo]); await flush();
   const depth = a.historyDepths.past;
-  const dueAt = new Date(2027, 0, 1, 23, 59);
+  const dueAt = new Date(2028, 0, 1, 23, 59);
   await a.command('drop', 'update', n => moveMemoInDeadlineList(n, 'm', 'later', undefined, now, 'amPm', dueAt));
   expect(a.historyDepths.past).toBe(depth + 1); expect(a.outbox).toHaveLength(1); await flush();
   expect((b.nodes[0] as MemoNode).dueAt).toEqual(dueAt);
@@ -53,7 +53,7 @@ it('rejects year-end overlap and invalid dates before saving, and allows later d
   const yearEnd = new Date(2026, 11, 31, 10), source = [memo];
   for (const due of [new Date(2027, 0, 1, 23, 59), new Date(NaN)])
     expect(() => moveMemoInDeadlineList(source, 'm', 'later', undefined, yearEnd, 'amPm', due)).toThrow('期間');
-  const moved = moveMemoInDeadlineList(source, 'm', 'later', undefined, yearEnd, 'amPm', new Date(2027, 0, 20, 23, 59));
+  const moved = moveMemoInDeadlineList(source, 'm', 'later', undefined, yearEnd, 'amPm', new Date(2028, 0, 20, 23, 59));
   expect(deadlineGroups(moved, yearEnd).find(g => g.key === 'later')?.memos).toHaveLength(1);
   expect(source).toEqual([memo]);
 });
@@ -64,6 +64,6 @@ it('does not change Routine definitions or occurrence histories for future-year 
   const source = [root, routine];
   const original = structuredClone(source);
   for (const id of ['m', 'routine-overdue:m:2026-10-25'])
-    expect(moveMemoInDeadlineList(source, id, 'later', undefined, now, 'amPm', new Date(2027, 0, 1, 23, 59))).toBe(source);
+    expect(moveMemoInDeadlineList(source, id, 'later', undefined, now, 'amPm', new Date(2028, 0, 1, 23, 59))).toBe(source);
   expect(source).toEqual(original);
 });
