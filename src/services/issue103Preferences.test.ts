@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { loadListDisplayPreferences, saveListDisplayPreferences, reconcileListDisplayAccount } from './viewPreferences';
 import { saveBackupSettings } from './backupSettingsStorage';
+import { memoDeadlineChoices } from '../utils/memoDeadline';
 const storage = vi.hoisted(() => new Map<string, string>());
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: vi.fn(async (key: string) => storage.get(key) ?? null),
@@ -65,4 +66,17 @@ it('corrupt settings do not silently opt existing users into new groups or overw
   storage.set(key, 'broken');
   expect((await loadListDisplayPreferences()).visibleGroupIds).not.toContain('nextMonth');
   expect(storage.get(key)).toBe('broken');
+});
+
+it('reloads the same editor choices after saving local group/granularity settings', async () => {
+  const now = new Date(2026,9,11,8);
+  const prefs = { visibleGroupIds: ['am' as const, 'nextWeek' as const], showPinnedNote: false, todayGranularity: 'amPm' as const, pinnedNoteHeight: 150 };
+  await saveListDisplayPreferences(prefs);
+  const raw = storage.get(key), loaded = await loadListDisplayPreferences();
+  const choices = memoDeadlineChoices(new Set(loaded.visibleGroupIds), loaded.todayGranularity, now);
+  expect(choices.map(c => c.key)).toEqual(['am','nextWeek','custom']);
+  await expect(reconcileListDisplayAccount('2020-01-01')).resolves.toBeNull();
+  expect(storage.get(key)).toBe(raw);
+  const reloaded = await loadListDisplayPreferences();
+  expect(memoDeadlineChoices(new Set(reloaded.visibleGroupIds), reloaded.todayGranularity, now)).toEqual(choices);
 });

@@ -98,6 +98,7 @@ import {
 } from "@/services/viewPreferences";
 import { loadPinnedNote, savePinnedNote } from "@/services/pinnedNoteStorage";
 import {
+  dueDateForPreset,
   formatDateTimeInput,
   parseLocalDateTime,
 } from "@/utils/dueDates";
@@ -125,7 +126,7 @@ import { SyncAccountPanel } from "@/components/SyncAccountPanel";
 import { MemoCreateButton } from '../components/MemoCreateButton';
 import { LaterDeadlineDialog } from '../components/LaterDeadlineDialog';
 import { MemoDeadlineField } from '../components/MemoDeadlineField';
-import { MEMO_DEADLINE_PRESETS as presets, memoDeadlineDraft } from '../utils/memoDeadline';
+import { memoDeadlineDraft } from '../utils/memoDeadline';
 import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
 import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
@@ -1263,6 +1264,8 @@ export default function HomeScreen() {
         }
         editor={editor}
         nodes={nodes}
+        visibleGroupIds={visibleGroupIds}
+        todayGranularity={todayGranularity}
         onToggleRoutineHistory={(memoId, date) =>
           apply("ルーティーン実績を変更", (current) =>
             toggleRoutineCompletion(current, memoId, date, new Date()),
@@ -1891,12 +1894,16 @@ function Sheet({
 function EditorModal({
   editor,
   nodes,
+  visibleGroupIds,
+  todayGranularity,
   onToggleRoutineHistory,
   onClose,
   onSave,
 }: {
   editor: Editor;
   nodes: Node[];
+  visibleGroupIds: ReadonlySet<DeadlineGroupKey>;
+  todayGranularity: TodayGranularity;
   onToggleRoutineHistory: (memoId: string, date: Date) => void;
   onClose: (reason: string) => void;
   onSave: (draft: {
@@ -1937,7 +1944,7 @@ function EditorModal({
   );
   const [custom, setCustom] = useState(() =>
     formatDateTimeInput(
-      initialMemo?.dueAt ?? dueContext?.initialDueAt ?? new Date(),
+      initialMemo?.dueAt ?? dueContext?.initialDueAt ?? dueDateForPreset(initialMemo?.duePreset ?? "today") ?? new Date(),
     ),
   );
   const [status, setStatus] = useState<"active" | "completed">(
@@ -2101,7 +2108,7 @@ function EditorModal({
                   ? "💡 アイデア"
                   : routineCategory
                     ? `繰り返し: ${repeatRuleLabel(repeatFrequency === "none" ? null : { frequency: repeatFrequency, interval: Number(repeatInterval), startsOn: repeatStartsOn })}`
-                    : `期限: ${dueContext?.label ?? presets.find((item) => item.key === preset)?.label}`}
+                    : `期限: ${dueContext?.label ?? (preset === "none" ? "期限なし" : custom)}`}
               </Text>
             )}
             <Text style={styles.label}>
@@ -2207,12 +2214,13 @@ function EditorModal({
                         <DateTimeField value={custom} onChange={setCustom} />
                       ) : (
                         <Text style={styles.lockedDue}>
-                          {presets.find((item) => item.key === preset)?.label}
+                          {dueContext.label}
                         </Text>
                       )
                     ) : (
                       <>
                         <MemoDeadlineField preset={preset} custom={custom} styles={styles}
+                          visibleGroupIds={visibleGroupIds} granularity={todayGranularity}
                           onChange={(next, value) => { setPreset(next); if (value !== undefined) setCustom(value); }} />
                       </>
                     )}

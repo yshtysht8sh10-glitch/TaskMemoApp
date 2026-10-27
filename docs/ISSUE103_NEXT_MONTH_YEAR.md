@@ -75,3 +75,29 @@ Routine branchは変更せず、既存routineEditor / useEditorAutosave / #96 / 
 選択後の日付変更、IndexedDB再起動、V2別端末store同期、Backup、Undo/Redoと原本保持。
 全体1,198 PASS / 44 conditional SKIP、America/Los_Angelesの関連33 PASS。
 最終配信SHA、Web build、実DEV smokeの範囲はIssueへ記録する。
+
+## 2026-10-27 仕様訂正：編集プリセットも一覧設定へ連動
+
+ユーザー確認により、上記の固定プリセット追加方針を訂正。本節を現在の仕様とする。
+通常Memo編集へHomeScreenのvisibleGroupIds / todayGranularityを渡し、空Nodeの共通deadlineGroups→deadlineDisplayGroupsから選択肢を生成する。
+固定プリセット配列は廃止。設定OFFのキーは出さず、今日の粒度・見出し、空期間の省略／統合を一覧と一致させる。
+期限切れはcreate不可なので選択肢を作らない。期限なしはON/OFFへ連動。日時指定は常に最後に追加する。
+「2〜3日以内」「それ以降」もONなら追加する承認を受領済み。
+
+- 今日：23:59
+- 午前/午後：12:00 / 23:59
+- 朝/昼/夜：10:00 / 17:00 / 23:59
+- 昼間/夜：19:00 / 23:59
+
+選択時は、表示上の代表groupの共通create定義で具体的な日時を計算し、秒・ミリ秒を0にしてcustomで保存する（期限なしのみnone）。
+統合された「明日・今週」等は重複ボタンを作らず代表groupの候補を使う。
+他の候補日時も既存の共通定義に従う。「2〜3日以内」は今週土曜を越えない3日後23:59、「それ以降」は翌々年1月1日23:59。
+
+既存の非none期限は、古いduePresetや表示OFFの期間でも日時入力欄に表示する。noneの場合も現状を静的テキストで示し、日時指定ボタンから入力へ移れる。
+表示設定の変更や描画ではpreset/customをsetせず、onChangeも呼ばない。従来のmemoDeadlineDraft・signatureガードを維持し、本文だけの保存でも元の期限・秒精度を保持する。
+端末内設定の保存／移行、同期、Node schema、Routine編集branch、DnD実装には変更を加えない。
+
+修正前、実MemoDeadlineFieldでOFFの「来月」が表示される回帰テストのFAILを確認。
+修正後は実コンポーネントのON/OFFと粒度のprops変更、全OFFで日時指定のみ、OFFの期間への手入力、非表示legacy期限の保持を確認。
+全体1,212 PASS / 44 conditional SKIP、America/Los_Angelesで関連43 PASS。TypeScript / lint / diff check成功。
+最終DEV SHAと配信・実画面確認結果はIssueへ記録する。OpenのままiPhone実機確認を待つ。
