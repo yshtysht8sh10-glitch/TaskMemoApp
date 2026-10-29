@@ -16,6 +16,8 @@ export function startupPresentation(input: StartupInput) {
     return result(input.status === 'synced' ? 'クラウドの一覧を確認済み' : 'クラウドの一覧を確認済み · 同期処理中', true, true);
   const failed = ['offline', 'error', 'retrying'].includes(input.status);
   const show = input.elapsed || failed;
-  return result(show ? `端末データを表示中 · 最新状態は未確認${failed ? '（通信・同期を確認してください）' : '（クラウド確認中）'}${input.cacheEditing ? ' · 端末データの編集を選択中' : ' · 閲覧のみ'}`
-    : '端末データを復元済み · クラウドの一覧を確認しています…', show, show && input.cacheEditing, show && !input.cacheEditing);
+  const guidance = !failed && !(show && input.cacheEditing)
+    ? ' クラウドのデータを確認しています。完了すると編集できます。' : '';
+  return result((show ? `端末データを表示中 · 最新状態は未確認${failed ? '（通信・同期を確認してください）' : '（クラウド確認中）'}${input.cacheEditing ? ' · 端末データの編集を選択中' : ' · 閲覧のみ'}`
+    : '端末データを復元済み') + guidance, show, show && input.cacheEditing, show && !input.cacheEditing);
 }
