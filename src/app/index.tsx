@@ -127,6 +127,7 @@ import { MemoCreateButton } from '../components/MemoCreateButton';
 import { LaterDeadlineDialog } from '../components/LaterDeadlineDialog';
 import { MemoDeadlineField } from '../components/MemoDeadlineField';
 import { memoDeadlineDraft } from '../utils/memoDeadline';
+import { memoCreatedAtLabel } from '../utils/memoCreatedAt';
 import { OwnershipReconcilePanel } from '@/components/OwnershipReconcilePanel';
 import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigation";
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
@@ -2114,6 +2115,9 @@ function EditorModal({
             <Text style={styles.label}>
               {editor?.type === "memo" ? "タイトル" : "Category名"} *
             </Text>
+            {editor?.type === "memo" && editor.node && (
+              <Text style={styles.destination}>{memoCreatedAtLabel(editor.node.createdAt, !!routineCategory)}</Text>
+            )}
             <FormTextInput
               value={title}
               accessibilityLabel={editor?.type === "memo" ? "タイトル" : "Category名"}
