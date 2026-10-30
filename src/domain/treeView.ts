@@ -1,5 +1,7 @@
 import type { CategoryNode, Node } from '../models/node';
 import { compareNodes, visibleNodes } from './nodeOperations';
+import { isRoutineDefinitionCompleted } from './routineLifecycle';
+import { routineCategoryForMemo } from './routine';
 
 export const UNASSIGNED_GROUP_ID = '__unassigned__';
 const UNASSIGNED_GROUP: CategoryNode = { id: UNASSIGNED_GROUP_ID, type: 'category', parentId: null, sortKey: '', title: '無所属', createdAt: new Date(0), updatedAt: new Date(0), deletedAt: null };
@@ -40,7 +42,7 @@ export function visibleAncestorGuides(depth: number, ancestorContinuation: boole
 export function flattenVisibleNodes(nodes: Node[], expanded: Set<string>, showCompletedMemos = true) {
   const byParent = new Map<string | null, Node[]>();
   for (const node of visibleNodes(nodes)) {
-    if (node.type === 'memo' && node.status === 'completed' && !showCompletedMemos) continue;
+    if (node.type === 'memo' && (node.status === 'completed' || (!!routineCategoryForMemo(nodes, node) && isRoutineDefinitionCompleted(node))) && !showCompletedMemos) continue;
     byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]);
   }
   for (const siblings of byParent.values()) siblings.sort(compareNodes);

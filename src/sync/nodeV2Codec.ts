@@ -1,5 +1,6 @@
 import type { Node } from "../models/node";
 import type { SyncNodeValue } from "./types";
+import { validRoutineLifecycle } from '../domain/routineLifecycleRegister';
 
 const DATE_FIELDS = ["createdAt", "updatedAt", "deletedAt", "purgedAt", "dueAt", "completedAt"] as const;
 
@@ -22,6 +23,7 @@ export function nodeToV2Value(node: Node): SyncNodeValue {
 }
 
 export function nodeFromV2Value(source: SyncNodeValue): Node {
+  if (source.routineLifecycle !== undefined && !validRoutineLifecycle(source.routineLifecycle)) throw Error('Routine完了期間が不正です。原本を保持して停止します。');
   const value: Record<string, unknown> = { ...source };
   for (const field of DATE_FIELDS) value[field] = asDate(value[field]);
   if (value.type === "memo" && value.memoType !== "idea" && value.memoType !== "task") value.memoType = "task";

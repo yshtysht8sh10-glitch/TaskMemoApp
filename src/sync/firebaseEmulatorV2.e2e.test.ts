@@ -17,6 +17,7 @@ import { applyRevisionOperation } from "./revisionModel";
 import type { SyncOperation } from "./types";
 import { skipRoutineOccurrence, clearRoutineSkip, completeRoutineOccurrence } from '../domain/routine';
 import { completionHistoryGroups } from '../domain/completionHistory';
+import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 
 const enabled = process.env.TASKMEMO_EMULATOR_E2E === "1";
 const waitFor = async (predicate: () => boolean, timeout = 5_000) => {
@@ -41,6 +42,37 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('keeps pending tasks and definition completion through SDK receipts, another session and resume', async () => {
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const p = new MemoryPersistence();
+    Object.assign(p, { writeAtomic: async (expected: string | null, value: string) => {
+      if (p.committed !== expected || p.journal) throw new Error('CAS'); p.committed = value;
+    } });
+    let a = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'lifecycle-A' });
+    const b = await TaskMemoV2ApplicationStore.open(new MemoryPersistence(), [], { deviceId: 'lifecycle-B' });
+    let ca = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    const cb = new TaskMemoV2SyncController(b, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    const definition = (s: TaskMemoV2ApplicationStore) => s.nodes.find(n => n.id === 'daily') as MemoNode | undefined;
+    try {
+      await Promise.all([ca.start(), cb.start()]);
+      const parentId = await ca.ensureRoutineRoot();
+      const start = new Date(2026, 9, 1, 9);
+      await a.command('create', 'create', n => createNode(n, 'memo', { title: 'daily', parentId, dueAt: start, duePreset: 'custom', repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-10-01' } }, start, 'daily'));
+      await ca.flush(); await waitFor(() => !!definition(b));
+      await a.command('finish', 'update', n => completeRoutineDefinition(n, 'daily', new Date(2026, 9, 3, 8)));
+      await ca.flush(); await waitFor(() => !!definition(b) && isRoutineDefinitionCompleted(definition(b)!));
+      const cloud = (await getDoc(doc(db, 'users/owner/nodesV2/daily'))).data()!.record.value;
+      expect(cloud.routineLifecycle.periods[0].retained).toHaveProperty('2026-10-03');
+      ca.stop();
+      a = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'ignored' });
+      ca = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+      await ca.start(); expect(isRoutineDefinitionCompleted(definition(a)!)).toBe(true);
+      await a.command('resume', 'update', n => resumeRoutineDefinition(n, 'daily', new Date(2026, 9, 6, 10)));
+      await ca.flush(); await waitFor(() => !isRoutineDefinitionCompleted(definition(b)!));
+      expect(deadlineGroups(b.nodes, new Date(2026, 9, 7, 8)).flatMap(g => g.memos).filter(m => m.routineOccurrenceKey).map(m => m.routineOccurrenceKey).sort()).toEqual(['2026-10-01', '2026-10-02', '2026-10-03']);
+    } finally { ca.stop(); cb.stop(); }
+  }, 30_000);
 
   it('confirms startup only after the real server snapshot is durable and never queues a stale cache as an edit', async () => {
     const value: MemoNode = { id: 'startup-memo', type: 'memo', parentId: null, sortKey: 'a0', title: 'Old local', body: '', dueAt: null,

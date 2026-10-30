@@ -3,6 +3,7 @@ import type { FeaturesValue, PinnedNoteValue, SyncAcknowledgement, SyncNodeValue
 import { canonical } from '../textFormat/syntax';
 import { mergeRoutineOutcomes } from '../domain/routineOutcomeMerge';
 import type { MemoNode } from '../models/node';
+import { mergeRoutineLifecycle } from '../domain/routineLifecycleRegister';
 
 export function assertOwnershipCurrent(operation: SyncOperation, current: VersionedNode | VersionedPinnedNote | VersionedFeatures | null | undefined) {
   if (operation.ownership && canonical(current ?? null) !== canonical(operation.ownership.expectedCurrent))
@@ -26,10 +27,15 @@ export function candidateForOperation(operation: SyncOperation): VersionedNode {
 
 /** Order-independent Node-level winner selection. */
 export function chooseVersionedNode(current: VersionedNode | undefined, candidate: VersionedNode) {
-  const winner = chooseNodeWinner(current, candidate);
+  const nodeWinner = chooseNodeWinner(current, candidate);
+  let winner = nodeWinner;
+  if (winner.value.type === 'memo' && !winner.value.purgedAt) {
+    const lifecycle = mergeRoutineLifecycle(current?.value.routineLifecycle as MemoNode['routineLifecycle'], candidate.value.routineLifecycle as MemoNode['routineLifecycle']);
+    if (lifecycle) winner = { ...winner, value: { ...winner.value, routineLifecycle: lifecycle } };
+  }
   if (!current || winner.value.purgedAt || winner.value.type !== 'memo' ||
       (!current.value.routineOutcomes && !candidate.value.routineOutcomes)) return winner;
-  const loser = winner === current ? candidate : current;
+  const loser = nodeWinner === current ? candidate : current;
   const routineOutcomes = mergeRoutineOutcomes(current.value.routineOutcomes as MemoNode['routineOutcomes'], candidate.value.routineOutcomes as MemoNode['routineOutcomes']);
   const routineHistory = { ...(loser.value.routineHistory as MemoNode['routineHistory']), ...(winner.value.routineHistory as MemoNode['routineHistory']) };
   for (const [key, value] of Object.entries(routineOutcomes)) {

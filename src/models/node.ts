@@ -87,6 +87,11 @@ export type MemoNode = BaseNode & {
   routineOccurrenceKey?: string;
   routineSourceId?: string;
   repeatRule?: RepeatRule | null;
+  /** Definition lifecycle, separate from daily outcomes. Missing means active. */
+  routineLifecycle?: {
+    version: number;
+    periods: { completedAt: string; resumedAt: string | null; retained: Record<string, string> }[];
+  };
 };
 
 export type Node = CategoryNode | MemoNode;

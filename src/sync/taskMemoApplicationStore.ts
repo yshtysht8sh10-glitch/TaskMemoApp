@@ -15,6 +15,7 @@ import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures
 import { decodeLegacyNodes } from './legacyLocalCodec';
 import { integrateOwnershipSortKeys } from './ownershipSortKeys';
 import { nextRoutineOutcome } from '../domain/routine';
+import { replayRoutineLifecycle } from '../domain/routineLifecycleRegister';
 import { pendingAnonymousChanges, planOwnershipReconcile, sameOwnershipProfile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
 
 type NodeHistoryTarget = {
@@ -582,7 +583,7 @@ export class TaskMemoV2ApplicationStore {
         (current?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
     const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
     const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
-    const winner = selfEcho && !incoming.value.routineOutcomes ? current : chooseVersionedNode(current, incoming);
+    const winner = selfEcho && !incoming.value.routineOutcomes && !incoming.value.routineLifecycle ? current : chooseVersionedNode(current, incoming);
     let next: Envelope = {
       ...this.envelope,
       nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
@@ -615,7 +616,7 @@ export class TaskMemoV2ApplicationStore {
         isRoutineRoot(operation.payload.node as SyncNodeValue) && domain[record.value.id]?.lastOpId === opId) {
       findRoutineRoot([record.value]);
       domain = { ...domain, [record.value.id]: record };
-    } else if (record && (record.lastDeviceId !== this.envelope.deviceId || record.value.routineOutcomes)) {
+    } else if (record && (record.lastDeviceId !== this.envelope.deviceId || record.value.routineOutcomes || record.value.routineLifecycle)) {
       const current = domain[record.value.id];
       const winner = chooseVersionedNode(current, record);
       domain = { ...domain, [record.value.id]: winner };
@@ -734,6 +735,8 @@ export class TaskMemoV2ApplicationStore {
         let value = this.historyNodeValue(current, direction === "undo" ? target.before : target.after, now);
         if (!value) return [];
         value = this.replayRoutineDates(current, target, direction, value, now);
+        if (current.value.routineLifecycle || value.routineLifecycle) value = { ...value,
+          routineLifecycle: replayRoutineLifecycle(current.value.routineLifecycle as MemoNode['routineLifecycle'], value.routineLifecycle as MemoNode['routineLifecycle']) };
         const operation: SyncOperation = {
           opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
           targetNodeId: target.resourceId, type: direction, baseRevision: current.revision, payload: { node: value },

@@ -1,4 +1,5 @@
 import type { CategoryNode, MemoNode, Node, RepeatRule, RoutineOutcome } from "../models/node";
+import { lifecycleOccurrenceDueAt } from './routineLifecycle';
 
 export const localDateKey = (date = new Date()) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -145,10 +146,11 @@ export function routineOccurrenceDueAt(
   )
     return null;
   if (
-    !isRepeatRuleDate(memo.repeatRule, now) ||
+    !lifecycleOccurrenceDueAt(memo, now) ||
     isRoutineCompletedOn(memo, now) || isRoutineSkippedOn(memo, now)
   )
     return null;
+  if (memo.routineLifecycle) return lifecycleOccurrenceDueAt(memo, now);
   const overridden = memo.routineDueOverrides?.[localDateKey(now)];
   if (overridden) {
     const date = new Date(overridden);
@@ -166,17 +168,19 @@ export const isRoutineDueOn = (
   return (
     !!routineCategoryForMemo(nodes, memo) &&
     isValidRepeatRule(memo.repeatRule) &&
-    isRepeatRuleDate(memo.repeatRule, date)
+    !!lifecycleOccurrenceDueAt(memo, date)
   );
 };
 
 export function missedRoutineOccurrences(nodes: Node[], memo: MemoNode, now = new Date()): MemoNode[] {
   if (memo.deletedAt !== null || memo.purgedAt || memo.routineOccurrenceKey || !routineCategoryForMemo(nodes, memo) || !isValidRepeatRule(memo.repeatRule)) return [];
-  const start = parseLocalDateKey(memo.repeatRule.startsOn)!;
+  const retainedKeys = memo.routineLifecycle?.periods.flatMap(p => Object.keys(p.retained)) ?? [];
+  const first = [memo.repeatRule.startsOn, ...retainedKeys].sort()[0];
+  const start = parseLocalDateKey(first)!;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const missed: MemoNode[] = [];
   for (let date = start; date < today; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)) {
-    if (!isRepeatRuleDate(memo.repeatRule, date) || isRoutineCompletedOn(memo, date) || isRoutineSkippedOn(memo, date)) continue;
+    if (isRoutineCompletedOn(memo, date) || isRoutineSkippedOn(memo, date)) continue;
     const dueAt = routineOccurrenceDueAt(nodes, memo, date);
     if (!dueAt) continue;
     const key = localDateKey(date);
@@ -240,7 +244,8 @@ export function routineHistoryDays(
   const start = parseLocalDateKey(memo.repeatRule.startsOn)!;
   const days: { key: string; date: Date; completed: boolean }[] = [];
   for (let date = new Date(end.getFullYear(), end.getMonth(), end.getDate()); date >= start && days.length < count; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)) {
-    if (!isRepeatRuleDate(memo.repeatRule, date)) continue;
+    if (!isRepeatRuleDate(memo.repeatRule, date) ||
+      (memo.routineLifecycle && !lifecycleOccurrenceDueAt(memo, date) && routineOutcomeOn(memo, localDateKey(date)) === 'pending')) continue;
     days.push({ key: localDateKey(date), date, completed: isRoutineCompletedOn(memo, date) });
   }
   return days;

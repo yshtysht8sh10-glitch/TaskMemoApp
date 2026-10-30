@@ -1,5 +1,6 @@
 import type { Node } from '@/models/node';
 import { nextRoutineOutcome } from './routine';
+import { replayRoutineLifecycle } from './routineLifecycleRegister';
 
 export const NODE_HISTORY_LIMIT = 75;
 
@@ -52,6 +53,7 @@ function replayNodes(current: Node[], target: Node[], now: Date) {
         if (!(key in routineDueOverrides)) routineDueOverrides[key] = null;
       return {
         ...node,
+        ...(previous.routineLifecycle || node.routineLifecycle ? { routineLifecycle: replayRoutineLifecycle(previous.routineLifecycle, node.routineLifecycle) } : {}),
         ...(Object.keys(routineHistory).length ? { routineHistory } : {}),
         ...(Object.keys(routineOutcomes).length ? { routineOutcomes } : {}),
         ...(Object.keys(routineDueOverrides).length ? { routineDueOverrides } : {}),

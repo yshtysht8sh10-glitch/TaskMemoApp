@@ -1,4 +1,6 @@
 import { FormTextInput } from '../components/FormTextInput';
+import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
+import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
 import { useEditorAutosave } from '../hooks/useEditorAutosave';
 import { TextEditScreen, TextViewScreen } from '@/components/TextWorkspace';
@@ -953,6 +955,7 @@ export default function HomeScreen() {
         ) : (
           <ListPanel
             type={view}
+            onResumeRoutine={id => applyConfirmed('Routineの完了を取り消す', current => resumeRoutineDefinition(current, id))}
             nodes={nodes}
             parentName={parentName}
             onRestoreCompleted={(item) =>
@@ -1267,6 +1270,11 @@ export default function HomeScreen() {
         nodes={nodes}
         visibleGroupIds={visibleGroupIds}
         todayGranularity={todayGranularity}
+        onCompleteRoutine={async id => {
+          const succeeded = await applyConfirmed('Routineを完了', current => completeRoutineDefinition(current, id));
+          if (succeeded) changeEditor(null, 'routine-definition-completed');
+          return succeeded;
+        }}
         onToggleRoutineHistory={(memoId, date) =>
           apply("ルーティーン実績を変更", (current) =>
             toggleRoutineCompletion(current, memoId, date, new Date()),
@@ -1900,12 +1908,14 @@ function EditorModal({
   onToggleRoutineHistory,
   onClose,
   onSave,
+  onCompleteRoutine,
 }: {
   editor: Editor;
   nodes: Node[];
   visibleGroupIds: ReadonlySet<DeadlineGroupKey>;
   todayGranularity: TodayGranularity;
   onToggleRoutineHistory: (memoId: string, date: Date) => void;
+  onCompleteRoutine: (id: string) => Promise<boolean>;
   onClose: (reason: string) => void;
   onSave: (draft: {
     title: string;
@@ -2258,6 +2268,10 @@ function EditorModal({
               </>
             )}
             <View style={styles.formButtons}>
+              {memo && routineCategory && !isRoutineDefinitionCompleted(memo) && <RoutineCompletionButton onComplete={async () => {
+                if (!await save(false)) return false;
+                return onCompleteRoutine(memo.id);
+              }} />}
               <Pressable onPress={() => dismiss('close-button')} style={styles.secondary}>
                 <Text style={styles.buttonText}>{editor?.node ? "閉じる" : "キャンセル"}</Text>
               </Pressable>
@@ -2286,6 +2300,7 @@ function ListPanel({
   onBulkRestoreNodes,
   onBulkHardDelete,
   onReset,
+  onResumeRoutine,
 }: {
   type: "completed" | "trash";
   nodes: Node[];
@@ -2302,8 +2317,10 @@ function ListPanel({
   onBulkRestoreNodes: (ids: string[], onSuccess: () => void) => void;
   onBulkHardDelete: (ids: string[], onSuccess: () => void) => void;
   onReset: () => void;
+  onResumeRoutine: (id: string) => Promise<boolean>;
 }) {
   const styles = useStyles();
+  const [routineSection, setRoutineSection] = useState(false);
   const [criterion, setCriterion] =
     useState<CompletionHistoryCriterion>("completedAt");
   const [selectionMode, setSelectionMode] = useState(false);
@@ -2343,8 +2360,13 @@ function ListPanel({
         .map((item) => item.memo.id),
     ),
   ];
+  if (type === 'completed' && routineSection) return <View style={styles.panelContainer}>
+    <Action label="実施履歴へ戻る" onPress={() => setRoutineSection(false)} />
+    <CompletedRoutines nodes={nodes} onResume={onResumeRoutine} />
+  </View>;
   return (
     <View style={styles.panelContainer}>
+      {type === 'completed' && <Action label="完了済みRoutine一覧" onPress={() => { clearSelection(); setRoutineSection(true); }} />}
       <View style={styles.selectionToolbar}>
         {selectionMode ? (
           <>

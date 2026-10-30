@@ -1,4 +1,5 @@
 import { FormTextInput } from './FormTextInput';
+import { isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { dragActivationDelay } from "@/domain/dragActivation";
 import type { MemoNode } from "@/models/node";
@@ -60,7 +61,8 @@ export function MemoRow({
   const styles = createStyles(useAppTheme().colors);
   const idea = isIdea(memo);
   const dueLabel = idea ? null : formatDueLabel(memo);
-  const completed = !idea && memo.status === "completed";
+  const definitionCompleted = routine && isRoutineDefinitionCompleted(memo);
+  const completed = !idea && (memo.status === "completed" || definitionCompleted);
   const overdue = !completed && !!memo.dueAt && memo.dueAt.getTime() < now;
   const detailLabel = idea
     ? "アイデア"
@@ -186,7 +188,7 @@ export function MemoRow({
                 </Text>
               ) : null}
             </View>
-            {!selectionMode && !idea && (
+            {!selectionMode && !idea && !definitionCompleted && (
               <MemoRowActions
                 title={memo.title}
                 completed={completed}
@@ -195,7 +197,7 @@ export function MemoRow({
                 onMenu={onMenu}
               />
             )}
-            {!selectionMode && idea && (
+            {!selectionMode && (idea || definitionCompleted) && (
               <Pressable
                 accessibilityLabel={`${memo.title}のメニュー`}
                 onPress={onMenu}
