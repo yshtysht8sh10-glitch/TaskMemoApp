@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useAppTheme, type ThemeColors } from '@/theme/theme';
-import { visibleAncestorGuides } from '@/domain/treeView';
+import { useAppTheme, type ThemeColors } from '../theme/theme';
+import { visibleAncestorGuides } from '../domain/treeView';
 
 export const TREE_LAYOUT = {
   depthIndent: 22,
