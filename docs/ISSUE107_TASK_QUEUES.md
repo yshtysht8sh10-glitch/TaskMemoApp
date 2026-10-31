@@ -90,6 +90,12 @@ with expected completed/actual active. That regression passed after independent
 register merging. An initial backup test harness incorrectly treated
 `parseNodeBackup` as returning an object; it was corrected to its Node[] API.
 
+Public DEV phone-width smoke also reproduced a quick-add race: typing the next
+Task while the preceding save was pending let that save's completion clear the
+new draft. A deferred-save component test failed with expected `next` / actual
+empty. Completion now clears only the submitted draft if it is still unchanged;
+the new draft is preserved. The regression and full verification pass afterward.
+
 ## DEV iPhone acceptance (keep #107 Open)
 
 1. Refresh https://taskmemoapp-dev.firebaseapp.com/ and verify the Issue's DEV

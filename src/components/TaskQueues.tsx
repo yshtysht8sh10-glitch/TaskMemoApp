@@ -60,7 +60,7 @@ export function TaskQueues({ visible, nodes, onClose, onChange, onEdit, initialQ
           </View>)}
           {!queue.deletedAt && <>
             <FormTextInput accessibilityLabel="追加するTask名" placeholder="追加するTask名" value={title} onChangeText={setTitle} style={input}/>
-            {button('Taskを末尾に追加',()=>void run('キューTaskを追加',n=>createNode(n,'memo',{title,parentId:queue.id,duePreset:'none',dueAt:null}),()=>setTitle('')),!title.trim())}
+            {button('Taskを末尾に追加',()=>void run('キューTaskを追加',n=>createNode(n,'memo',{title,parentId:queue.id,duePreset:'none',dueAt:null}),()=>setTitle(current=>current===title?'':current)),!title.trim())}
             <Text style={{color:colors.textSecondary}}>既存Taskを末尾へ移動（本文・期限・完了実績は保持）</Text>
             {nodes.filter(n=>n.type==='memo'&&n.memoType!=='idea'&&!n.deletedAt&&!n.purgedAt&&n.parentId!==queue.id&&!routineCategoryForMemo(nodes,n)).map(n=>
               <View key={n.id}>{button(`「${n.title}」をキューへ`,()=>void run('既存Taskをキューへ移動',current=>moveNode(current,n.id,queue.id)))}</View>)}

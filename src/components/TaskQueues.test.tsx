@@ -3,7 +3,7 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { TaskQueues } from './TaskQueues';
-import { queueHead } from '../domain/taskQueue';
+import { createTaskQueue, queueHead } from '../domain/taskQueue';
 import type { Node } from '../models/node';
 vi.mock('react-native',()=>({
   Modal:({children,visible}:{children:React.ReactNode;visible:boolean})=>visible?<div>{children}</div>:null,
@@ -38,4 +38,24 @@ it('creates a queue, adds three Tasks, advances, edits, reorders and dissolves o
     expect(nodes.filter(n=>n.type==='memo')).toHaveLength(3);
     expect(nodes.filter(n=>n.type==='memo').every(n=>!n.deletedAt&&n.parentId===null)).toBe(true);
   }finally{await act(async()=>root.unmount());}
+});
+
+it('keeps the next Task draft typed while the previous addition is still saving',async()=>{
+  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
+  let nodes=createTaskQueue([],'queue',null,new Date(),'q');
+  let release!:()=>void;
+  const pending=new Promise<void>(resolve=>{release=resolve;});
+  const host=document.createElement('div'),root=createRoot(host);
+  const render=()=>root.render(<TaskQueues visible initialQueueId="q" nodes={nodes} onClose={()=>{}} onEdit={()=>{}}
+    onChange={async(_label,operation)=>{nodes=operation(nodes);render();await pending;return true;}}/>);
+  const fill=async(value:string)=>act(async()=>{const input=host.querySelector('[aria-label="追加するTask名"]')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));});
+  try{
+    await act(async()=>render());await fill('first');
+    await act(async()=>{(host.querySelector('[aria-label="Taskを末尾に追加"]') as HTMLElement).click();});
+    await fill('next');
+    await act(async()=>{release();await pending;});
+    expect((host.querySelector('[aria-label="追加するTask名"]') as HTMLInputElement).value).toBe('next');
+    expect(nodes.filter(n=>n.type==='memo').map(n=>n.title)).toEqual(['first']);
+  }finally{release();await act(async()=>root.unmount());}
 });
