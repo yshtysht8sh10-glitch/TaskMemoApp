@@ -51,7 +51,7 @@ export function TaskQueues({ visible, nodes, onClose, onChange, onEdit, initialQ
             <Text style={{color:colors.text,fontWeight:'600'}}>{index+1}. {task.title}{task.status==='completed'?' ✓':task.id===head?.id?' ← 次に着手':''}</Text>
             <View style={{flexDirection:'row',flexWrap:'wrap'}}>
               {button(`${task.title}を編集`,()=>onEdit(task.id))}
-              {button(`${task.title}を${task.status==='completed'?'未完了に戻す':'完了'}`,()=>void run('キューTaskの完了を変更',n=>task.status==='completed'?restoreMemo(n,task.id):completeMemo(n,task.id)))}
+              {button(`${task.title}を${task.status==='completed'?'未完了に戻す':'完了'}`,()=>void run(task.status==='completed'?'キューTaskを未完了へ戻す':'キューTaskを完了',n=>task.status==='completed'?restoreMemo(n,task.id):completeMemo(n,task.id)))}
               {button(`${task.title}を上へ`,()=>void run('キューTaskを並べ替え',n=>moveNode(n,task.id,queue.id,tasks[index-1]?.id)),index===0||!!queue.deletedAt)}
               {button(`${task.title}を下へ`,()=>void run('キューTaskを並べ替え',n=>moveNode(n,task.id,queue.id,tasks[index+2]?.id)),index===tasks.length-1||!!queue.deletedAt)}
               {button(`${task.title}を取り出す`,()=>void run('キューからTaskを取り出す',n=>moveNode(n,task.id,queue.parentId)))}
