@@ -97,6 +97,12 @@ round-tripは `export → JSON文字列 → import` 後に、Node種別、日時
 
 ## コマンド
 
+#107を旧版クライアントと混在配信する前には、通常suiteに加えて
+`npx tsx scripts/check-queue-legacy-compat.mjs` を必須ゲートとして実行する。
+現在は6件失敗する未修正の配信ブロッカーであり、成功扱いにしない。
+詳細は `docs/ISSUE107_LEGACY_SYNC_COMPATIBILITY.md`。旧版の実Gitソースを
+一時ディレクトリへ展開する合成テストで、Firebaseへ接続しない。
+
 変更中は対象だけを短く実行します。
 
 ```powershell

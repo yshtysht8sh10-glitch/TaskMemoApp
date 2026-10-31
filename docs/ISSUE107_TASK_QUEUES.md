@@ -59,6 +59,11 @@ under its deleted container: such a Task is not hidden by the live-queue filter,
 and queue management offers the deleted queue for extraction/dissolution.
 No automatic repair or data deletion is introduced.
 
+**Production release blocked:** exact legacy-source tests now reproduce lost
+completion/cancellation and offline contention. A green ordinary suite does not
+clear this blocker. Run `npx tsx scripts/check-queue-legacy-compat.mjs`; see
+[legacy synchronization investigation and protocol proposal](ISSUE107_LEGACY_SYNC_COMPATIBILITY.md).
+
 Old data without queue metadata behaves as before. Old bundles do not understand
 queue visibility or register edits. All participating DEV clients must use the
 new bundle; old-client/MCP writer queue semantics are not guaranteed. Shared
