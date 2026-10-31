@@ -1,18 +1,18 @@
 import { FormTextInput } from './FormTextInput';
 import { isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
-import { dragActivationDelay } from "@/domain/dragActivation";
-import type { MemoNode } from "@/models/node";
-import { formatDueLabel } from "@/utils/formatDueLabel";
-import { TREE_LAYOUT, TreeRowLayout } from "@/components/TreeRowLayout";
-import { useAppTheme, type ThemeColors } from "@/theme/theme";
-import { MemoRowActions } from "@/components/MemoRowActions";
-import { CompletionMotion } from "@/components/CompletionMotion";
-import { repeatRuleLabel } from "@/domain/routine";
-import { isIdea } from "@/domain/memoType";
-import type { InlineTitleEditController } from "@/hooks/useInlineTitleEdit";
-import { isTitleEditorFor } from "@/utils/inlineTitleEdit";
-import { MemoTitleTap } from "@/components/MemoTitleTap";
+import { dragActivationDelay } from "../domain/dragActivation";
+import type { MemoNode } from "../models/node";
+import { formatDueLabel } from "../utils/formatDueLabel";
+import { TREE_LAYOUT, TreeRowLayout } from "./TreeRowLayout";
+import { useAppTheme, type ThemeColors } from "../theme/theme";
+import { MemoRowActions } from "./MemoRowActions";
+import { CompletionMotion } from "./CompletionMotion";
+import { repeatRuleLabel } from "../domain/routine";
+import { isIdea } from "../domain/memoType";
+import type { InlineTitleEditController } from "../hooks/useInlineTitleEdit";
+import { isTitleEditorFor } from "../utils/inlineTitleEdit";
+import { MemoTitleTap } from "./MemoTitleTap";
 
 type Props = {
   memo: MemoNode;
@@ -188,7 +188,7 @@ export function MemoRow({
                 </Text>
               ) : null}
             </View>
-            {!selectionMode && !idea && !definitionCompleted && (
+            {!selectionMode && !idea && !routine && (
               <MemoRowActions
                 title={memo.title}
                 completed={completed}
@@ -197,13 +197,13 @@ export function MemoRow({
                 onMenu={onMenu}
               />
             )}
-            {!selectionMode && (idea || definitionCompleted) && (
+            {!selectionMode && (idea || routine) && (
               <Pressable
                 accessibilityLabel={`${memo.title}のメニュー`}
-                onPress={onMenu}
+                onPress={event => { event.stopPropagation(); onMenu(); }}
                 style={styles.ideaMenu}
               >
-                <Text style={styles.ideaMenuText}>•••</Text>
+                <Text style={[styles.ideaMenuText, routine && styles.routineMenuText]}>•••</Text>
               </Pressable>
             )}
           </Pressable>
@@ -238,6 +238,7 @@ const createStyles = (colors: ThemeColors) =>
       justifyContent: "center",
     },
     ideaMenuText: { color: colors.ideaText, fontWeight: "800" },
+    routineMenuText: { color: colors.textSecondary },
     selectedNote: {
       borderColor: colors.accent,
       backgroundColor: colors.accentSoft,

@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { useAppTheme, type ThemeColors } from '@/theme/theme';
+import { useAppTheme, type ThemeColors } from '../theme/theme';
 
 export function MemoRowActions({ title, completed, completing, onComplete, onMenu }: { title: string; completed?: boolean; completing?: boolean; onComplete: () => void; onMenu: () => void }) {
   const styles = createStyles(useAppTheme().colors);
