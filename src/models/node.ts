@@ -1,5 +1,10 @@
 export type NodeType = "category" | "memo";
 
+export type QueueTaskState = {
+  position: { version: number; parentId: string | null; sortKey: string };
+  completion: { version: number; status: 'active' | 'completed'; completedAt: string | null };
+};
+
 export type BaseNode = {
   id: string;
   type: NodeType;
@@ -20,6 +25,8 @@ export type BaseNode = {
 
 export type CategoryNode = BaseNode & {
   type: "category";
+  /** Ordinary Category with sequential Task visibility; missing means a normal folder. */
+  taskQueue?: boolean;
   /** Null restores the legacy icon. */
   folderColor?: "blue" | "yellow" | "green" | "red" | "purple" | "gray" | null;
   categoryKind?:
@@ -62,6 +69,8 @@ export type RepeatRule = {
 
 export type MemoNode = BaseNode & {
   type: "memo";
+  /** Independent placement/completion registers for Tasks that have participated in a queue. */
+  queueState?: QueueTaskState;
   /** Missing on legacy data; absence is interpreted as `task`. */
   memoType?: MemoType;
   /** Manual ordering used by the deadline list, independent of tree order. */

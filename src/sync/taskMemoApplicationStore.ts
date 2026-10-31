@@ -16,6 +16,8 @@ import { decodeLegacyNodes } from './legacyLocalCodec';
 import { integrateOwnershipSortKeys } from './ownershipSortKeys';
 import { nextRoutineOutcome } from '../domain/routine';
 import { replayRoutineLifecycle } from '../domain/routineLifecycleRegister';
+import { stampQueueValue } from '../domain/queueRegisters';
+import { assertTaskQueueTransition } from '../domain/taskQueue';
 import { pendingAnonymousChanges, planOwnershipReconcile, sameOwnershipProfile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
 
 type NodeHistoryTarget = {
@@ -342,6 +344,7 @@ export class TaskMemoV2ApplicationStore {
       fresh.changes.forEach(change => values.set(change.id, change.after));
       assertSafeTextTransition(this.nodes, [...values.values()].map(nodeFromV2Value), fresh.deletedIds);
       assertRoutineRootTransition(this.nodes, [...values.values()].map(nodeFromV2Value));
+      assertTaskQueueTransition(this.nodes, [...values.values()].map(nodeFromV2Value));
       const operations = await this.applyCommand('update', this.nodes, 'テキスト編集を保存', true, this.now(), fresh.changes);
       this.textSessions.delete(session.id);
       return operations;
@@ -372,6 +375,7 @@ export class TaskMemoV2ApplicationStore {
     if (this.pendingOwnership) throw new Error('取り込みの完了/復旧を待ってください。');
     const before = this.nodes;
     const after = transform(before);
+    assertTaskQueueTransition(before,after);
     if (same(encodeNodes(before), encodeNodes(after))) return [];
     assertSafeNodeTransition(before, after, type);
     assertRoutineRootTransition(before, after);
@@ -583,7 +587,7 @@ export class TaskMemoV2ApplicationStore {
         (current?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
     const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
     const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
-    const winner = selfEcho && !incoming.value.routineOutcomes && !incoming.value.routineLifecycle ? current : chooseVersionedNode(current, incoming);
+    const winner = selfEcho && !incoming.value.routineOutcomes && !incoming.value.routineLifecycle && !incoming.value.queueState ? current : chooseVersionedNode(current, incoming);
     let next: Envelope = {
       ...this.envelope,
       nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
@@ -616,7 +620,7 @@ export class TaskMemoV2ApplicationStore {
         isRoutineRoot(operation.payload.node as SyncNodeValue) && domain[record.value.id]?.lastOpId === opId) {
       findRoutineRoot([record.value]);
       domain = { ...domain, [record.value.id]: record };
-    } else if (record && (record.lastDeviceId !== this.envelope.deviceId || record.value.routineOutcomes || record.value.routineLifecycle)) {
+    } else if (record && (record.lastDeviceId !== this.envelope.deviceId || record.value.routineOutcomes || record.value.routineLifecycle || record.value.queueState)) {
       const current = domain[record.value.id];
       const winner = chooseVersionedNode(current, record);
       domain = { ...domain, [record.value.id]: winner };
@@ -735,6 +739,7 @@ export class TaskMemoV2ApplicationStore {
         let value = this.historyNodeValue(current, direction === "undo" ? target.before : target.after, now);
         if (!value) return [];
         value = this.replayRoutineDates(current, target, direction, value, now);
+        value = stampQueueValue(current.value,value);
         if (current.value.routineLifecycle || value.routineLifecycle) value = { ...value,
           routineLifecycle: replayRoutineLifecycle(current.value.routineLifecycle as MemoNode['routineLifecycle'], value.routineLifecycle as MemoNode['routineLifecycle']) };
         const operation: SyncOperation = {
@@ -799,15 +804,17 @@ export class TaskMemoV2ApplicationStore {
     for (const [id, current] of Object.entries(domain)) {
       if (!after.has(id)) after.set(id, { ...current.value, deletedAt: commandTime.toISOString(), deletionBatchId: null });
     }
-    for (const [id, value] of after) {
+    for (const [id, rawValue] of after) {
       const current = domain[id];
+      const parent = after.get(rawValue.parentId as string);
+      const value = stampQueueValue(current?.value,rawValue,parent?.type==='category' && parent.taskQueue===true);
       // Import and other whole-state commands must never turn a permanent
       // tombstone back into a normal Node, even temporarily before server ack.
       if (current?.value.purgedAt && !value.purgedAt) continue;
       if (current && same(current.value, value)) continue;
       const operation: SyncOperation = {
         opId: `${this.envelope.deviceId}:${localSeq}`, deviceId: this.envelope.deviceId, localSeq,
-        targetNodeId: id, type: textTypes.get(id) ?? (type === 'softDelete' && !value.deletedAt && value.routineOutcomes ? 'update' : type), baseRevision: current?.revision ?? 0, payload: { node: value },
+        targetNodeId: id, type: textTypes.get(id) ?? (type === 'softDelete' && !value.deletedAt && (value.routineOutcomes || value.queueState) ? 'update' : type), baseRevision: current?.revision ?? 0, payload: { node: value },
         createdAt: commandTime.toISOString(), status: "pending", attemptCount: 0, nextRetryAt: null, lastError: null,
       };
       localSeq += 1; operations.push(operation); domain[id] = candidateForOperation(operation);

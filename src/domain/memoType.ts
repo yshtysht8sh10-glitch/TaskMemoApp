@@ -20,6 +20,8 @@ export function convertMemoType(
       !node.purgedAt,
   );
   if (!memo) throw new Error("変換するMemoが見つかりません。");
+  if (memoType === 'idea' && nodes.some(n=>n.id===memo.parentId && n.type==='category' && n.taskQueue))
+    throw new Error('キューのTaskは取り出してからIdeaへ変換してください。');
   if (memoTypeOf(memo) === memoType) return nodes;
   if (memoType === "idea" && routineCategoryForMemo(nodes, memo))
     throw new Error("ルーティーン内のTaskはIdeaへ変換できません。");

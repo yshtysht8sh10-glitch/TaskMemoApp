@@ -50,7 +50,7 @@ export function CategoryRow({
 }: Props) {
   const styles = createStyles(useAppTheme().colors);
   const routine = !!category.categoryKind;
-  const tint = !virtual && !routine && FOLDER_COLORS.find(c => c.value === category.folderColor)?.hex;
+  const tint = !virtual && !routine && !category.taskQueue && FOLDER_COLORS.find(c => c.value === category.folderColor)?.hex;
   return (
     <TreeRowLayout
       depth={depth}
@@ -115,7 +115,7 @@ export function CategoryRow({
           {collapsedChildCount === 0 ? "•" : isExpanded ? "▼" : "▶"}
         </Text>
         {tint ? <FolderIcon color={tint} /> : <Text style={styles.kindIcon}>
-          {virtual ? "◇" : routine ? "🔁" : "📁"}
+          {virtual ? "◇" : routine ? "🔁" : category.taskQueue ? "⏭" : "📁"}
         </Text>}
         <Text style={styles.title} numberOfLines={2}>
           {category.title}

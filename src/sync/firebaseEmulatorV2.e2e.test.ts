@@ -2,7 +2,8 @@ import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestE
 import { collection, getDocs, doc, getDoc, runTransaction, setDoc, Timestamp, type Firestore } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
+import { createNode, hardDeleteNode, updateNode, completeMemo, moveNode } from "../domain/nodeOperations";
+import { createTaskQueue, dissolveTaskQueue, queueHead } from '../domain/taskQueue';
 import { deadlineGroups, moveMemoInDeadlineList } from '../domain/deadlineView';
 import type { Node, MemoNode } from "../models/node";
 import type { ApplicationJournalPersistence } from "./applicationStore";
@@ -42,6 +43,36 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('persists queue heads and concurrent completion/reorder with SDK receipts, offline edits and dissolution Undo', async () => {
+    const db=environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const persistence=new MemoryPersistence();
+    let a=await TaskMemoV2ApplicationStore.open(persistence,[],{deviceId:'queue-sdk-A'});
+    const b=await TaskMemoV2ApplicationStore.open(new MemoryPersistence(),[],{deviceId:'queue-sdk-B'});
+    let ca=new TaskMemoV2SyncController(a,createFirebaseSyncAdapter(db,'owner','test',{emulator:true}));
+    const cb=new TaskMemoV2SyncController(b,createFirebaseSyncAdapter(db,'owner','test',{emulator:true}));
+    try {
+      await Promise.all([ca.start(),cb.start()]);
+      await a.command('queue','create',n=>createTaskQueue(n,'Release',null,new Date(),'queue'));
+      for(const id of ['first','second','last']) await a.command('task','create',n=>createNode(n,'memo',{title:id,parentId:'queue'},new Date(),id));
+      await ca.flush();await waitFor(()=>!!b.nodes.find(n=>n.id==='last'));
+      ca.stop();cb.stop();
+      await a.command('finish','update',n=>completeMemo(n,'first'));
+      await b.command('reorder','update',n=>moveNode(n,'first','queue',undefined));
+      const rank=b.nodes.find(n=>n.id==='first')!.sortKey;
+      await Promise.all([ca.start(),cb.start()]);await ca.flush();await cb.flush();
+      await waitFor(()=>a.nodes.some(n=>n.id==='first'&&n.type==='memo'&&n.status==='completed'&&n.sortKey===rank)&&b.nodes.some(n=>n.id==='first'&&n.type==='memo'&&n.status==='completed'&&n.sortKey===rank));
+      expect(queueHead(a.nodes,'queue')?.id).toBe('second');
+      ca.stop();a=await TaskMemoV2ApplicationStore.open(persistence,[],{deviceId:'ignored'});
+      ca=new TaskMemoV2SyncController(a,createFirebaseSyncAdapter(db,'owner','test',{emulator:true}));
+      await ca.start();expect(queueHead(a.nodes,'queue')?.id).toBe('second');
+      await a.command('dissolve','softDelete',n=>dissolveTaskQueue(n,'queue'));
+      await ca.flush();await waitFor(()=>b.nodes.filter(n=>n.type==='memo').every(n=>n.parentId===null&&!n.deletedAt));
+      await a.undo();await ca.flush();await waitFor(()=>queueHead(b.nodes,'queue')?.id==='second');
+      const cloud=(await getDoc(doc(db,'users/owner/nodesV2/first'))).data()!.record.value;
+      expect(cloud.status).toBe('completed');expect(cloud.queueState.completion.status).toBe('completed');
+    } finally {ca.stop();cb.stop();}
+  },30_000);
 
   it('keeps pending tasks and definition completion through SDK receipts, another session and resume', async () => {
     const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;

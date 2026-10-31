@@ -1,6 +1,7 @@
 import type { DuePreset, MemoStatus, Node } from "@/models/node";
 import { isValidSortKey } from '../domain/sortKeys';
 import { validRoutineLifecycle } from '../domain/routineLifecycleRegister';
+import { validQueueState } from '../domain/queueRegisters';
 import { validRoutineOutcome } from '../domain/routineOutcomeMerge';
 import { parseLocalDateKey } from '../domain/routine';
 import { allDeadlineGroupIds, TODAY_GRANULARITIES, type DeadlineGroupKey, type TodayGranularity } from "../domain/deadlineView";
@@ -111,6 +112,8 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
       (value.purgedAt !== undefined && !validDateString(value.purgedAt, true))
     )
       throw new Error(`${value.id}の日付が不正です。`);
+    if (value.taskQueue !== undefined && (value.type!=='category' || typeof value.taskQueue!=='boolean')) throw new Error('キュー定義が不正です。');
+    if (value.queueState !== undefined && (value.type!=='memo' || !validQueueState(value.queueState))) throw new Error('キューTaskの状態が不正です。');
     if (value.type === "memo") {
       if (
         value.memoType !== undefined &&

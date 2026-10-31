@@ -4,6 +4,7 @@ import { canonical } from '../textFormat/syntax';
 import { mergeRoutineOutcomes } from '../domain/routineOutcomeMerge';
 import type { MemoNode } from '../models/node';
 import { mergeRoutineLifecycle } from '../domain/routineLifecycleRegister';
+import { mergeQueueValue } from '../domain/queueRegisters';
 
 export function assertOwnershipCurrent(operation: SyncOperation, current: VersionedNode | VersionedPinnedNote | VersionedFeatures | null | undefined) {
   if (operation.ownership && canonical(current ?? null) !== canonical(operation.ownership.expectedCurrent))
@@ -28,7 +29,7 @@ export function candidateForOperation(operation: SyncOperation): VersionedNode {
 /** Order-independent Node-level winner selection. */
 export function chooseVersionedNode(current: VersionedNode | undefined, candidate: VersionedNode) {
   const nodeWinner = chooseNodeWinner(current, candidate);
-  let winner = nodeWinner;
+  let winner = { ...nodeWinner, value: mergeQueueValue(current?.value,candidate.value,nodeWinner.value) };
   if (winner.value.type === 'memo' && !winner.value.purgedAt) {
     const lifecycle = mergeRoutineLifecycle(current?.value.routineLifecycle as MemoNode['routineLifecycle'], candidate.value.routineLifecycle as MemoNode['routineLifecycle']);
     if (lifecycle) winner = { ...winner, value: { ...winner.value, routineLifecycle: lifecycle } };

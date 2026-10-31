@@ -1,4 +1,5 @@
 import { FormTextInput } from '../components/FormTextInput';
+import { TaskQueues } from '../components/TaskQueues';
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
@@ -193,6 +194,8 @@ export default function HomeScreen() {
   const styles = createStyles(colors);
   const [history, setHistory] = useState(() => createNodeHistory([]));
   const nodes = history.nodes;
+  const [queuesOpen,setQueuesOpen] = useState(false);
+  const [queueFocus,setQueueFocus] = useState<string|null>(null);
   const [ready, setReady] = useState(false);
   const [pinnedNote, setPinnedNote] = useState("");
   const [pinnedNoteUpdatedAt, setPinnedNoteUpdatedAt] = useState(new Date(0));
@@ -641,6 +644,11 @@ export default function HomeScreen() {
   };
   const askDelete = (node: Node) => {
     setMenuNode(null);
+    if(node.type==='category' && node.taskQueue) {
+      appAlert('キューを解散','完了済みを含むTaskはすべて通常の親／無所属へ移して残します。',[
+        {text:'キャンセル',style:'cancel'},{text:'解散',onPress:()=>apply('キューを解散',n=>softDeleteNode(n,node.id,false))}]);
+      return;
+    }
     if (node.type === "memo")
       appAlert(routineCategoryForMemo(nodes, node) ? "ルーティーン本体を削除" : "Memoを削除",
         routineCategoryForMemo(nodes, node)
@@ -679,6 +687,8 @@ export default function HomeScreen() {
       {textEdit && <TextEditScreen session={textEdit.session} excluded={textEdit.excluded} prepare={sync.prepareTextEdit} commit={sync.commitTextEdit} discard={sync.discardTextEdit} onClose={() => setTextEdit(null)} />}
       {textView && <TextViewScreen snapshot={textView} onClose={() => setTextView(null)} />}
       <StatusBar style={resolved === "dark" ? "light" : "dark"} />
+      <TaskQueues key={queueFocus??'all-queues'} initialQueueId={queueFocus} visible={queuesOpen} nodes={nodes} onClose={()=>setQueuesOpen(false)} onChange={applyConfirmed}
+        onEdit={id=>{const node=nodes.find(n=>n.id===id);if(node?.type==='memo'){setQueuesOpen(false);changeEditor({type:'memo',node,parentId:node.parentId},'queue-edit-task');}}} />
       {sync.applicationState === 'error' && <View accessibilityRole="alert" style={{ padding: 12, backgroundColor: colors.surfaceAlt }}>
         <Text style={{ color: colors.danger, fontWeight: 'bold' }}>編集基盤を開けません · 原本を保持して停止しています</Text>
         <Text selectable style={{ color: colors.text }}>{sync.error}</Text>
@@ -774,6 +784,7 @@ export default function HomeScreen() {
       <View style={styles.tree} pointerEvents={sync.startup.editable ? "auto" : "none"}>
         {!sync.startup.showData ? <Text style={{ color: colors.textSecondary, padding: 16 }}>{sync.startup.message}</Text> : view === "tree" ? (
           <NodeTree
+            onQueues={()=>{setQueueFocus(null);setQueuesOpen(true);}}
             onAddRoutine={() => {
               void sync.ensureRoutineRoot().then(({ id: parentId }) => {
                 setCreateOpen(false); setMenuNode(null);
@@ -1100,14 +1111,14 @@ export default function HomeScreen() {
         onClose={() => setCreateOpen(false)}
       >
         <Action label="タスク" onPress={() => openCreate("memo", "task")} />
-        {ideasEnabled && !routineCategoryForParent(nodes, createParentId) && (
+        {ideasEnabled && !routineCategoryForParent(nodes, createParentId) && !nodes.some(n=>n.id===createParentId && n.type==='category' && n.taskQueue) && (
           <Action
             label="💡 アイデア"
             onPress={() => openCreate("memo", "idea")}
           />
         )}
         {view === "tree" &&
-          !routineCategoryForParent(nodes, createParentId) && (
+          !routineCategoryForParent(nodes, createParentId) && !nodes.some(n=>n.id===createParentId && n.type==='category' && n.taskQueue) && (
             <Action label="カテゴリ" onPress={() => openCreate("category")} />
           )}
       </Sheet>
@@ -1132,6 +1143,8 @@ export default function HomeScreen() {
         title={`${menuNode?.title ?? ''}${menuRoutineDate ? `（${menuRoutineDate}分）` : ''}`}
         onClose={() => setMenuNode(null)}
       >
+        {!!menuNode && ((menuNode.type==='category' && menuNode.taskQueue) || nodes.some(n=>n.id===menuNode.parentId && n.type==='category' && n.taskQueue)) &&
+          <Action label="キュー全体・進捗" onPress={()=>{setQueueFocus(menuNode.type==='category'?menuNode.id:menuNode.parentId);setMenuNode(null);setQueuesOpen(true);}} />}
         {menuNode?.type !== "category" ||
         menuNode.categoryKind !== "routineRoot" ? (
           <Action

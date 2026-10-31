@@ -7,6 +7,7 @@ import { isValidSortKey } from "./sortKeys";
 import { beforeIdForInsertion } from "./insertionPosition";
 import { daysUntilWeekEnd } from '../utils/calendarWeek';
 import { flattenVisibleNodes } from './treeView';
+import { visibleQueueTaskIds } from './taskQueue';
 
 export type TodayGranularity = "today" | "dayNight" | "amPm" | "threePart";
 export const TODAY_GRANULARITIES: readonly {
@@ -355,6 +356,8 @@ export function deadlineGroups(
   visibleGroupIds?: ReadonlySet<DeadlineGroupKey>,
   granularity: TodayGranularity = "amPm",
 ): DeadlineGroup[] {
+  const queueHeads = visibleQueueTaskIds(nodes);
+  const queueIds = new Set(nodes.filter(n=>n.type==='category' && n.taskQueue && !n.deletedAt && !n.purgedAt).map(n=>n.id));
   const definitions = deadlineGroupDefinitions(granularity);
   const visible =
     visibleGroupIds ?? new Set(definitions.map((group) => group.id));
@@ -402,6 +405,7 @@ export function deadlineGroups(
         node.type === "memo" &&
         isTask(node) &&
         node.status === "active" &&
+        (!queueIds.has(node.parentId ?? '') || queueHeads.has(node.id)) &&
         node.deletedAt === null && !node.purgedAt,
     )
     .flatMap((memo) => [

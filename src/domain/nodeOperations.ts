@@ -19,6 +19,7 @@ import { isIdea } from "./memoType";
 import { isValidSortKey } from "./sortKeys";
 
 export type NodeDraft = {
+  taskQueue?: boolean;
   title: string;
   parentId: string | null;
   body?: string;
@@ -83,6 +84,12 @@ export function canMoveNode(
     (node) => node.id === nodeId && node.deletedAt === null && !node.purgedAt,
   );
   if (!moving) return false;
+  const sourceQueue = nodes.some(n => n.id === moving.parentId && n.type === 'category' && n.taskQueue);
+  const destinationNode = nodes.find(n => n.id === destinationParentId);
+  if (destinationNode?.type === 'category' && destinationNode.taskQueue &&
+      (moving.type !== 'memo' || isIdea(moving) || !!routineCategoryForMemo(nodes,moving))) return false;
+  if (destinationNode?.type === 'category' && destinationNode.categoryKind === 'routineRoot' &&
+      (sourceQueue || (moving.type === 'memo' && moving.queueState) || (moving.type === 'category' && moving.taskQueue))) return false;
   if (moving.type === "category" && moving.categoryKind === "routineRoot")
     return false;
   if (destinationParentId === null) return true;
@@ -128,6 +135,11 @@ export function createNode(
   const title = draft.title.trim();
   if (!title) throw new Error("タイトルは必須です。");
   assertParent(nodes, draft.parentId);
+  const parent = nodes.find(n => n.id === draft.parentId);
+  if (parent?.type === 'category' && parent.taskQueue && (type !== 'memo' || draft.memoType === 'idea'))
+    throw new Error('キューには通常Taskだけを登録できます。');
+  if (draft.taskQueue && (type !== 'category' || (parent?.type === 'category' && (parent.taskQueue || parent.categoryKind))))
+    throw new Error('この場所にはキューを作成できません。');
   if (type === "memo" && !canContainMemo(nodes, draft.parentId))
     throw new Error("このCategoryにはMemoを作成できません。");
   const base = {
@@ -143,7 +155,7 @@ export function createNode(
   } as const;
   const node: Node =
     type === "category"
-      ? ({ ...base, type: "category" } satisfies CategoryNode)
+      ? ({ ...base, type: "category", ...(draft.taskQueue ? { taskQueue: true } : {}) } satisfies CategoryNode)
       : ({
           ...base,
           type: "memo",
@@ -174,8 +186,9 @@ export function duplicateMemo(
   const sourceIndex = siblings.findIndex((node) => node.id === source.id);
   const next = siblings[sourceIndex + 1];
   const sortKey = generateKeyBetween(source.sortKey, next?.sortKey ?? null);
+  const { queueState: _queueState, ...sourceContent } = source;
   const duplicate: MemoNode = {
-    ...source,
+    ...sourceContent,
     id,
     sortKey,
     dueAt: source.dueAt ? new Date(source.dueAt) : null,
@@ -300,6 +313,7 @@ export function moveMemos(
   if (selected.length !== selectedIds.size)
     throw new Error("移動するMemoが見つかりません。");
   if (selected.length === 0) return nodes;
+  if (selected.some(memo=>!canMoveNode(nodes,memo.id,parentId))) throw new Error('選択Taskをこの場所へ移動できません。');
 
   const destinationSiblings = siblingsOf(nodes, parentId).filter(
     (node) => !selectedIds.has(node.id),
@@ -545,6 +559,9 @@ export function softDeleteNode(
   if (!target) return nodes;
   if (target.type === "category" && target.categoryKind === "routineRoot")
     return nodes;
+  if (target.type === 'category' && target.taskQueue) return deleteCategoryOnly(nodes,id,now);
+  if (cascade && target.type === 'category' && nodes.some(n => n.type === 'category' && n.taskQueue && !n.deletedAt && descendantIds(nodes,id).has(n.id)))
+    throw new Error('子キューを先に解散してください。Taskは削除されません。');
   if (target.type === "category" && !cascade)
     return deleteCategoryOnly(nodes, id, now);
   const ids =
@@ -634,6 +651,8 @@ export function restoreNode(nodes: Node[], id: string, now = new Date()) {
 export function hardDeleteNode(nodes: Node[], id: string, now = new Date()) {
   const target = nodes.find((node) => node.id === id);
   if (!target) return nodes;
+  if(target.type==='category' && nodes.some(q=>q.type==='category' && q.taskQueue && descendantIds(nodes,id).has(q.id) &&
+      nodes.some(n=>n.parentId===q.id && !n.deletedAt && !n.purgedAt))) throw new Error('Taskを残してキューを解散してから完全削除してください。');
   if (target.type === "category" && target.categoryKind === "routineRoot")
     return nodes;
   const ids =
