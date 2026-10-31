@@ -31,23 +31,29 @@ it('uses the current display settings instead of showing disabled presets', asyn
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
-it('changes today granularity in the actual field without rewriting a legacy hidden deadline', async () => {
+it.each([
+  [13, ''],
+  [17, '・今週'],
+  [31, '・今週・今月'],
+] as const)('changes today granularity on October %i with suffix "%s" without rewriting a legacy hidden deadline', async (day, mergedSuffix) => {
+  // Labels intentionally merge on calendar boundaries; never depend on the runner's date.
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(2026, 9, day, 8));
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const change = vi.fn(), host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   const visibleGroupIds = new Set(allDeadlineGroupIds());
   try {
     await act(async () => root.render(<MemoDeadlineField preset="afternoon" custom="2026/10/01 17:00" styles={styles} onChange={change} visibleGroupIds={visibleGroupIds} granularity="amPm" />));
     let labels = [...host.querySelectorAll('button')].map(b => b.textContent);
-    expect(labels).toContain('今日-午前（～12:00）'); expect(labels).toContain('今日-午後（～24:00）');
+    expect(labels).toContain('今日-午前（～12:00）'); expect(labels).toContain(`今日-午後${mergedSuffix}（～24:00）`);
     expect(labels).not.toContain('午後まで'); expect(labels).not.toContain('今日中');
     await act(async () => root.render(<MemoDeadlineField preset="afternoon" custom="2026/10/01 17:00" styles={styles} onChange={change} visibleGroupIds={visibleGroupIds} granularity="threePart" />));
     labels = [...host.querySelectorAll('button')].map(b => b.textContent);
-    expect(labels).toContain('今日-朝（～10:00）'); expect(labels).toContain('今日-昼（～17:00）'); expect(labels).toContain('今日-夜（～24:00）');
+    expect(labels).toContain('今日-朝（～10:00）'); expect(labels).toContain('今日-昼（～17:00）'); expect(labels).toContain(`今日-夜${mergedSuffix}（～24:00）`);
     expect(labels).not.toContain('今日-午前（～12:00）');
     expect((host.querySelector('input[type="date"]') as HTMLInputElement).value).toBe('2026-10-01');
     expect((host.querySelector('input[type="time"]') as HTMLInputElement).value).toBe('17:00');
     expect(change).not.toHaveBeenCalled();
-  } finally { await act(async () => root.unmount()); host.remove(); }
+  } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); }
 });
 
 it('always allows entering and saving a date in an OFF group, including when none is OFF', async () => {
