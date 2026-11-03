@@ -15,9 +15,12 @@ const exported = spawnSync("npx", ["expo", "export", "--platform", "web", "--cle
 if (exported.status !== 0) process.exit(exported.status ?? 1);
 execFileSync(process.execPath, ["scripts/stamp-storage-diagnostics.mjs", commit], { stdio: "inherit", env });
 execFileSync(process.execPath, ["scripts/verify-firebase-web-export.js"], { stdio: "inherit", env });
+// #116: keep the existing deployed SW byte-for-byte despite Windows checkout EOLs.
+// A source-identical CRLF copy would otherwise trigger install/skipWaiting/claim.
+writeFileSync("dist/service-worker.js", readFileSync("dist/service-worker.js", "utf8").replaceAll("\r\n", "\n"));
 const files = directory => readdirSync(directory).flatMap(name => { const path = join(directory, name); return statSync(path).isDirectory() ? files(path) : [path]; }).filter(path => !path.endsWith("taskmemo-build-manifest.json")).sort();
 const artifactHash = createHash("sha256");
 for (const path of files("dist")) artifactHash.update(relative("dist", path).replaceAll("\\", "/")).update("\0").update(readFileSync(path));
-const manifest = { schemaVersion: 1, builtAt: new Date().toISOString(), environment: "production", firebaseProjectId: "taskmemoapp-eabc3", syncV2Enabled: true, recoveryObservationOnly: true, releaseChannel: "production-v2-cutover", commit, artifactPath: "dist", canonicalArtifactSha256: artifactHash.digest("hex") };
+const manifest = { schemaVersion: 1, builtAt: new Date().toISOString(), environment: "production", firebaseProjectId: "taskmemoapp-eabc3", syncV2Enabled: true, recoveryObservationOnly: false, redundantJournalPolicy: "raw-equal-empty-outbox-cloud-verified-cas", releaseChannel: "production-v2-cutover", commit, artifactPath: "dist", canonicalArtifactSha256: artifactHash.digest("hex") };
 writeFileSync("dist/taskmemo-build-manifest.json", JSON.stringify(manifest, null, 2), { flag: "wx" });
 console.log("Production V2 web artifact exported locally only; no deploy was performed.");
