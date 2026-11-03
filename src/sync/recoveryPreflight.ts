@@ -245,7 +245,7 @@ function compareNodeMaps(left: NodeMap, right: NodeMap): PairComparison {
     exactMatches: leftOnly === 0 && rightOnly === 0 && exactDifferent === 0 };
 }
 
-function checkStructure(records: NodeMap): StructureCheck {
+export function checkStructure(records: NodeMap): StructureCheck {
   const active = [...records.values()].filter((record) => !record.value.deletedAt && !record.value.purgedAt);
   let missingParentCount = 0, inactiveParentCount = 0, nonCategoryParentCount = 0, invalidParentCount = 0;
   let invalidActiveSortKeyCount = 0, duplicateActiveSortKeyNodeCount = 0, duplicateActiveSortKeyGroupCount = 0;

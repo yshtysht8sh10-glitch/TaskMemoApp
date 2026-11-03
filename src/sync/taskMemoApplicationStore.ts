@@ -76,19 +76,26 @@ export class TaskMemoV2ApplicationStore {
   private ownershipPlans = new Map<string, OwnershipPlan>();
   private textSessionSequence = 0;
   private readonly textSessions = new Map<string, TextSession>();
-  // All envelope mutations share one WAL. Serialize the entire read/modify/write,
+  // Serialize the entire envelope read/modify/write,
   // not just persistence, so listener acknowledgements cannot overwrite UI edits.
   private mutations: Promise<unknown> = Promise.resolve();
+  private storageFailure: Error | null = null;
+  get protectionError() { return this.storageFailure; }
   private serialize<T>(action: () => Promise<T>): Promise<T> {
-    const next = this.mutations.then(action);
+    const next = this.mutations.then(() => {
+      if (this.storageFailure) throw this.storageFailure;
+      return action();
+    });
     this.mutations = next.catch(() => undefined);
     return next;
   }
-  private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date) {}
+  private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date,
+    private committedRaw: string | null) {}
 
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
     recordSyncActivity("hydrate");
     const journal = await persistence.loadJournal();
+    if (journal && persistence.writeAtomic) throw new Error('未確定journalがあります。整合性確認が完了するまで保存・同期を停止します。');
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
     const hydrateStarted = new Date();
@@ -140,7 +147,7 @@ export class TaskMemoV2ApplicationStore {
         envelope.sync.outbox.push(operation);
       }
     }
-    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()));
+    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()), committed);
     // Remote/committed snapshots are not user edits. Auto-rewriting their sortKeys
     // produced normal Outbox operations and a listener/upload feedback loop.
     store.envelope = envelope;
@@ -162,7 +169,7 @@ export class TaskMemoV2ApplicationStore {
   get legacyPinnedNoteCandidates() { return [...this.envelope.profile.legacyPinnedNoteCandidates]; }
   versionedNode(id: string) { return this.envelope.domain[id]; }
   /** Wait for edits already accepted by the UI before taking a recovery snapshot. */
-  whenIdle() { return this.serialize(async () => undefined); }
+  whenIdle() { return this.mutations.then(() => undefined); }
   get deviceId() { return this.envelope.deviceId; }
   get pendingOwnership() { const pending = this.envelope.ownershipTransaction ?? this.envelope.ownershipRecoverySeed; return pending ? JSON.parse(JSON.stringify(pending)) as NonNullable<Envelope['ownershipTransaction']> : undefined; }
   anonymousSnapshot(scope: string): AnonymousSnapshot {
@@ -833,23 +840,30 @@ export class TaskMemoV2ApplicationStore {
   }
 
   private async commit(next: Envelope, atomic = false) {
-    atomic = atomic || next.ownership?.kind === 'local' || Boolean(next.ownershipTransaction || next.ownershipRecoverySeed);
+    if (this.storageFailure) throw this.storageFailure;
+    atomic = atomic || Boolean(this.persistence.writeAtomic) || next.ownership?.kind === 'local' || Boolean(next.ownershipTransaction || next.ownershipRecoverySeed);
     const previousIds = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
     const generated = next.sync.outbox.filter(operation => !previousIds.has(operation.opId));
     const value = JSON.stringify(next);
-    if (atomic) {
-      if (!this.persistence.writeAtomic) throw new Error('原子的なテキスト保存に対応したstorageが必要です。');
-      const expected = await this.persistence.loadCommitted();
-      if (expected === null || canonical(JSON.parse(expected)) !== canonical(this.envelope))
-        throw new Error('保存先が別の操作で更新されました。再読込してください。');
-      await this.persistence.writeAtomic(expected, value);
-    } else {
-      await this.persistence.writeJournal(value);
-      await this.persistence.writeCommitted(value);
+    try {
+      if (atomic) {
+        if (!this.persistence.writeAtomic) throw new Error('原子的なテキスト保存に対応したstorageが必要です。');
+        await this.persistence.writeAtomic(this.committedRaw, value);
+      } else {
+        // Compatibility for the non-transactional foundation/test adapter only.
+        // All runtime Web and Native V2 adapters supply writeAtomic.
+        await this.persistence.writeJournal(value);
+        await this.persistence.writeCommitted(value);
+        await this.persistence.clearJournal();
+      }
+    } catch (cause) {
+      this.storageFailure = new Error(`保存先の更新に失敗しました。データを変更せず保護停止しました。${cause instanceof Error ? cause.message : ''}`, { cause });
+      if (cause instanceof Error) this.storageFailure.name = cause.name;
+      throw this.storageFailure;
     }
+    this.committedRaw = value;
     this.envelope = next;
     recordSyncActivity("localCommit", { deviceId: next.deviceId });
     for (const operation of generated) recordSyncActivity("outboxGenerated", { operationId: operation.opId, deviceId: operation.deviceId });
-    if (!atomic) await this.persistence.clearJournal();
   }
 }

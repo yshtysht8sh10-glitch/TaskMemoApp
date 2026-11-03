@@ -145,16 +145,21 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
     const transaction = this.database.transaction(STORE_NAME, "readwrite");
     const done = transactionDone(transaction);
     const objectStore = transaction.objectStore(STORE_NAME);
-    try {
-      const current = await requestResult(objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>);
-      if (!current) throw new Error("IndexedDBのV2データが見つかりません。");
-      objectStore.put(transform(current));
-      await done;
-    } catch (reason) {
-      try { transaction.abort(); } catch { /* Transaction may have settled. */ }
-      await done.catch(() => undefined);
-      throw reason;
-    }
+    let failure: unknown;
+    // Stay inside the IDB request callback: no Promise/network/crypto gap between
+    // CAS read and put, including Safari's transaction activity boundaries.
+    const request = objectStore.get(this.scope) as IDBRequest<StoredScope | undefined>;
+    request.onsuccess = () => {
+      try {
+        if (!request.result) throw new Error("IndexedDBのV2データが見つかりません。");
+        objectStore.put(transform(request.result));
+      } catch (reason) {
+        failure = reason;
+        try { transaction.abort(); } catch { /* Request failure may have already aborted. */ }
+      }
+    };
+    try { await done; }
+    catch (reason) { throw failure ?? reason; }
   }
 
   async writeAtomic(expectedCommitted: string | null, value: string) {
@@ -167,6 +172,30 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
   }
 
   async loadCommitted() { return (await this.read())?.committed ?? null; }
+  /** Startup-only cleanup. All asynchronous verification happens before the CAS transaction. */
+  async clearRedundantJournal(expectedScope: string, verify: (raw: string) => Promise<void>, isCurrent: () => boolean = () => true) {
+    const before = await this.read();
+    if (!before || before.scope !== expectedScope || this.scope !== expectedScope)
+      throw new Error('Journalのscopeが一致しません。保護停止しました。');
+    if (before.journal === null) return false;
+    if (!before.committed || before.committed !== before.journal || before.localRecoveryMode === true)
+      throw new Error('JournalがCommittedとraw完全一致しません。保護停止しました。');
+    const legacy = new TaskMemoV2ApplicationJournal(this.scope);
+    const checkLegacy = async () => {
+      const [committed, journal] = await Promise.all([legacy.loadCommitted(), legacy.loadJournal()]);
+      if ((journal !== null && !before.recoveryCompleted) || await fingerprint(committed, journal) !== before.legacyFingerprint)
+        throw new Error('旧保存領域が変更されています。保護停止しました。');
+    };
+    await checkLegacy();
+    await verify(before.committed);
+    await checkLegacy();
+    await this.update(current => {
+      // Include archived evidence and unknown fields in the compare, preserve every field.
+      if (!isCurrent() || canonical(current) !== canonical(before)) throw new Error('Journal確認中に保存領域が変化しました。保護停止しました。');
+      return { ...current, journal: null };
+    });
+    return true;
+  }
   async loadJournal() { return (await this.read())?.journal ?? null; }
   async isRecoveryCompleted() { return (await this.read())?.recoveryCompleted === true; }
   async isLocalRecoveryMode() { return (await this.read())?.localRecoveryMode === true; }

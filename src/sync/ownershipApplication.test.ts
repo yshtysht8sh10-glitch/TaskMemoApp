@@ -92,14 +92,17 @@ describe('Phase D durable ownership application', () => {
   it('keeps adjusted ownership operations atomic and rejects changed previews', async () => {
     const p = new Memory();
     const account = iphoneOwnershipRanks.account, local = iphoneOwnershipRanks.local;
-    const store = await TaskMemoV2ApplicationStore.open(p, [nodeFromV2Value(account)], { deviceId: 'account-device' });
+    let store = await TaskMemoV2ApplicationStore.open(p, [nodeFromV2Value(account)], { deviceId: 'account-device' });
     const snapshot = { ...source, nodes: { [local.id]: local } };
-    const plan = store.prepareOwnership(snapshot, 'accountA'), before = p.value;
+    let plan = store.prepareOwnership(snapshot, 'accountA'); const before = p.value;
     p.fail = true;
     await expect(store.commitOwnership(plan, { [local.id]: 'local' })).rejects.toThrow('atomic');
     expect(p.value).toBe(before); expect(store.outbox).toEqual([]); expect(store.historyDepths.past).toBe(0);
     expect(store.nodes.map(n => n.id)).toEqual([account.id]);
     p.fail = false;
+    await expect(store.commitOwnership(plan, { [local.id]: 'local' })).rejects.toThrow('保護停止');
+    store = (await open(p)).store;
+    plan = store.prepareOwnership(snapshot, 'accountA');
     await store.receive({ value: { ...account, title: 'remote edit' }, revision: 5, lastOpId: 'remote:5', lastDeviceId: 'remote', lastLocalSeq: 5, operationType: 'update' });
     await expect(store.commitOwnership(plan, { [local.id]: 'local' })).rejects.toThrow('変更');
     const fresh = store.prepareOwnership(snapshot, 'accountA');
@@ -180,8 +183,12 @@ describe('Phase D durable ownership application', () => {
     const { p, store } = await open(); const plan = store.prepareOwnership(source, 'accountA');
     p.fail = true; await expect(store.commitOwnership(plan, { a: 'local', b: 'local' })).rejects.toThrow();
     expect(store.nodes).toEqual([]); expect(store.outbox).toEqual([]); expect(p.journal).toBeNull();
-    p.fail = false; await store.skipOwnership(source, 'accountA');
-    await expect(store.commitOwnership(plan, { a: 'local', b: 'local' })).rejects.toThrow();
+    p.fail = false;
+    await expect(store.skipOwnership(source, 'accountA')).rejects.toThrow('保護停止');
+    const reopened = (await open(p)).store;
+    const fresh = reopened.prepareOwnership(source, 'accountA');
+    await reopened.skipOwnership(source, 'accountA');
+    await expect(reopened.commitOwnership(fresh, { a: 'local', b: 'local' })).rejects.toThrow();
   });
   it('a lost acknowledgement and failed receipt save survive restart without duplicate remote application', async () => {
     const { p, store } = await open(); const server = new InMemoryRevisionServer();

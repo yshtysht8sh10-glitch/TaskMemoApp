@@ -12,7 +12,7 @@ import { MemoCreateButton } from '../components/MemoCreateButton';
 const servers = new Map<string, InMemoryRevisionServer>();
 const fake = vi.hoisted(() => ({ auth: undefined as undefined | ((user: unknown) => void),
   receive: undefined as undefined | ((record: VersionedNode) => Promise<void>),
-  failure: null as unknown, uploadedTo: [] as string[],
+  failure: null as unknown, storageFailure: false, uploadedTo: [] as string[],
   applied: undefined as undefined | ((source: 'cache' | 'server') => void), storage: new Map<string, string>() }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, Alert: { alert: vi.fn() },
   Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
@@ -20,7 +20,7 @@ vi.mock('react-native', () => ({ Platform: { OS: 'android' }, Alert: { alert: vi
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async (key: string) => fake.storage.get(key) ?? null,
-  setItem: async (key: string, value: string) => { fake.storage.set(key, value); }, removeItem: async (key: string) => { fake.storage.delete(key); },
+  setItem: async (key: string, value: string) => { if (fake.storageFailure) throw new Error('synthetic storage failure'); fake.storage.set(key, value); }, removeItem: async (key: string) => { fake.storage.delete(key); },
 } }));
 vi.mock('firebase/auth', () => ({ onAuthStateChanged: (_auth: unknown, callback: typeof fake.auth) => { fake.auth = callback; return () => {}; },
   signOut: vi.fn(), signInWithEmailAndPassword: vi.fn(), createUserWithEmailAndPassword: vi.fn() }));
@@ -151,5 +151,11 @@ it('adds through the real button only for the active ready scope, supports offli
     await act(async () => { fake.applied!('server'); }); await clickAdd(); await save();
     expect(history.nodes.some(n => n.id === 'created-2')).toBe(true);
     expect(history.nodes.some(n => n.id === 'created-3')).toBe(true);
-  } finally { fake.failure = null; await act(async () => root.unmount()); host.remove(); }
+    const beforeFailure = new Map(fake.storage), uploaded = [...fake.uploadedTo];
+    fake.storageFailure = true;
+    await clickAdd(); await save();
+    expect(current.applicationState).toBe('error'); expect(current.startup.editable).toBe(false);
+    expect(fake.storage).toEqual(beforeFailure); expect(fake.uploadedTo).toEqual(uploaded);
+    expect(host.querySelector('[data-save]')).not.toBeNull(); // Preserve unsaved input.
+  } finally { fake.failure = null; fake.storageFailure = false; await act(async () => root.unmount()); host.remove(); }
 });

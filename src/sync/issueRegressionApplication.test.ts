@@ -41,6 +41,8 @@ it('[96-APPLICATION] occurrence order survives atomic persistence, restart, V2 s
   await expect(reorder()).rejects.toThrow('atomic');
   expect(a.nodes).toEqual(original); expect(a.outbox).toHaveLength(0);
   p.fail = false;
+  await expect(reorder()).rejects.toThrow('保護停止');
+  a = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'ignored', now: () => at });
   await reorder();
   expect(a.historyDepths.past).toBe(depth + 1);
   expect(a.outbox).toHaveLength(1); expect(a.outbox[0].targetNodeId).toBe('routine');
@@ -67,7 +69,10 @@ it('[65-APPLICATION] domain category drop is atomic with one History, Outbox, Un
   p.fail = true;
   await expect(move()).rejects.toThrow('atomic');
   expect(store.nodes).toEqual(original); expect(store.outbox).toHaveLength(outboxCount); expect(store.historyDepths.past).toBe(history);
-  p.fail = false; await move();
+  p.fail = false;
+  await expect(move()).rejects.toThrow('保護停止');
+  store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'ignored', now: () => at });
+  await move();
   expect(store.historyDepths.past).toBe(history+1); expect(store.outbox).toHaveLength(outboxCount+1);
   expect(store.nodes.find(n => n.id === 'a')).toMatchObject({ parentId: 'b', title: 'a', createdAt: at });
   expect(store.nodes.find(n => n.id === 'child')).toEqual(original.find(n => n.id === 'child'));

@@ -90,6 +90,12 @@ describe("IndexedDB V2 migration", () => {
     expect(await persistence.loadCommitted()).toBe(committed);
     expect(await persistence.loadJournal()).toBe(journal);
     persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    await expect(TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" })).rejects.toThrow('未確定journal');
+    expect(await persistence.loadCommitted()).toBe(committed);
+    expect(await persistence.loadJournal()).toBe(journal);
+    // Explicit synthetic recovery; ordinary startup must never promote a differing WAL.
+    await persistence.writeCommitted(journal);
+    await persistence.clearJournal();
     const recovered = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
     expect(recovered.nodes.find(node => node.id === "memo")?.title).toBe("before");
     expect(recovered.pinnedNote.body).toBe("profile body");
@@ -290,6 +296,11 @@ describe("IndexedDB V2 migration", () => {
     await legacy.writeJournal(journal!);
     const preserved = new Map(storage);
     const persistence = await IndexedDbTaskMemoApplicationJournal.open("account", factory);
+    await expect(TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" })).rejects.toThrow('未確定journal');
+    expect(await persistence.loadCommitted()).toBe(committed);
+    expect(await persistence.loadJournal()).toBe(journal);
+    await persistence.writeCommitted(journal!);
+    await persistence.clearJournal();
     let recovered = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: "ignored" });
     expect(recovered.nodes.find((node) => node.id === "memo")?.title).toBe("after");
     expect(recovered.outbox).toHaveLength(1);

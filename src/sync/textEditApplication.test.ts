@@ -199,7 +199,11 @@ describe('Text editing Application boundary', () => {
     expect(snapshot(store, persistence)).toBe(before);
     const reopened = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'ignored' });
     expect(snapshot(reopened, persistence)).toBe(before);
-    persistence.fail = false; expect(await store.commitTextEdit(plan, confirm(plan))).toHaveLength(2);
+    persistence.fail = false;
+    await expect(store.commitTextEdit(plan, confirm(plan))).rejects.toThrow('保護停止');
+    const reopenedSession = reopened.beginTextEdit(options);
+    const reopenedPlan = reopened.prepareTextEdit(reopenedSession, serializeText(reopenedSession).replace('仕事', 'change').replace('| A |', '| edit |'));
+    expect(await reopened.commitTextEdit(reopenedPlan, confirm(reopenedPlan))).toHaveLength(2);
   });
   it('[TW-ATOMIC-003] refuses storage without atomic capability and stale persisted envelopes', async () => {
     const { store, persistence } = await open(); const session = store.beginTextEdit(options);

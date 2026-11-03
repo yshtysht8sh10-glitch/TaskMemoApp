@@ -46,6 +46,7 @@ export class TaskMemoV2SyncController {
   async start() {
     recordSyncActivity(this.options.localOnly ? "localOnlyStart" : "normalStart", { deviceId: this.store.deviceId });
     this.stop();
+    if (this.protectStorage()) return;
     if (this.options.localOnly) {
       this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null };
       this.onChange();
@@ -105,6 +106,7 @@ export class TaskMemoV2SyncController {
       this.onChange();
     } catch (reason) {
       if (generation !== this.generation) return;
+      if (this.protectStorage()) return;
       this.ownershipAssessment = 'unavailable';
       const problem = classify(reason);
       this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });
@@ -160,7 +162,11 @@ export class TaskMemoV2SyncController {
     if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer);
     this.pinnedNoteTimer = setTimeout(() => {
       this.pinnedNoteTimer = undefined;
-      void this.store.queuePinnedNoteOperation().then(() => this.flush()).then(() => this.onChange());
+      void this.store.queuePinnedNoteOperation().then(() => this.flush()).then(() => this.onChange()).catch(reason => {
+        if (this.protectStorage()) return;
+        this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, ...classify(reason) });
+        this.onChange();
+      });
     }, debounceMs);
   }
 
@@ -274,6 +280,7 @@ export class TaskMemoV2SyncController {
   }
 
   async flush() {
+    if (this.protectStorage()) return;
     if (this.options.localOnly) return;
     recordSyncActivity("normalFlush", { deviceId: this.store.deviceId });
     if (this.paused) {
@@ -302,17 +309,19 @@ export class TaskMemoV2SyncController {
   private async drain(generation: number) {
     try {
       while (!this.stopped && generation === this.generation && this.store.outbox.length) {
+        if (this.protectStorage()) return;
         if (this.store.pendingOwnership?.state === 'conflict') return;
         const operation = this.store.outbox[0];
         this.state = transitionSyncState(this.state, { type: "upload-started", pendingCount: this.store.pendingCount, retry: operation.attemptCount > 0 });
         try {
           if (this.stopped || generation !== this.generation) return;
           const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
-            () => !this.stopped && generation === this.generation);
+            () => !this.stopped && generation === this.generation && !this.store.protectionError);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
           this.refresh();
         } catch (reason) {
+          if (this.protectStorage()) return;
           if (operation.ownership) await this.store.markOwnershipConflict();
           const problem = classify(reason);
           this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });
@@ -323,6 +332,15 @@ export class TaskMemoV2SyncController {
   }
 
   private refresh() {
+    if (this.protectStorage()) return;
     this.state = transitionSyncState(this.state, { type: "acknowledged", pendingCount: this.store.pendingCount });
+  }
+  private protectStorage() {
+    const error = this.store.protectionError;
+    if (!error) return false;
+    this.stop();
+    this.state = { phase: 'error', pendingCount: this.store.pendingCount, lastError: error.message };
+    this.onChange();
+    return true;
   }
 }

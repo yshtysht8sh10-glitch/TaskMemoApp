@@ -93,7 +93,9 @@ it('atomic failure keeps the empty domain, History, Outbox and local sequence', 
   const before = p.value; p.fail = true;
   await expect(store.ensureRoutineRoot()).rejects.toThrow('atomic'); expect(p.value).toBe(before);
   expect(store.nodes).toHaveLength(0); expect(store.outbox).toHaveLength(0);
-  p.fail = false; await store.ensureRoutineRoot(); expect(store.outbox[0].localSeq).toBe(1);
+  p.fail = false; await expect(store.ensureRoutineRoot()).rejects.toThrow('保護停止');
+  const reopened = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'ignored' });
+  await reopened.ensureRoutineRoot(); expect(reopened.outbox[0].localSeq).toBe(1);
 });
 it('V1 migration preserves raw source and existing metadata while provisioning only the missing root', async () => {
   const p = new Memory(), backup = new Memory();

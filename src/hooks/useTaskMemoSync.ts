@@ -12,6 +12,7 @@ import { shouldEnterLocalRecovery } from "../sync/localRecoveryRouting";
 import { createFirebaseSyncAdapter } from "../sync/firebaseSyncAdapter";
 import { TaskMemoV2ApplicationStore, type LegacyPinnedNoteCandidate } from "../sync/taskMemoApplicationStore";
 import { recoverV2ApplicationAfterAudit } from "../sync/recovery";
+import { repairRedundantJournalAtStartup } from '../sync/redundantJournalRecovery';
 import { beginRecoveryObservation, recordReceiptLookup, recordReceiptRead, recordRecoveryObservation,
   recordRecoveryTransaction, recoveryErrorCode } from "../sync/recoveryObservation";
 import { preflightJournalAuthoritativeRecovery,
@@ -136,6 +137,11 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
         publishedCandidatesRef.current = fingerprint;
         setLegacyPinnedNoteCandidates(candidates);
       }
+    }
+    if (store?.protectionError) {
+      controller?.stop(); startupEditableRef.current = false;
+      setApplicationState('error'); setStatus('error'); setError(store.protectionError.message);
+      return;
     }
     let ownershipStatus: TaskMemoSyncStatus | undefined;
     if (store && controller && !activeLocalRef.current && localApplicationRef.current) {
@@ -264,6 +270,10 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           publish(); await controller.start(); publish();
           return;
         }
+        if (persistence instanceof IndexedDbTaskMemoApplicationJournal) {
+          await repairRedundantJournalAtStartup(persistence, adapter, scope, () => currentGeneration === generation);
+          if (currentGeneration !== generation) return;
+        }
         if (guardedRecovery && await persistence.loadJournal()) {
           if ((manualAuthoritativePreflight || manualAuthoritativeExecution) && !manualBuildMatches)
             throw new Error("最新のRecovery版を確認できません。書き込みは開始しません。");
@@ -388,6 +398,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       return enabled; // V2 must not fall back to mutating V1 state.
     }
     void action(controller).then(publish).catch((reason) => {
+      if (storeRef.current?.protectionError) publish();
       setStatus("error"); setError(message(reason));
       if (!localSaveErrorShownRef.current) {
         localSaveErrorShownRef.current = true;
@@ -411,10 +422,11 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     const succeeded = await confirmedSave(
       () => controller.commandLocal(label, inferSyncOperationType(label), operation, { recordHistory }),
       (reason) => {
+        if (storeRef.current?.protectionError) publish();
         const detail = message(reason);
         const quota = reason && typeof reason === "object" && "name" in reason && reason.name === "QuotaExceededError";
         setStatus("error"); setError(detail);
-        appAlert("保存エラー", `${quota ? "端末の保存容量が不足しています。" : "変更を端末に保存できませんでした。"}入力内容を保持したまま再試行してください。\n${detail}`);
+        appAlert("保存エラー", `${quota ? "端末の保存容量が不足しています。" : "変更を端末に保存できませんでした。"}入力内容とバックアップを保持し、ストレージ診断を確認してください。\n${detail}`);
       },
     );
     if (succeeded) publish();
