@@ -2,7 +2,7 @@ import { nodeToV2Value } from './nodeV2Codec';
 import { findRoutineRoot } from '../domain/routineRoot';
 import { initialSyncState, transitionSyncState } from "./stateMachine";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
-import type { SyncAdapter, SyncFailureKind, SyncOperationType, SyncState } from "./types";
+import type { SyncAdapter, SyncFailureKind, SyncOperationType, SyncState, VersionedNode } from "./types";
 import type { LegacyPinnedNoteCandidate, TaskMemoV2ApplicationStore } from "./taskMemoApplicationStore";
 import type { Node } from "../models/node";
 import type { SessionOptions } from '../textFormat/session';
@@ -74,19 +74,17 @@ export class TaskMemoV2SyncController {
       }
       this.unsubscribe = this.adapter.subscribe?.(
         async (record) => {
-          if (generation !== this.generation) return;
-          await this.store.receive(record);
-          this.refresh();
-          await this.flush();
-          this.onChange();
+          await this.receiveRecords([record], generation);
         },
         (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
-        (source) => { if (generation !== this.generation) return; this.snapshotSource = source; this.onChange(); },
+        (source) => { if (generation !== this.generation || source === this.snapshotSource) return; this.snapshotSource = source; this.onChange(); },
+        (records) => this.receiveRecords(records, generation),
       );
       const unsubscribePinnedNote = this.adapter.subscribePinnedNote?.(
         async (record) => {
           if (generation !== this.generation) return;
           await this.store.receivePinnedNote(record);
+          if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
         (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
@@ -95,6 +93,7 @@ export class TaskMemoV2SyncController {
         async (record) => {
           if (generation !== this.generation) return;
           await this.store.receiveFeatures(record);
+          if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
         (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
@@ -112,6 +111,18 @@ export class TaskMemoV2SyncController {
       this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });
       this.onChange();
     }
+  }
+
+  private async receiveRecords(records: VersionedNode[], generation: number) {
+    if (generation !== this.generation) return;
+    const before = this.state;
+    const results = await this.store.receiveBatch(records);
+    if (generation !== this.generation) return;
+    this.refresh();
+    await this.flush();
+    if (generation !== this.generation) return;
+    if (results.some(result => result !== 'duplicate') || before.phase !== this.state.phase ||
+        before.pendingCount !== this.state.pendingCount || before.lastError !== this.state.lastError) this.onChange();
   }
 
   private async adoptInitialOwnership(generation: number) {

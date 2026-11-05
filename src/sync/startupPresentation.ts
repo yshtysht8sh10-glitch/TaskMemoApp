@@ -15,9 +15,11 @@ export function startupPresentation(input: StartupInput) {
   if (input.snapshotSource === 'server' && !['offline', 'error', 'retrying', 'connecting', 'onboarding'].includes(input.status))
     return result(input.status === 'synced' ? 'クラウドの一覧を確認済み' : 'クラウドの一覧を確認済み · 同期処理中', true, true);
   const failed = ['offline', 'error', 'retrying'].includes(input.status);
-  const show = input.elapsed || failed;
-  const guidance = !failed && !(show && input.cacheEditing)
+  // ready means the active account has passed local/Journal checks. Browsing
+  // need not wait for Cloud; retain the existing delay/consent for editing.
+  const canChooseCache = input.elapsed || failed;
+  const guidance = !failed && !(canChooseCache && input.cacheEditing)
     ? ' クラウドのデータを確認しています。完了すると編集できます。' : '';
-  return result((show ? `端末データを表示中 · 最新状態は未確認${failed ? '（通信・同期を確認してください）' : '（クラウド確認中）'}${input.cacheEditing ? ' · 端末データの編集を選択中' : ' · 閲覧のみ'}`
-    : '端末データを復元済み') + guidance, show, show && input.cacheEditing, show && !input.cacheEditing);
+  return result(`端末データを表示中 · 最新状態は未確認${failed ? '（通信・同期を確認してください）' : '（クラウド確認中）'}${canChooseCache && input.cacheEditing ? ' · 端末データの編集を選択中' : ' · 閲覧のみ'}`
+    + guidance, true, canChooseCache && input.cacheEditing, canChooseCache && !input.cacheEditing);
 }

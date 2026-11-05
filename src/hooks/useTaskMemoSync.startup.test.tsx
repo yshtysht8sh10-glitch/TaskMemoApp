@@ -47,7 +47,7 @@ vi.mock('../services/localV2Application', () => ({ openCommonLocalApplication: a
   return { scope: 'anonymous', store };
 } }));
 
-it('real React lifecycle hides anonymous/account transitions, bounds offline wait and applies server data without a local edit', async () => {
+it('real React lifecycle hides account transitions, immediately browses restored data, and bounds cache editing consent', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   let current!: ReturnType<typeof useTaskMemoSync>;
   let history = createNodeHistory([]);
@@ -68,7 +68,9 @@ it('real React lifecycle hides anonymous/account transitions, bounds offline wai
     expect(history.past).toHaveLength(0);
     await act(async () => { fake.auth!({ uid: 'startup-synthetic' }); });
     expect(current.applicationState, current.error ?? current.startup.message).toBe('ready');
-    expect(host.textContent).toBe('restoring');
+    // The restored account is empty; it is now visible before Cloud confirmation.
+    expect(host.textContent).toBe('');
+    expect(current.startup.showData).toBe(true);
     expect(current.startup.editable).toBe(false);
     vi.useFakeTimers();
     // Timer was installed before switching clocks; re-enter the account to install it on the fake clock.

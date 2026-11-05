@@ -385,7 +385,9 @@ export function deadlineGroups(
     ordered.forEach((memo, index) => {
       if (!routineCategoryForMemo(nodes, memo)) return;
       const key = rank(memo) ?? '';
-      ties.set(key, [...(ties.get(key) ?? []), index]);
+      const slots = ties.get(key);
+      if (slots) slots.push(index);
+      else ties.set(key, [index]);
     });
     for (const slots of ties.values()) {
       const routines = slots.map(index => ordered[index]).sort((a, b) =>
@@ -416,7 +418,11 @@ export function deadlineGroups(
       ? deadlineGroupForDueAt(occurrenceDueAt(memo), now, granularity)
       : deadlineGroupForMemo(memo, now, granularity);
     const key = visibleDeadlineGroup(source, visible, granularity, now);
-    if (key) grouped.set(key, [...(grouped.get(key) ?? []), memo]);
+    if (key) {
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(memo);
+      else grouped.set(key, [memo]);
+    }
   }
   return definitions
     .filter((definition) => visible.has(definition.id))

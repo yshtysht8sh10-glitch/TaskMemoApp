@@ -73,6 +73,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const PINNED_NOTE_HISTORY_COALESCE_MS = 1_000;
 
 export class TaskMemoV2ApplicationStore {
+  private diagnosticDomain?: Envelope['domain'];
+  private diagnosticRecords: readonly VersionedNode[] = [];
   private ownershipPlans = new Map<string, OwnershipPlan>();
   private textSessionSequence = 0;
   private readonly textSessions = new Map<string, TextSession>();
@@ -168,6 +170,14 @@ export class TaskMemoV2ApplicationStore {
   get ideasEnabled() { return this.envelope.profile.features.localIdeasEnabled; }
   get legacyPinnedNoteCandidates() { return [...this.envelope.profile.legacyPinnedNoteCandidates]; }
   versionedNode(id: string) { return this.envelope.domain[id]; }
+  /** Immutable domain identity for passive diagnostics; never a CAS baseline. */
+  get diagnosticSnapshot(): readonly VersionedNode[] {
+    if (this.diagnosticDomain !== this.envelope.domain) {
+      this.diagnosticDomain = this.envelope.domain;
+      this.diagnosticRecords = Object.values(this.envelope.domain);
+    }
+    return this.diagnosticRecords;
+  }
   /** Wait for edits already accepted by the UI before taking a recovery snapshot. */
   whenIdle() { return this.mutations.then(() => undefined); }
   get deviceId() { return this.envelope.deviceId; }
@@ -410,7 +420,13 @@ export class TaskMemoV2ApplicationStore {
   }
 
   async receive(incoming: VersionedNode) {
-    return this.serialize(() => this.receiveSerialized(incoming));
+    const results = await this.receiveBatch([incoming]);
+    return results[0];
+  }
+
+  /** One serialized mutation and one atomic envelope CAS per Cloud snapshot. */
+  async receiveBatch(records: readonly VersionedNode[]) {
+    return this.serialize(() => this.receiveBatchSerialized(records));
   }
 
   async initializePinnedNote(remote?: VersionedPinnedNote) {
@@ -584,31 +600,48 @@ export class TaskMemoV2ApplicationStore {
       return selfEcho ? "self-echo" as const : "remote" as const;
     });
   }
-  private async receiveSerialized(incoming: VersionedNode) {
-    const current = this.envelope.domain[incoming.value.id];
-    if (this.envelope.sync.seenOpIds.includes(incoming.lastOpId) &&
-        (current?.revision ?? -1) >= incoming.revision) return "duplicate" as const;
-    const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
-    const selfEcho = sameDevice && this.envelope.sync.outbox.some(operation => operation.opId === incoming.lastOpId);
-    const winner = selfEcho && !incoming.value.routineOutcomes && !incoming.value.routineLifecycle ? current : chooseVersionedNode(current, incoming);
-    let next: Envelope = {
-      ...this.envelope,
-      nextLocalSeq: sameDevice ? Math.max(this.envelope.nextLocalSeq, incoming.lastLocalSeq + 1) : this.envelope.nextLocalSeq,
-      domain: winner ? { ...this.envelope.domain, [incoming.value.id]: winner } : this.envelope.domain,
-      history: this.envelope.history,
-      sync: {
-        outbox: selfEcho ? this.envelope.sync.outbox.filter((operation) => operation.opId !== incoming.lastOpId) : this.envelope.sync.outbox,
-        seenOpIds: [...this.envelope.sync.seenOpIds, incoming.lastOpId].slice(-500),
-      },
-    };
+  private async receiveBatchSerialized(records: readonly VersionedNode[]) {
+    const results: ('duplicate' | 'self-echo' | 'remote')[] = [];
+    let domain = this.envelope.domain, nextLocalSeq = this.envelope.nextLocalSeq;
+    const pending = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
+    const acknowledged = new Set<string>();
+    let seenOpIds = this.envelope.sync.seenOpIds;
+    const mutations: VersionedNode[] = [];
+    for (const incoming of records) {
+      const current = domain[incoming.value.id];
+      const sameDevice = incoming.lastDeviceId === this.envelope.deviceId;
+      const selfEcho = sameDevice && pending.has(incoming.lastOpId);
+      // Always run the existing revision/tombstone/Routine merge before
+      // deciding whether this is an exact no-op. opId/revision alone is not enough.
+      const winner = selfEcho && !incoming.value.routineOutcomes && !incoming.value.routineLifecycle
+        ? current : chooseVersionedNode(current, incoming);
+      const sequence = sameDevice ? Math.max(nextLocalSeq, incoming.lastLocalSeq + 1) : nextLocalSeq;
+      const unchanged = same(winner, current);
+      if (!pending.has(incoming.lastOpId) && sequence === nextLocalSeq && unchanged &&
+          (same(incoming, current) || seenOpIds.includes(incoming.lastOpId))) {
+        results.push('duplicate'); continue;
+      }
+      if (winner && !unchanged) {
+        if (domain === this.envelope.domain) domain = { ...domain };
+        domain[incoming.value.id] = winner;
+        mutations.push(incoming);
+      }
+      nextLocalSeq = sequence;
+      if (selfEcho) { pending.delete(incoming.lastOpId); acknowledged.add(incoming.lastOpId); }
+      seenOpIds = [...seenOpIds, incoming.lastOpId].slice(-500);
+      results.push(selfEcho ? 'self-echo' : 'remote');
+    }
+    if (results.every(result => result === 'duplicate')) return results;
+    const next: Envelope = { ...this.envelope, domain, nextLocalSeq,
+      sync: { outbox: acknowledged.size ? this.envelope.sync.outbox.filter(operation => !acknowledged.has(operation.opId))
+        : this.envelope.sync.outbox, seenOpIds } };
     const remoteNodes = Object.values(next.domain).map(record => nodeFromV2Value(record.value));
     const started = new Date();
     try { recordSortKeyPass("remote-listener", remoteNodes, normalizeNodeSortKeys(remoteNodes), 0,
       started, Date.now() - started.getTime()); } catch { /* Passive diagnostics never reject remote input. */ }
-    const localMutation = !same(next.domain, this.envelope.domain);
     await this.commit(next);
-    if (localMutation) recordSyncActivity("listenerLocalMutation", { operationId: incoming.lastOpId, deviceId: incoming.lastDeviceId });
-    return selfEcho ? "self-echo" as const : "remote" as const;
+    for (const incoming of mutations) recordSyncActivity("listenerLocalMutation", { operationId: incoming.lastOpId, deviceId: incoming.lastDeviceId });
+    return results;
   }
 
   async acknowledge(opId: string, record?: VersionedNode, pinnedNoteRecord?: VersionedPinnedNote, featuresRecord?: VersionedFeatures) {

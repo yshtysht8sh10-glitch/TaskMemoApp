@@ -122,6 +122,8 @@ export interface SyncAdapter {
     onRecord: (record: VersionedNode) => void | Promise<void>,
     onError: (reason: unknown) => void,
     onSnapshotApplied?: (source: 'cache' | 'server') => void,
+    /** Optional durable snapshot receiver; legacy adapters may still deliver individual records. */
+    onRecords?: (records: VersionedNode[]) => void | Promise<void>,
   ): () => void;
   readPinnedNote?(): Promise<VersionedPinnedNote | undefined>;
   subscribePinnedNote?(

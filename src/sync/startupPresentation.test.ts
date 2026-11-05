@@ -5,7 +5,8 @@ const account = { preferencesReady: true, authReady: true, applicationState: 're
 it('hides pre-auth Local and pre-load empty data even when a controller says synced', () => {
   expect(startupPresentation({ ...account, authReady: false, account: false }).showData).toBe(false);
   expect(startupPresentation({ ...account, applicationState: 'opening' }).showData).toBe(false);
-  expect(startupPresentation(account).showData).toBe(false);
+  // Local browsing is now independent of server confirmation; pre-auth/load guards remain above.
+  expect(startupPresentation(account)).toMatchObject({ showData: true, editable: false });
 });
 it('bounds the cloud wait with an explicitly unverified read-only fallback; local-only and applied server data are usable', () => {
   expect(startupPresentation({ ...account, elapsed: true })).toMatchObject({ showData: true, editable: false, canUseCache: true });
@@ -20,7 +21,7 @@ it('explains when editing becomes available throughout the initial cloud check',
     const state = startupPresentation({ ...account, status: 'connecting', elapsed });
     expect(state.message).toContain('クラウドのデータを確認しています。完了すると編集できます。');
     expect(state.editable).toBe(false);
-    expect(state.showData).toBe(elapsed);
+    expect(state.showData).toBe(true);
   }
 });
 
@@ -34,4 +35,14 @@ it('does not keep the waiting instruction after error, offline choice, sign-out 
   const chosen = startupPresentation({ ...account, elapsed: true, cacheEditing: true });
   expect(chosen.editable).toBe(true);
   expect(chosen.message).not.toContain(waiting);
+});
+
+it('shows safely restored account data immediately without enabling editing or early cache consent', () => {
+  for (const status of ['connecting', 'onboarding', 'pending', 'synced']) {
+    expect(startupPresentation({ ...account, status })).toMatchObject({ showData: true, editable: false, canUseCache: false });
+  }
+  for (const input of [{ ...account, authReady: false }, { ...account, preferencesReady: false },
+    { ...account, applicationState: 'opening' as const }, { ...account, applicationState: 'error' as const }]) {
+    expect(startupPresentation(input).showData).toBe(false);
+  }
 });

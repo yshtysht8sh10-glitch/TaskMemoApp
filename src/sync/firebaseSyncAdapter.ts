@@ -550,20 +550,25 @@ export function createFirebaseSyncAdapter(
       return snapshot.exists() ? snapshot.data().record as VersionedFeatures : undefined;
     },
 
-    subscribe(onRecord, onError, onSnapshotApplied) {
+    subscribe(onRecord, onError, onSnapshotApplied, onRecords) {
       let active = true;
       let failed = false;
       let queue = Promise.resolve();
       const unsubscribe = onSnapshot(collection(db, "users", uid, "nodesV2"), { includeMetadataChanges: true }, (snapshot) => {
         queue = queue.then(async () => {
           if (!active || failed) return;
+          const records: VersionedNode[] = [];
           for (const change of snapshot.docChanges()) {
             if (!active) return;
             if (change.type === "removed") continue;
             const record = change.doc.data().record as VersionedNode | undefined;
             recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
-            if (record) await onRecord(record);
+            if (record) {
+              if (onRecords) records.push(record);
+              else await onRecord(record);
+            }
           }
+          if (active && records.length) await onRecords!(records);
           if (active) onSnapshotApplied?.(snapshot.metadata.fromCache ? 'cache' : 'server');
         }).catch(reason => { failed = true; if (active) onError(reason); });
       }, onError);

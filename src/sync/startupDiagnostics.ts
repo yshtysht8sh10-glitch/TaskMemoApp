@@ -8,11 +8,18 @@ function fingerprint(value: unknown) {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 let events: object[] = [], last = '';
-export function beginStartupDiagnostics() { events = []; last = ''; }
-export function recordStartupSnapshot(source: string, records: VersionedNode[], pendingCount: number, history: { past: number; future: number }) {
-  const sorted = [...records].sort((a, b) => a.value.id.localeCompare(b.value.id));
-  const evidence = { source, count: records.length, dataFingerprint: fingerprint(sorted.map(r => r.value)),
-    revisionFingerprint: fingerprint(sorted.map(r => [r.value.id, r.revision, r.lastOpId])), pendingCount, history };
+let previousRecords: readonly VersionedNode[] | undefined;
+let digests: { dataFingerprint: string; revisionFingerprint: string };
+export function beginStartupDiagnostics() { events = []; last = ''; previousRecords = undefined; }
+/** records must be an immutable snapshot; Store replaces its identity on domain changes. */
+export function recordStartupSnapshot(source: string, records: readonly VersionedNode[], pendingCount: number, history: { past: number; future: number }) {
+  if (records !== previousRecords) {
+    const sorted = [...records].sort((a, b) => a.value.id.localeCompare(b.value.id));
+    digests = { dataFingerprint: fingerprint(sorted.map(r => r.value)),
+      revisionFingerprint: fingerprint(sorted.map(r => [r.value.id, r.revision, r.lastOpId])) };
+    previousRecords = records;
+  }
+  const evidence = { source, count: records.length, ...digests, pendingCount, history };
   const key = canonical(evidence);
   if (key === last) return;
   last = key;

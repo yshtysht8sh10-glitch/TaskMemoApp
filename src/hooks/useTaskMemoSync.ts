@@ -120,7 +120,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     if (controller) setSnapshotSource(controller.snapshotSource);
     if (store && controller) recordStartupSnapshot(activeLocalRef.current ? 'anonymous-local' :
       `${Platform.OS === 'web' ? 'account-indexeddb' : 'account-native'}+${controller.snapshotSource}`,
-      store.nodes.map(node => store.versionedNode(node.id)!), store.pendingCount, store.historyDepths);
+      store.diagnosticSnapshot, store.pendingCount, store.historyDepths);
     if (store) onHistoryRef.current(store.history);
     if (store && store.pinnedNote.body !== publishedPinnedNoteRef.current) {
       publishedPinnedNoteRef.current = store.pinnedNote.body;

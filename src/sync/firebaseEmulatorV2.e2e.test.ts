@@ -1,6 +1,7 @@
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
 import { collection, getDocs, doc, getDoc, runTransaction, setDoc, Timestamp, type Firestore } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { generateNKeysBetween } from 'fractional-indexing';
 
 import { createNode, hardDeleteNode, updateNode } from "../domain/nodeOperations";
 import { deadlineGroups, moveMemoInDeadlineList } from '../domain/deadlineView';
@@ -42,6 +43,36 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('applies the real SDK initial snapshot through one atomic envelope commit and skips an identical restart', async () => {
+    const keys = generateNKeysBetween(null, null, 50);
+    const records = Array.from({ length: 50 }, (_, i) => ({
+      value: { id: `startup-${i}`, type: 'memo', memoType: 'task', parentId: null, sortKey: keys[i],
+        title: `synthetic startup ${i}`, body: '', status: 'active', completedAt: null, deletedAt: null,
+        dueAt: null, duePreset: 'none', createdAt: '2026-11-04T00:00:00Z', updatedAt: '2026-11-04T00:00:00Z' },
+      revision: 1, lastOpId: `server:${i}`, lastDeviceId: 'server', lastLocalSeq: i, operationType: 'import' as const,
+    }));
+    await environment.withSecurityRulesDisabled(async context => {
+      await Promise.all(records.map(record => setDoc(doc(context.firestore(), `users/owner/nodesV2/${record.value.id}`),
+        { ownerUid: 'owner', schemaVersion: 2, record })));
+    });
+    let raw: string | null = null, commits = 0;
+    const persistence: ApplicationJournalPersistence = { loadCommitted: async () => raw, loadJournal: async () => null,
+      writeAtomic: async (expected, value) => { if (raw !== expected) throw Error('CAS'); raw = value; commits++; },
+      writeCommitted: async () => { throw Error('atomic only'); }, writeJournal: async () => { throw Error('no WAL'); }, clearJournal: async () => {} };
+    const bootstrap = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'startup-sdk' });
+    // Provision the clean synthetic profile so the counter measures Node reception only.
+    await bootstrap.initializePinnedNote(); await bootstrap.initializeFeatures(); commits = 0;
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const controller = new TaskMemoV2SyncController(bootstrap, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    try {
+      await controller.start(); await waitFor(() => controller.snapshotSource === 'server');
+      expect(bootstrap.nodes).toHaveLength(50); expect(commits).toBe(1);
+      expect(JSON.parse(raw!).sync.outbox).toEqual([]);
+      commits = 0; await controller.start(); await waitFor(() => controller.snapshotSource === 'server');
+      expect(commits).toBe(0); expect(bootstrap.historyDepths).toEqual({ past: 0, future: 0 });
+    } finally { controller.stop(); }
+  }, 20_000);
 
   it('keeps pending tasks and definition completion through SDK receipts, another session and resume', async () => {
     const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
