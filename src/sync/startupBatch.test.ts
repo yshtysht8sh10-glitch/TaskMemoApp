@@ -141,3 +141,16 @@ it('does not silently deduplicate an unrelated malformed Outbox while receiving 
   expect(reopened.outbox).toHaveLength(2);
   expect(JSON.parse((await persistence.loadCommitted())!).sync.outbox).toEqual(envelope.sync.outbox);
 });
+
+it('skips a reordered-field snapshot whose bounded seen bookkeeping returns to the same durable state', async () => {
+  const { persistence, store } = await setup();
+  const records = Array.from({ length: 600 }, (_, i) => record(`memo-${i}`));
+  await store.receiveBatch(records);
+  const raw = await persistence.loadCommitted();
+  // Firestore/cache decoders need not preserve JSON object property insertion order.
+  const reordered = records.map(r => ({ ...r, value: Object.fromEntries(Object.entries(r.value).reverse()) as VersionedNode['value'] }));
+  const atomic = vi.spyOn(persistence, 'writeAtomic');
+  const result = await store.receiveBatch(reordered);
+  expect(atomic).not.toHaveBeenCalled(); expect(result.every(r => r === 'duplicate')).toBe(true);
+  expect(await persistence.loadCommitted()).toBe(raw);
+});

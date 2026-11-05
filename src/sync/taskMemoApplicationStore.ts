@@ -632,6 +632,10 @@ export class TaskMemoV2ApplicationStore {
       results.push(selfEcho ? 'self-echo' : 'remote');
     }
     if (results.every(result => result === 'duplicate')) return results;
+    // SDK/cache decoding can reorder object fields. After applying every merge,
+    // a full snapshot may only cycle the bounded seen window back to itself.
+    if (domain === this.envelope.domain && nextLocalSeq === this.envelope.nextLocalSeq &&
+        acknowledged.size === 0 && same(seenOpIds, this.envelope.sync.seenOpIds)) return results.map(() => 'duplicate' as const);
     const next: Envelope = { ...this.envelope, domain, nextLocalSeq,
       sync: { outbox: acknowledged.size ? this.envelope.sync.outbox.filter(operation => !acknowledged.has(operation.opId))
         : this.envelope.sync.outbox, seenOpIds } };
