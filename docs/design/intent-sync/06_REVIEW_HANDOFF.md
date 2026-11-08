@@ -50,7 +50,31 @@
 
 レビューだけには本番読取は不要。移行計画の現物化で必要になった時点で、本人UID・対象source/field・件数上限・目的・保管先・共有時の秘匿を提示し承認を待つ。今の依頼を将来の無制限読取権限としない。
 
-## 6. この設計PRの検証
+## 6. REQUEST CHANGES対応表（再レビュー対象）
+
+レビュー原文: [PR #123 REQUEST CHANGES](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/123#issuecomment-6722175833)。方式Bと共通intent同期の基本方針は維持する。以下は設計修正の対応であり、製品での解決済み判定ではない。
+
+|レビュー指摘|修正文書・節|追加仕様|対応テスト（05節6）|残存リスク|
+|---|---|---|---|---|
+|R1 常設メモ/features/settings/Historyの移行先不足|01節8、02節2・8、04節2・7|全永続種別のsource→typed resource/local設定→History/候補→機能照合。dirty/false/空bodyを保護。account同期と端末固有を列挙。rawだけでは成功不可|R1-01〜08（正常/競合/異常/再起動/失敗復旧）|実sourceの未知型・元基点不明は未計測。安全変換不能は停止/部分移行の個別承認であり自動解決しない|
+|R2 古い一致checkpointで巻戻り|02節9、04節8|active UUIDとaccount単調publication、immutable manifest/祖先/root検証、watermark/state/ledger同CAS。遅延intentと遅延projectionを区別。旧seq/旧世代で退役させない|R2-01〜08|単調publisher/closure/manifestの容量と実装は未検証。全媒体が古いoffline復元は新writer不可となる可用性制約|
+|R3 freeze後Admin/seal後chunk/rollbackのTOCTOU|03節9、04節5・8|全writer実書込と同transaction fence、不対応Admin権限停止＋drain、source catalog固定、immutable seal、fresh readyとactivation、rollback前の同barrier|R3-01〜08|全writer/権限停止の実査未実施。非協調writerが停止確認不能なら切替不可。将来Rules/Functions/IAM変更は別承認|
+|R4 memory-only/保存待ちdraftの回収不足|01節9、03節5・10、04節7|更新/離脱前原文回収、全contextの入力/IME/timer/queue/通信静止、capture epochとready取消、再capture/backup。旧tabはlockだけで停止としない|R4-01〜08|旧画面の安全取得可否は実機未検証。OSで既に失われた入力は復元保証不可。未確認context/取得不能入力があれば停止|
+
+### P0〜P5 exit条件への追加（節3の条件と両方必須）
+
+|工程|追加exit条件|
+|---|---|
+|P0|01節8の全source分類と節9の全画面draft回収、原文/全設定/全Historyの独立読戻し。旧open前保護と全context roster。R1-04/07/08、R4-01/02/05/07が停止条件を含め合格|
+|P1|typed resource全種、因果intentとpublicationを独立モデル化。R1-02/03/05、R2-01〜08のpure順列で現在値/候補/ledger不変条件を確認|
+|P2|capture epoch付きlocal fence、watermark/state/ledger同raw CAS、原文revisionと保存revision分離。R1-06、R2-03/07、R4-03/04/06/08のcrash/失敗合格|
+|P3|全writerの同transaction control検査、不対応Admin停止証明、単調manifest公開、seal後同epoch拒否。R3-01〜08をEmulator/DEVで再現し、旧SDK拒否でlocal原操作保持|
+|P4|全resourceの機能照合/History/UI回収先、source catalog/page完全性、sealとfresh ready、R2/R3 rollback証明。R1全件、R2-07、R3-04/05/07/08の完全checkpoint独立復旧|
+|P5|iPhone PWA/Safari/PC全context、IME/旧tab/ネットワークcallbackの静止とready取消。古いcheckpoint/世代応答の隔離、候補/未完全同期/回復draftのUI確認。R4全件とR2全件の実機対象分|
+
+既存のREQUEST CHANGESを開発担当が解除/解決済みにせず、修正版commitに対するレビュー判断を待つ。部分移行/未知データ例外、Rules/IAM/実データ読取・配信の承認はこの再レビューに含めない。
+
+## 7. この設計PRの検証
 
 製品コード/Rules/既存テストのdiffがないこと、Markdown内部リンク/固定版コード参照の存在、10成果物と12ゲートの対応、commit ancestry/未push混入なしを確認する。設計レビュー前にprototypeや新テスト実装を追加しない。設計の整合確認と将来の実行テストのPASSを混同しない。
 

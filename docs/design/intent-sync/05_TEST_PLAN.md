@@ -73,3 +73,61 @@
 ## 5. 性能/容量の回帰計画
 
 100/500/1,000/5,000 Node＋独立した操作/receipt数・競合数・History容量を増やす。server read、Node投影作成、復元/検証、local raw CAS、初回一覧、操作受領、反映済みの時刻を分ける。baselineからの再起動は全receipt全走査を毎回必須にせず、検証済みsnapshot＋厳密な未処理集合/差分取得を使う。snapshotは参照した操作/候補/clockを保持し、最適化でgapやrawを削らない。compact/GCは別承認まで行わない。
+
+## 6. REQUEST CHANGES対応の具体的受入ケース
+
+以下は**追加するテストの仕様**であり、未実装/未実行。正常・異常・競合・再起動・失敗復旧を4項目それぞれで検証する。全ケースでsource raw不変、元identity/原文保全、ready/状態/ledgerの期待をassertし、件数だけでは合格にしない。
+
+### R1: 全resourceの機能移行
+
+|ID/分類|fixture・順序|期待値/停止・再開条件|
+|---|---|---|
+|R1-01 正常|node/Routine実績、pinned body=A、features=true、端末別4種設定、候補、3型Historyを移行→読戻し|全resourceが対応UIで利用可。ID/日別取消/retained/本文/flag/History方向/未知field一致。iPhone dark・PC lightは別々保持|
+|R1-02 競合|Cloud body=A、iPhone localBody=B/dirty、PC localBody=C/dirty、双方Outbox/receiptを用意|基点が共通ならB/C候補両方。receivedとappliedを区別。dirtyをclearしただけではready不可。本人解決後の新head/Historyまで照合|
+|R1-03 競合|ideasEnabledの共通falseから片方true、もう片方明示false、後者にHistory/未送信op|並行true/falseを候補保持。偽値/欠落を同一にせず、同期設定の別localコピーを作らない|
+|R1-04 異常|body/候補/旧whole-state Historyはraw archiveにあるが新resource/回復UIから参照不能|conservationだけでは合格不可。機能照合失敗でseal/ready停止。対応reader/写像修正後に再照合|
+|R1-05 再起動|profile History/dirty/候補をstaging後crash→再開→Undo/Redo確認|同resource/command/方向/原文を保持し二重intentなし。変換不能Historyは閲覧可だが実行不可を明示、通常成功は止める|
+|R1-06 失敗復旧|settings復元途中容量不足→再起動→checkpoint再読込|元設定/原文不変。部分設定を移行成功としない。再試行で元端末scopeの全設定を検証してからready|
+|R1-07 異常|未知永続key、無効theme、未知features型、ownership途中、日時精度超過を各fixtureへ注入|defaultに落として成功不可。未分類/意味不明を表示し停止。修正承認/reader追加後に新attemptで照合|
+|R1-08 正常/復旧|全列挙種別とschema1〜4/復旧backupを同時に含むcheckpointを独立環境へ復元|01節8全行にsource→target/状態/照合結果あり。重複backupで二重createせず、OS許可を設定flagと混同しない|
+
+### R2: 操作因果とpublication配送を分ける
+
+|ID/分類|fixture・順序|期待値/停止・再開条件|
+|---|---|---|
+|R2-01 正常/逆順|C1=★ON、C2=ON観測後OFFを適用→C1の一致した結果＋投影をまとめて再配送|OFF/heads/conflicts/awaiting/appliedPublication=C2が不変。旧証拠保存だけ可。C1へCASしない|
+|R2-02 正常/逆順|C2結果だけ先着、C1投影、C2投影、最後にC1結果|C2全member検証まで現在状態維持、C2を一括適用。後続C1一致ペアもno-op。部分結果でledger退役不可|
+|R2-03 再起動|C2保存後crash→C1イベント/worker復帰|watermarkとstate/ledgerが同CASで復元されOFF保持。C2保存CASがabortした別fixtureではC2を再取得して検証|
+|R2-04 競合|complete→取消を観測発行→complete原op再送、別opIdの真の並行completeも配送|重複/祖先はactiveを戻さず再適用なし。並行completeは新publicationで候補保全、activeへ黙って確定しない|
+|R2-05 遅延正当操作|offline端末の小さいlocalSeqの未受領body操作、同時completion、依存親を後着|body/完了を合成。親未着はdurable pending、親到着後に処理。最大seq/時刻で破棄しない|
+|R2-06 異常/世代|G2切替後にG1応答、同seq異hash、祖先不明新seq、別scope callback|旧世代/別scopeを隔離、分岐は保護停止、参照不足は保留。現在state/ledgerを置換しない|
+|R2-07 失敗復旧|古い完全checkpoint C1を復元、端末/serverはC2、offline起動→online|offline read-only/未検証表示。C1のOutbox=0でC2 pendingを消さず、C2照合後に未反映原opだけ再開|
+|R2-08 重複/破損|同opId同payloadを再配送、同opId異payload、multi-resource manifestの一chunk欠落|同payloadは同receipt/no二重適用。異payloadは衝突保全。欠chunk中はcommand全体保留、補完後のみ一括CAS|
+
+### R3: fence・seal・activate/rollback競合
+
+|ID/分類|fixture・順序|期待値/停止・再開条件|
+|---|---|---|
+|R3-01 正常|PREPAREで入力/受付停止→全writer drain→source列挙→chunk→seal→二台fresh ready→activate|固定source/target rootsの同一性、phase/epoch/seal一致、pointerと新能力が同transactionで有効化|
+|R3-02 競合/Admin|Adminが旧controlを読んで停止→freeze commit→Admin write再開|同transaction対応writerはretryで拒否。不対応Adminは権限停止/終端未証明ならFROZEN不可。二回read一致を合格理由にしない|
+|R3-03 競合/chunk|最終chunkとsealを競合、VERIFIED後に同epoch chunk、さらに旧epoch leaderを再開|先行chunkでcatalogが変わればseal再検証。seal先行なら同epochも拒否。旧leaderは常に拒否。sealed root不変|
+|R3-04 異常/列挙|page取得途中失敗、receipt page欠落、scope追加、sourceに未知field追加|全catalog終端証明なしでseal不可。source変更はbarrier破れとしてready失効、新attempt。単なるcount一致は不可|
+|R3-05 再起動|seal直前/直後/activation直後それぞれcrash、lease失効→別端末leader取得|FROZEN維持。新epochでchunk検証再利用、sealを変更しない。ready再取得。既activeを二重activeにしない|
+|R3-06 競合/切替|activateと通常受付を同時開始、二台別migration開始、activateとrollback競合|controlで直列化。境界前新受付拒否、後は正しい能力のみ受理。一migration/遷移だけ成功、他は保護停止|
+|R3-07 競合/rollback|R2候補の確認直前/直後に新intent受付、accepted未反映/reducer中/端末draftを各々注入|ROLLBACK_FROZEN前受領は固定集合へ含みR3扱い。後受領は拒否しlocal保持。なし判定後に新操作が紛れ込まない|
+|R3-08 失敗復旧|COPYING容量不足/通信切断、ready後source変更、rollback transaction成功後応答消失|ready取消/epoch更新、原本不変で再照合。transition ID照会で二重rollback/旧writer再許可なし|
+
+### R4: 入力・保存・通信のcapture
+
+|ID/分類|fixture・順序|期待値/停止・再開条件|
+|---|---|---|
+|R4-01 正常|iPhone/PCでtitle/body/常設メモ/設定を編集中→原文退避→本人local確定→静止→backup|原文と保存revisionの対応、全timer/queue/callbackの停止またはdurable隔離、draftを含む読戻し確認後だけready|
+|R4-02 異常/入力|inline title未確定＋IME中、600ms debounce、QuickTitle100ms blur、Quick Add未作成|composition終了/原文回収前に更新・離脱・cancel禁止。勝手なtrim/新規createをしない。取得不能ならready不可|
+|R4-03 競合/保存|保存revision D1進行中にD2追加入力→D1成功callback→capture|D2は残りD1成功でclear不可。ready取消、D2をlocal確定/回復draftへ写像して再capture|
+|R4-04 競合/callback|snapshot直後にdebounce/ACK/受信callback、ready後に新入力|旧epoch保存は拒否/原command保持。callbackは隔離inbox、capture hash変更でready失効。再ドレイン/再backup必須|
+|R4-05 異常/context|PC別windowの旧tab、iPhone PWA/Safari別storage contextを一つ未確認のまま準備|inspector/協調lockだけでは旧tab停止済みとしない。全context回収/終了後raw照合までready不可|
+|R4-06 再起動|draft bundle永続後crash、未送信Outbox/送信中結果不明を保持して再開|ready失効read-only。原文を回復UIで再編集可、原opIdを維持しreceipt照合。空draft/空Outboxを保存しない|
+|R4-07 失敗復旧|原文export/backup読戻し/保存に容量不足、旧tab終了時unmount保存失敗|旧画面/退避原文を維持し停止。終了確認だけで成功不可。終了後raw再取得/再検証に成功してからready|
+|R4-08 競合/Text|text≠validatedText、未確認削除plan、保存中にtext変更、通知/設定callback|text原文/session/base/確認状態を回収し自動plan実行不可。変更でready失効、設定/通知副作用も静止条件に含む|
+
+上記32ケースはpure/local/Emulatorで決定的race injectionを行い、draft/タブ/IME/Safari境界は使い捨てDEVの実機でも検証する。全ケースを実装PRの受入manifestへ対応付けるまで切替不可。性能測定は同じ保護を有効にした状態で行う。既存12反例を置き換えたり、今回の文書修正でPASSになったと主張したりしない。

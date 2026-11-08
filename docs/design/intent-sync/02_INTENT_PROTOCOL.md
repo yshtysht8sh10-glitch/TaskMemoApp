@@ -16,7 +16,7 @@ clientはraw保存済みintentを認証付き受付へ送る。共通backend red
 
 ```text
 Intent {
-  protocol, schema, accountScope, generation, nodeId,
+  protocol, schema, accountScope, generation, resourceType, resourceId,
   opId, actorId, actorIncarnation, localSeq, commandId,
   intentKind, writes: { attributePath -> explicitValue },
   observed: { attributePath -> { frontierHeads, baselineRef } },
@@ -25,6 +25,7 @@ Intent {
 }
 ```
 
+- 対象は型付きresource identity。nodeは元Node ID、pinnedNote/featuresはsingleton ID、候補はsource identity。端末設定はaccountへ送らずlocal scopeの別commandとする（節8）。
 - opIdは一意な不変identity。canonicalな不変intentのdigestを受領時に保存。同一opId/同一intentは同一結果を返し、異payloadは衝突として拒否し双方の証拠を保護する。
 - actorは端末instanceとincarnationに束縛。localSeqはatomicに採番するが、最大seqだけで既処理を判定しない。restoreで元actorを二台が新規採番に再使用しない。退避済み旧opIdを勝手に再採番もしない。
 - writesには変更した属性だけを入れる。値false/null、明示unset、未変更/欠落は別。old Node全体のstatus等を無関係な★/本文命令に含めない。
@@ -123,3 +124,61 @@ Firestore triggerは順序保証がなく重複配信があるため、trigger�
 旧appliedも既にbaselineへ含まれるか不明な場合がある。superseded completeも後に取消済みかもしれない。**全receiptを一律に再生して完了を復活させない**。分類はalready-represented / provable-unapplied / unresolved。全原操作/ACK/候補基点は保存し、unknownを削除/黙認でなく確認待ちとして表に出す。legacy provenanceと新op identityの対応はimmutable mappingにする。
 
 恒久的なold live bridgeは要件から外れたが、移行時の旧操作取込みと後発local退避は必須。旧writer停止の前後でどちらのpathが許されるかはrunbookで固定する。
+
+## 8. R1: Node以外のresourceと履歴
+
+型付き対象は`node/id`、`pinnedNote/main`、`features/main`、`legacyCandidate/sourceId`。世代内のbaseline/fieldStates/projections/resultsとHistory targetはこの同じidentityを使う。pinnedNoteはbody register、featuresはideasEnabled register、候補は内容不変＋採用状態register。singletonにNodeのsoft-delete/purgeやrankを適用しない。body空文字/ideasEnabled=falseは明示値、resource欠落は互換初期状態であって削除命令ではない。
+
+常設メモとfeaturesもNodeと同じ因果/受領/反映契約に従う。別端末のdirty bodyをCloud値で消さない。候補採用は候補状態とpinned bodyを含む原子command、観測後にbody/候補が変われば意味競合。Undo/Redoはそのresourceと属性を対象とし、元body/flag/候補の来歴を保持する。
+
+deviceSettingsはinstallation/origin/localScope別のlocal baseline＋単調local mutation seq＋local Historyを持ち、Cloud account publicationへ混ぜない。iPhoneとPCの設定は異なるままで正しい。新backupは端末設定集合を区別して含み、別端末復元は本人の明示選択がなければ現設定を置換しない。全resourceの旧形式変換・成功条件は01節8を規範とする。
+
+## 9. R2: 世代・publication・属性版・操作IDの役割
+
+- generationはserver controlが発行する不変UUID。大小で勝者選択せず、active pointerと証明された遷移だけを信用する。移行/復旧でUUIDを使い回さない。
+- `publicationSeq`は同世代内のaccount全体の単調整数。publisherがcontrol/直前headを同じtransactionで検査し一意に採番する。操作のlocalSeq/Node revision/時刻とは独立。未公開chunkには番号だけで確定表示の権利はない。
+- 属性head/observed frontierは因果関係、opIdは重複排除のidentity。publicationSeqが古いことと、その中のintentが無効であることは同義ではない。遅延する未受領intentをpublication順だけで破棄しない。
+
+### 9.1 immutable publication manifest
+
+`{generation, seq, previousManifestHash, baselineSeal, controlEpoch, resourceStateRoot, projectionRoot, resultRoot, operationCoverageRoot, conflictRoot, commandGroups, counts, schema, manifestHash}`を束縛する。各rootはID/版/hashを含む完全なmember一覧（または検証可能なchunk tree）を参照する。単に別々のlistenerの「最新」を束ねない。
+
+新状態/chunk/resultは不変stagingとして保存し、全chunkとcommand groupの検証後に、manifestとpublished headを同一fenced transactionで公開する。multi-resource/multi-Node commandの一部だけを公開しない。publisherが後からcurrent headを変更されれば再計算し、既存seqへ違うmanifestを上書きしない。保留中のpublicationはUIで確定状態にしない。
+
+結果は当該checkpointでの各operation状態を束縛する。後続結果で再評価/競合化した場合は新manifestへ含める。immutable evidenceの追加取得と、現在のstate/awaiting退役を別処理にする。
+
+### 9.2 clientの単調適用
+
+local Committedは`scope/incarnation/generation/appliedPublication(seq,hash)/heads/conflicts/awaiting`を同一raw CASで保存する。listener/worker要求開始時のscopeとactivation tokenも照合する。
+
+|受信条件|処理|
+|---|---|
+|退役scope/異account/退役世代の応答|現在state・受領・反映の判定に使わない。元scopeの証拠保全先へ隔離。pending原操作を消さない|
+|同世代 seq < 適用済み|結果と投影が一致ペアでも現在値/競合集合/awaitingを置換・退役しない。未取得のimmutable証拠は別途保存可能|
+|同seq/同hash|no-op。重複通知/保存不要。必要な未取得証拠だけ取り込む|
+|同seq/異hash、未知分岐/基点|protocol不整合として隔離/停止。大きいseqを理由に採用しない|
+|新seq、祖先chainと全root/command group検証済み|現在headのdescendantであることを確認し、state/ledger/適用watermarkを一括CAS。途中seqを省略するなら完全snapshotと祖先証明/操作coverageが必要|
+|新seqだが投影/結果/member未着|現在状態を維持しpending。欠けた参照を再取得、部分表示を確定させない|
+
+current projectionとは別にlocal pendingを属性intentとして重ねる。古いcheckpointのreceiptで新しいpendingを消さない。Outbox→awaitingの移管は有効なscope/世代で検証した同一payloadのaccepted receiptに限り、属性state反映の確定は新manifest検証後だけ。新たな真の並行操作は新seqのconflictとして公開されるので、単調適用は正当な競合化を拒否しない。
+
+### 9.3 遅延intentの受付分類
+
+同世代のactive受付はcontrol/epoch/phaseを実書込と同一transactionで検査する（03節9）。同じopIdでも不変payloadが違えばcollision。全retryは原opIdを維持する。
+
+|操作の来歴|受理/拒否/保全|
+|---|---|
+|既受領opId・同payload|既存receipt/結果を返すだけ。再適用しない。最新publication未取得なら取得へ|
+|未知opId・有効な同世代基点、未観測の別属性変更のみ|正当な遅延操作として受理・合成。小さいlocalSeq/古い作成時刻でも捨てない|
+|未知opId・同属性の因果祖先/後続|依存closureで判定。後続なら進める。既に現在headの祖先に含まれる事実なら証拠/coverageとして追加し再度headを戻さない|
+|未知opId・同属性の真の並行|候補として保全し新publicationでconflict化。先着/clock勝ちで破棄しない|
+|基点未取得/不正参照/意味依存違反|dependency-pending/semantic-conflictまたは検証拒否。原操作をdurableに残し、拒否をACK成功にしない|
+|旧世代/旧protocol/移行freeze中|通常受付は拒否しlocal原操作保持。退避/import専用planへ回す。旧generation文字列をactiveへ書き換えて再送不可|
+
+OFFがONを観測しているなら遅延ONは祖先/重複でありOFFを戻さない。完了取消も同様。未観測のON/completeが実際に並行なら候補として残す。legacy sourceで因果が証明不能ならraw＋明示候補で保全し、古いsnapshot値を新操作に発明しない。
+
+### 9.4 古いcheckpointからの起動・復元
+
+serverのactive generation/headと照合するまで復元snapshotは「古いローカル表示/未検証」のread-only。端末の別のdurable high-watermark/activation receiptより古ければ直接installしない。全媒体が古い場合はofflineで新writerを有効にせず、正本を取得するか明示した救済planを待つ。
+
+同世代なら最新検証manifestから差分/完全状態を取り込み、backupのpending intentをopIdで照合して未反映分だけ再開。退役世代なら旧raw/import sourceとして扱い、新世代のbaselineを上書きしない。checkpoint内の「当時Outboxが空」は現在awaiting/競合を消す根拠にならない。バックアップ復元はhigh-watermarkを巻き戻す操作ではない。

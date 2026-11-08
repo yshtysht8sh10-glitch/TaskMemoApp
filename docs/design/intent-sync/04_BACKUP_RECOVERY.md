@@ -10,7 +10,7 @@
 
 ## 2. 原本を失わないためのconservation規則
 
-全source itemを次のいずれかへ必ず写像する: unchanged archived raw、verified baseline/intent、説明付きlegacy-unresolved。分類除外や「不要だから削除」の暗黙branchを禁止。各itemはsourceRef/targetRefと検証hash/field意味差分を持つ。
+全source itemを次のいずれかへ必ず写像する: unchanged archived raw、verified baseline/intent、説明付きlegacy-unresolved。これは保全の最低条件で、移行成功の十分条件ではない。機能データは01節8の新resource/設定/候補/History経路から利用可能であることが別途必須。rawしかない本文・設定・未反映操作を「移行済み」と判定しない。分類除外や「不要だから削除」の暗黙branchを禁止。各itemはsourceRef/targetRefと検証hash/field意味差分を持つ。
 
 Node数だけ一致しても十分ではない。Node ID集合、全field/unknown、tombstone、各Routine日付/状態/changedAt/取消、lifecycle期間/retained、profile候補、操作/receipt identity、History項目、raw archive数、競合集合/依存を照合する。変換でDate表現等が変わる場合は承認した正規化規則と原文字列を一緒に残す。
 
@@ -46,7 +46,7 @@ sourceは旧raw/旧Cloudのまま。target stagingだけ未使用にする。再
 
 ### R2 active後・新操作なし
 
-新旧source照合と両端末のlocal変更なしを確認できた場合に限り、control pointerを戻す計画を別承認できる。単なる「操作した記憶がない」は証明ではない。切替中に片端末だけ新操作があればR3。
+03節9.4のROLLBACK_FROZEN barrier成立後に、新旧source照合と両端末のdraft/local/pending変更なしを証明できた場合に限り、旧sourceのread-only復旧表示を選択する計画を別承認できる。過去のwriter capabilityや世代tokenは再使用しない。単なる「操作した記憶がない」は証明ではない。切替中に片端末だけ新操作があればR3。検査とpointer選択は同一fenceに束縛し、旧書込許可を副作用で復活させない。
 
 ### R3 active後・新intentあり
 
@@ -59,3 +59,21 @@ Hosting artifactのrollback、制御pointer、ユーザーデータ復旧を別�
 iPhone/PCの片方を「クラウドにあるから不要」と初期化しない。片方のみの未送信操作/旧History/draftがあり得る。旧PWA/cacheからしか参照できないrawを、更新・サイトデータ消去・再インストールより先に独立退避する手順を準備する。今回その端末操作は行わない。
 
 完全backupが独立環境へ読み戻せ、全分類/件数/意味を復元できたことを移行許可の条件とする。試験は使い捨てDEV/ローカルで行い、本番復元で試さない。
+
+## 7. R1/R4: 完全checkpointとdraftの回復契約
+
+完全checkpointは01節8・9の全行をmanifest memberとして列挙する。account resourceとdevice/origin設定を別集合にし、各々にraw source、typed baseline/head、pending/awaiting、History past/future、candidate/legacy-unresolvedと回復UI参照を含む。保全済み/機能利用可能/実行不可History/未解決/未取得を別カウンタにする。未取得・未分類は成功不可、未解決を例外承認した場合は部分移行と表示する。
+
+draft bundleは`captureEpoch, installation, origin/storageContext, tab/editor, resource or createContext, rawInput, draftRevision, observedBase, saveRequestId/opId?, savedRevision?, confirmationState, compositionState`を持つ。本文だけでなくタイトル/周期/期限/設定の入力を含む。最新draftRevisionと保存完了revisionが異なれば未確定の差分を残し、古い保存完了で最新draftを退役させない。秘密認証情報は含めない。
+
+backupの時点を分ける: (1) 更新/離脱前の原文退避と初期raw、(2) 全writer静止・server freeze後の最終capture、(3) target seal後の新完全checkpointと照合証明、(4) activate/rollback前後の制御証拠。最終capture後に入力/保存状態が変われば(2)以降を失効させ再取得する。(1)を上書きせず来歴として残す。
+
+独立環境の回復試験では、常設メモ/ideasEnabledを実際のresourceとして、設定を元端末scopeで、Historyを対象型付きで、draftを再編集可能な回復画面で復元できることを確認する。rawファイル内に文字列を検索できたことだけを合格にしない。無効入力も原文のまま回復し、自動commitしない。
+
+## 8. R2/R3: 復元watermarkとrollback証明
+
+同世代復元は02節9.2〜9.4の単調適用に従い、appliedPublication/manifest hashを新state/ledgerと同じCASで保存する。古い一致ペア、古いbackup内のOutbox=0、過去のconflict解消結果で現在state/競合/awaitingを消さない。offlineで古い完全checkpointしかない場合は、read-only表示と原pending保全までとし、server headを検証するまで新writer能力を与えない。
+
+rollbackの「新操作なし」証明はROLLBACK_FROZEN後に固定したaccepted集合・publication head・未処理queue/実行中worker集合と、全端末のfresh captureをseal baselineと比較する。accepted済み未反映/送信中結果不明/未送信/draft/新Historyが一つでもあればR2不可。稼働writerの不在を証明できない場合も不可。証明hash/epoch/phaseをrollback transactionが再検証し、新受付とのraceを拒否する。
+
+R3は新generationをfreezeしたまま完全退避/forward recoveryとする。activationとrollbackが同時ならcontrol CASの一方だけが成立する。crash/retryは同じtransition IDを照会し、成功済み遷移を再実行してepochやwriter権限を戻さない。旧sourceへの追加書込や旧writer再許可はどの復元の自動副作用にも含めない。
