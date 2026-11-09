@@ -2,6 +2,8 @@
 
 状態: **実装レビュー用、保存/通信経路へ未接続、配信不可**。正本は[PR #123の承認済み設計212461c](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/tree/212461c99d3556e055fb5265cbc6e4c80116f8ac/docs/design/intent-sync)。その文書を変更しない。今回のPhase 1は設計工程P1を中心とした独立関数であり、P0の原本保護なしにユーザーデータを開く手順ではない。
 
+**2026-11-09 第2回修正R-F2は末尾を参照。** 以下の36件/46件の結果と旧F2説明は各commit時点の履歴で、Phase 1承認済みの意味ではない。今回の修正は受領事実・過去の反映確認・現在の競合状態を分ける。承認前にPhase 1完了/Phase 2進行としない。
+
 ## 基点と差分
 
 - 基点: `e18c4d1d88589103e6ad4d77241aead8d213f1bd`、公開branch `release/issue114-production-candidate`。ユーザー指定のProduction sourceをGit上で確認した。本番Hosting/Firestoreへ照会していない。
@@ -139,3 +141,64 @@ F2: 新しい純粋遷移`recordClientAccepted(current, receipt, callbackBinding
 修正後検証（今回実行）: 元3回帰PASS、既存36件＋追加10件＝Phase 1 **46 PASS**。全体 **1,330 PASS / 46既存skip**（166 files PASS / 4 skip）。skipは未実施で、変更していない。TypeScript、Lint、git diff --check成功。EXPO_OFFLINE=1・development設定のWeb production export成功（4 routes、公開Firebase設定の静的照合成功）、配信なし。最終通知ガード追加後に全体/型/Lint/buildを確認した。
 
 ログはrepository外`artifacts/pr124-fix-{red,focused,full,types,lint,web}.log`。途中、sandbox一時ファイルENOENTでsuite起動に失敗した実行は成功扱いにせず、制限外で再実行した。追加テスト変数のreadonly指定不足を型チェックで修正し、再実行成功。既存36件や既存skipの条件を変更していない。既知のjsdom alert未実装表示とbuildのNO_COLOR通知は出たが、各検証exit 0。
+
+## 2026-11-09 第2回修正 R-F2（再レビュー待ち）
+
+基点`7c27dc0cdb1b0cf29b36743ef481033f933daf7b`、[レビューR-F2](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/124#issuecomment-6733448253)のみ対象。最初に`reflectionHistory.test.ts`へcompletion T1/T2、body/body、applied→保護停止の3回帰を追加し、**修正前3 FAIL**を確認した。Rの到着位置でawaitingが違った。ログはrepository外`artifacts/pr124-rf2-red.log`。仕様正本212461cは変更しない。
+
+### 3種類の事実と保存する原本
+
+|区分|ClientSnapshot内の保存先|意味|
+|---|---|---|
+|受領済み事実|`evidence.receipts[] = {binding, receipt}`|scope/generation/bindingと不変payloadを照合したaccepted。反映成功/競合解消は意味しない|
+|検証済み結果来歴|`evidence.publications[] = {binding, publication, outcome}`|全member/hash/祖先を検証した完全publication。各checkpointの原intent/結果/候補も保持。保護候補はoutcome=protectedとして正常適用と区別|
+|過去の反映確認|`evidence.reflections[] = {binding, checkpoint, intent, result}`|正常適用したpublicationの同一原intentに対するapplied結果だけを追記。receipt未着でもP1の事実を保存する|
+|現在の状態|`state.fields/results`、`protection`|P2のMV候補/現在conflict・dependency-pending等。過去appliedでも現在conflict/保護停止は消えない|
+|配送の義務|`ledger.outbox/awaiting`|未受領と、受領済みで反映確認未取得を区別。現在の未解決競合全体を表すものではない|
+
+すべてClientSnapshot内の**純粋候補**。既存保存schema、Firestore receipt、Outbox adapterは変更しない。evidenceはcanonical JSONで集合の重複排除・決定的整列を行う。配列順自体は時系列を意味せず、時系列表示にはcheckpoint.seqを使う。receipt/intentをopIdだけで同一扱いしない。
+
+### 正規化と不変条件
+
+1. 正常publicationの完全検証後に、その原本と結果を保存し、appliedの確認事実を追記する。coverageに存在するだけ、値が同じだけ、最初からconflict/dependency-pending/rejectedという理由では反映確認を作らない。protected候補の結果が一部appliedでも新反映確認にはしない。
+2. accepted時は現在binding/scope/generation、pendingの全同ID原本とのcanonical payload一致を検査する。既に配送ledgerから退役した操作の再通知は、保持した同一原本/反映証跡で照合できる。異payload/退役bindingは証跡やledgerを変更しない。
+3. 両遷移で共通のnormalizeLedgerを呼ぶ。検証済みreceiptに対応するoutboxだけawaitingへ移し、**同じbindingと不変原intentの過去applied確認があるawaitingだけ**退役する。別の未受領操作はcoverageにあってもoutboxから消さない。退役しても原操作/receipt/結果はevidenceに残る。
+4. P1で確認した反映事実はP2のconflict/保護停止で消さない。後着Rも同じ事実を使うのでR→P1→P2、P1→R→P2、P1→P2→Rでsnapshot全体が一致する。P2の現在MV候補/未解決結果は別に維持する。
+5. **awaiting=[]は同期完了ではない。** 現在のstate.resultsのconflict/dependency-pending/rejected、protection、未受領操作等も別に評価する必要がある。今回は同期完了UI/本番判定を実装しない。過去のapplied確認で競合勝者を決めない。
+6. 古い/同一checkpointは現在stateやwatermarkを置換せず、未検証の古い結果から過去appliedを新規に作らない。保護状態を解除しない。各遷移のsnapshot全体を将来同一CASで保存する必要がある。
+
+承認設計02節4の「appliedはcheckpoint時点の確認」、節5の受領/反映分離とimmutable結果、節9の単調適用を具体化したもの。新競合勝者/移行/保護解除は導入しておらず、設計変更はない。
+
+### 必須ケースの対応
+
+|要求|追加テスト/検証|
+|---|---|
+|R/P1/P2 3順序、全snapshot比較|completion/body/protectionの3回帰。state/候補/checkpoint/ledger/evidence/原intentを丸ごと比較|
+|重複R/P1/P2、JSON保存復元|720ラベル順列（90種類の通知列）と各段階JSON再構築。先着P2はpendingのまま、P1後にP2再配送して同じ集合へ収束|
+|異なる完了日時T1/T2・本文並行|2候補と現在conflictを確認し、P1原文/時刻とP2両原操作/結果来歴を保持|
+|applied→保護停止|P1反映確認を保ったまま、P2原variantをprotected来歴に保持。診断state/checkpoint維持、保護解除なし|
+|初回からconflict/依存待ち|両receipt順でawaitingに残る。reflectionは空。protected候補だけのcovered操作も反映扱いしない|
+|conflict→明示resolve|過去appliedあり/なしを別試験。初回conflictからはresolveの検証publication後だけ反映確認を作り退役する|
+|別操作/不変payload/scope/binding|未送信の別操作保持、複数receiptの決定的集合、世代/account/epoch/incarnation/token/異payload拒否|
+|既存F1/OFF/取消/旧checkpoint|既存46件を再実行。6操作の720逐次順列も追加し、取消active/null・OFF・body2候補を値として確認|
+
+既存46件のうち`safetyRegression.test.ts`の保護停止後awaiting期待1か所を更新した。旧期待`[A]`はP1反映事実を忘れるR-F2そのものだったため、`[]`に加え**P1反映証跡・accepted原本・protected結果来歴・保護維持**をassertする。テストを削除/skipしたり、初回からのconflictを退役可能へ弱めたりしていない。
+
+### 残存リスク・レビュー境界
+
+全て隔離pure層内。receiptのauthenticity、server/crypto実装、CAS/Journal、durable hydration、移行、実機は未接続。入力snapshotは検証済みという前提であり、将来hydrationはbinding/high-watermarkだけでなくevidenceのmanifest/member/hash/祖先/結果/原payloadも照合する必要がある。JSON round-tripは意味保持の試験であって改ざん検証/耐久性の証明ではない。
+
+evidenceを持たない旧Phase 1 prototype snapshotに過去の反映事実を推定補完しない。将来readerは正本来歴の再検証か保護停止が必要。これは旧形式の本番データサポートを廃止する意味ではなく、今回そのreader/移行を実装しない。
+
+完全publication/原操作を追記するため容量・計算量は増える。GC/compactや保存失敗復旧は未検証で、削減のために証跡を捨てない。Domain意味競合の解決や保護解除は未実装。Phase 2、本番接続、Rules、配信、移行、★UIは未着手。**再レビュー承認までPhase 1を完了扱いにしない。**
+
+### 今回の実行結果
+
+- 修正前: 新規3回帰すべてFAIL → 修正後PASS。
+- focused: **58 PASS**（既存46件＋追加12件）、4 files PASS。
+- full: **1,342 PASS / 46既存skip**、167 files PASS / 4 skip。skipは未実施。
+- TypeScript、Lint（warning/error 0）、`git diff --check`: PASS。
+- `EXPO_OFFLINE=1`、development設定のWeb production export: PASS、4 routes、公開設定の静的照合PASS。配信/実Firebase試験ではない。
+- repository外ログ: `artifacts/pr124-rf2-{red,first,focused-first,focused,full,types,lint,web}.log`。focused-firstは旧保護後期待1か所の不整合を記録し、要件に即した証跡assertへ更新して再実行した。既知のjsdom alert未実装/NO_COLOR通知は検証成功と区別して記録する。
+
+変更は`publication.ts`、新しい回帰テスト、既存回帰期待1か所と文書のみ。既存の保存/同期adapter、Rules/Functions、reducerの競合規則、承認設計は未変更。再レビュー対象commitをPR/#107へ記録して停止する。

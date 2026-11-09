@@ -1,7 +1,7 @@
-import { canonical, same } from './canonical';
+import { canonical, compare, same } from './canonical';
 import { reduceIntents } from './reducer';
 import { recordAccepted } from './acceptance';
-import type { AcceptedReceipt, Baseline, DeliveryLedger, Intent, ReducedState, Scope } from './types';
+import type { AcceptedReceipt, ApplicationResult, Baseline, DeliveryLedger, Intent, ReducedState, Scope } from './types';
 
 /** Inject a deterministic SHA-256 implementation; this layer performs no crypto I/O. */
 export type Digest = (canonicalJson: string) => string;
@@ -18,10 +18,18 @@ type ManifestBody = Readonly<{
   protectionHash: string;
 }>;
 export type Publication = Readonly<{ manifest: ManifestBody & Readonly<{ hash: string }>; state: ReducedState }>;
+export type ClientEvidence = Readonly<{
+  receipts: readonly Readonly<{ binding: Binding; receipt: AcceptedReceipt }>[];
+  /** Only completely verified publications enter this history; protected candidates are not applied. */
+  publications: readonly Readonly<{ binding: Binding; publication: Publication; outcome: 'applied' | 'protected' }>[];
+  /** Historical confirmation at a specific checkpoint, NOT the current application/conflict status. */
+  reflections: readonly Readonly<{ binding: Binding; checkpoint: Checkpoint; intent: Intent; result: ApplicationResult }>[];
+}>;
 export type ClientSnapshot = Readonly<{
   binding: Binding; checkpoint: Checkpoint; state: ReducedState; ledger: DeliveryLedger;
   /** Sticky quarantined evidence; last verified state is read-only, never a successful new projection. */
   protection: ReducedState | null;
+  evidence: ClientEvidence;
 }>;
 export type PublicationDecision = Readonly<{
   kind: 'applied' | 'noop' | 'stale' | 'pending' | 'rejected' | 'protected'; reason?: string; client: ClientSnapshot;
@@ -57,28 +65,54 @@ export function makePublication(baseline: Baseline, intents: readonly Intent[], 
 export function initialClient(binding: Binding, baseline: Baseline): ClientSnapshot {
   if (!same(binding.scope, baseline.scope) || binding.generation !== baseline.generation || binding.baselineSeal !== baseline.seal ||
     !binding.incarnation || !binding.activationToken || !Number.isSafeInteger(binding.controlEpoch) || binding.controlEpoch < 1) throw Error('Invalid activation binding');
-  return { binding, checkpoint: { seq: 0, hash: baseline.seal }, state: reduceIntents(baseline, []), ledger: { outbox: [], awaiting: [] }, protection: null };
+  return { binding, checkpoint: { seq: 0, hash: baseline.seal }, state: reduceIntents(baseline, []), ledger: { outbox: [], awaiting: [] }, protection: null,
+    evidence: { receipts: [], publications: [], reflections: [] } };
 }
 
-function settleAwaiting(state: ReducedState, ledger: DeliveryLedger): DeliveryLedger {
-  const reflected = (op: Intent) => state.results.some(r => r.opId === op.opId && r.status === 'applied') &&
-    state.intents.some(known => same(known, op));
-  const awaiting = ledger.awaiting.filter(op => !reflected(op));
-  return awaiting.length === ledger.awaiting.length ? ledger : { outbox: ledger.outbox, awaiting };
+function orderedUnique<T>(items: readonly T[]): T[] {
+  return [...new Map(items.map(item => [canonical(item), item])).entries()]
+    .sort(([a], [b]) => compare(a, b)).map(([, item]) => item);
 }
 
-/** Receipt transition against the CURRENT verified snapshot, never against an old notification.
+function retainPublication(current: ClientSnapshot, publication: Publication, outcome: 'applied' | 'protected'): ClientEvidence {
+  const binding = current.binding;
+  const checkpoint = { seq: publication.manifest.seq, hash: publication.manifest.hash };
+  const reflections = outcome === 'applied' ? publication.state.results.filter(r => r.status === 'applied').flatMap(result =>
+    publication.state.intents.filter(op => op.opId === result.opId).map(intent => ({ binding, checkpoint, intent, result }))) : [];
+  return { receipts: current.evidence.receipts,
+    publications: orderedUnique([...current.evidence.publications, { binding, publication, outcome }]),
+    reflections: orderedUnique([...current.evidence.reflections, ...reflections]) };
+}
+
+/** Normalize delivery obligations from facts, never from the mutable CURRENT result alone.
+ * A historical reflection retires awaiting only; conflict/protection remains in the current state.
+ */
+function normalizeLedger(binding: Binding, evidence: ClientEvidence, ledger: DeliveryLedger): DeliveryLedger {
+  let received = ledger;
+  for (const fact of evidence.receipts) if (same(fact.binding, binding)) received = recordAccepted(received, fact.receipt);
+  const awaiting = received.awaiting.filter(op => !evidence.reflections.some(fact =>
+    same(fact.binding, binding) && fact.result.status === 'applied' && same(fact.intent, op)));
+  const next = { outbox: orderedUnique(received.outbox), awaiting: orderedUnique(awaiting) };
+  return same(next, ledger) ? ledger : next;
+}
+
+/** Receipt transition against retained verified facts, never an unverified/stale notification.
  * Pure atomic candidate only. Hydration must verify this snapshot before calling it.
  */
 export function recordClientAccepted(current: ClientSnapshot, receipt: AcceptedReceipt, callbackBinding: Binding): ClientSnapshot {
   if (!same(callbackBinding, current.binding) || !same(receipt.scope, current.binding.scope) ||
       receipt.generation !== current.binding.generation) return current;
   const pending = [...current.ledger.outbox, ...current.ledger.awaiting].filter(op => op.opId === receipt.opId);
-  if (receipt.kind !== 'accepted' || !pending.length || pending.some(op => op.generation !== receipt.generation ||
+  if (receipt.kind !== 'accepted' || pending.some(op => op.generation !== receipt.generation ||
       !same(op.scope, receipt.scope) || canonical(op) !== receipt.canonicalIntent)) return current;
-  const received = recordAccepted(current.ledger, receipt);
-  const ledger = current.protection ? received : settleAwaiting(current.state, received);
-  return ledger === current.ledger ? current : { ...current, ledger };
+  const known = [...pending, ...current.state.intents, ...current.evidence.reflections.map(f => f.intent)];
+  if (!known.some(op => op.opId === receipt.opId && op.generation === receipt.generation &&
+      same(op.scope, receipt.scope) && canonical(op) === receipt.canonicalIntent)) return current;
+  if (current.evidence.receipts.some(f => f.receipt.opId === receipt.opId && !same(f.receipt, receipt))) return current;
+  const evidence: ClientEvidence = { ...current.evidence,
+    receipts: orderedUnique([...current.evidence.receipts, { binding: current.binding, receipt }]) };
+  const next = { ...current, evidence, ledger: normalizeLedger(current.binding, evidence, current.ledger) };
+  return same(next, current) ? current : next;
 }
 
 /** Pure CAS candidate. The existing local Store/Journal/CAS/receipt adapters never call this. */
@@ -103,11 +137,15 @@ export function applyPublication(current: ClientSnapshot, publication: Publicati
     if (!same(publication, expected)) return keep('rejected', 'manifest-or-member-mismatch');
     // Evidence is append-only even when it cannot become an authoritative publication.
     const evidence = reduceIntents(baseline, [...current.state.intents, ...(current.protection?.intents ?? []), ...expected.state.intents]);
-    if (evidence.protection.length) return { kind: 'protected', reason: 'identity-collision',
-      client: { ...current, protection: evidence } };
+    if (evidence.protection.length) {
+      const history = retainPublication(current, expected, 'protected');
+      return { kind: 'protected', reason: 'identity-collision',
+        client: { ...current, protection: evidence, evidence: history, ledger: normalizeLedger(current.binding, history, current.ledger) } };
+    }
     const coverage = new Set(expected.state.intents.map(canonical));
     if (current.state.intents.some(op => !coverage.has(canonical(op)))) return keep('rejected', 'operation-coverage-regression');
+    const history = retainPublication(current, expected, 'applied');
     return { kind: 'applied', client: { binding: current.binding, checkpoint: { seq: m.seq, hash: m.hash },
-      state: expected.state, ledger: settleAwaiting(expected.state, current.ledger), protection: null } };
+      state: expected.state, ledger: normalizeLedger(current.binding, history, current.ledger), protection: null, evidence: history } };
   } catch { return keep('rejected', 'malformed-publication'); }
 }

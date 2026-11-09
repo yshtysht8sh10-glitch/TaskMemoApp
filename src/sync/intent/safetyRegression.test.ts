@@ -140,6 +140,10 @@ it('late acceptance retains conflicts, missing dependencies, rejected operations
   const receipt = evaluateAcceptance(baseline, [], a);
   if (receipt.kind !== 'accepted') throw Error('receipt required');
   const received = publication.recordClientAccepted(protectedClient, receipt.receipt, binding);
-  expect(received.ledger.awaiting).toEqual([a]);
+  // R-F2: P1 already confirmed this exact payload. Protection must not erase that fact.
+  expect(received.ledger.awaiting).toEqual([]);
+  expect(received.evidence.reflections.some(f => f.intent.opId === a.opId && f.checkpoint.seq === 1)).toBe(true);
+  expect(received.evidence.receipts.map(f => f.receipt)).toEqual([receipt.receipt]);
+  expect(received.evidence.publications.some(f => f.outcome === 'protected')).toBe(true);
   expect(received.protection).toEqual(protectedClient.protection);
 });
