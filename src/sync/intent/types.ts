@@ -37,6 +37,8 @@ export type ReducedState = Readonly<{
   scope: Scope; generation: string; baselineSeal: string;
   /** Includes rejected/colliding evidence; nothing is garbage-collected. */
   intents: readonly Intent[]; fields: readonly FieldState[]; results: readonly ApplicationResult[];
+  /** Identity corruption is a stop condition, not a normal baseline projection. */
+  protection: readonly string[];
 }>;
 export type AcceptedReceipt = Readonly<{
   kind: 'accepted'; scope: Scope; generation: string; opId: string; canonicalIntent: string;

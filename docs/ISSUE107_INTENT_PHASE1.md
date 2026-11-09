@@ -115,3 +115,27 @@
 7. 現段階で意図的に保留しているwire schema番号、actor登録/権限検証、移行基点の付与、親/削除を含む意味依存、永続checkpoint/原文/Historyの取り込みは、本PRで決定/既存実装を流用しない。仕様追加が必要になれば設計確認事項として再レビューする。
 
 Phase 1レビュー後も、実データに触れる前にP0/移行安全性ゲートを満たす。Phase 2、DEV/Production配信、本番データ読書き/Rules変更/移行は本PRの承認対象外。
+
+## 2026-11-09 レビューF1/F2の修正（再承認待ち）
+
+対象の指摘は[PR #124レビュー](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/124#issuecomment-6729071976)。Phase 2へは進まず、既存の純粋intent層だけを修正した。承認設計212461cのidentity衝突時の原本保護/停止、受領と反映の分離、単調checkpoint契約を具体化する修正であり、新しい競合勝者規則や自動復旧契約を導入しない。
+
+まずsafetyRegression.test.tsへ3件を追加し、修正前に3 FAILを確認した。F1のopId異payloadとsplit commandは、期待protectedに対しappliedを返して完了がbaseline activeへ戻った。F2はpublication先着でawaiting=[A]、accepted先着でawaiting=[]となった。修正前ログはrepository外`artifacts/pr124-fix-red.log`。
+
+F1: reducerはopId/commandId/actor sequenceのidentity不整合を`ReducedState.protection`へ列挙する。全intent/不正variant/結果を残し、保護状態では通常の確定field.valueを出さない。manifestはprotectionHashも束縛する。applyPublicationは検証した新candidateと既存state/隔離証拠の和集合を再評価し、`kind=protected`と隔離stateを返す。最後に検証したstate/checkpoint/ledgerは維持する。保護中の通常通知や再起動では解除しない。隔離解除/衝突解決APIは今回設けず、別途レビューが必要。
+
+最後に検証したstateは診断用のread-only値であり、保護停止後の新しい正常projectionではない。衝突を最初に受けた端末と先に完了を見た端末で過去の表示値が異なることはあるが、同じ証拠集合から同じprotection理由/隔離stateを生成し、どちらも正常適用を停止する。最初に届いたpayloadを意味上の勝者にせず、baselineへの巻戻しで帳尻を合わせない。
+
+F2: 新しい純粋遷移`recordClientAccepted(current, receipt, callbackBinding)`を追加した。現scope/世代/activation bindingとpendingの不変payloadを照合し、既適用の検証済みcurrent.stateに同一payloadのapplied結果があればawaitingを残さない。publication側の適用時も同じsettleAwaitingを使うため、acceptedとpublicationのどちらが先でも同じledgerになる。receiptだけで反映済みを主張せず、conflict/dependency-pending/rejected/保護停止では原操作を残す。異payloadや退役通知は何も退役させない。
+
+低レベルrecordAcceptedは引き続きtransport Outbox→awaitingの候補であり、逆配送の完了判定には単独で使わない。将来の接続時はrecordClientAcceptedのsnapshot全体を原子的に保存する必要がある。既存アプリのJournal/Outbox/receipt処理や保存adapterは変更していない。
+
+追加10テストには元の3回帰、identity3種の逆順/衝突先着/後着/JSON再起動/証拠保持、120逐次順列（完了/取消/ON/OFF/本文と重複）、accepted/publicationの全24配送順と再起動/新pending共存、異世代/異payload拒否、候補/依存待ち/保護中の原操作保持を含む。既存36件は変更/skip/弱化していない。
+
+不変条件: identity衝突を正常なbaselineへ投影しない。checkpointを保護停止で進めない。隔離証拠を単調保持する。通知順でstate/checkpoint/ledgerを変えない。反映の確認は現検証済みstateと同一payloadだけに基づく。完了取消と★OFFの正当な因果後続、真の並行候補は元契約のまま。
+
+残存リスク: 全て純粋な候補で、実CAS/耐久化/認証/受付/publisher/capture/移行は未接続。hydrationではsnapshot/binding/high-watermarkの検証が必要で、未検証backupをrecordClientAcceptedへ渡してはいけない。保護停止は自動解除しないため可用性より保全を優先する。全イベント再計算と証拠保持の容量/性能、Domain意味競合の解決は後続の別レビュー対象。★表示UI、Phase 2、Rules、Firestore、配信、データ移行は未着手。
+
+修正後検証（今回実行）: 元3回帰PASS、既存36件＋追加10件＝Phase 1 **46 PASS**。全体 **1,330 PASS / 46既存skip**（166 files PASS / 4 skip）。skipは未実施で、変更していない。TypeScript、Lint、git diff --check成功。EXPO_OFFLINE=1・development設定のWeb production export成功（4 routes、公開Firebase設定の静的照合成功）、配信なし。最終通知ガード追加後に全体/型/Lint/buildを確認した。
+
+ログはrepository外`artifacts/pr124-fix-{red,focused,full,types,lint,web}.log`。途中、sandbox一時ファイルENOENTでsuite起動に失敗した実行は成功扱いにせず、制限外で再実行した。追加テスト変数のreadonly指定不足を型チェックで修正し、再実行成功。既存36件や既存skipの条件を変更していない。既知のjsdom alert未実装表示とbuildのNO_COLOR通知は出たが、各検証exit 0。

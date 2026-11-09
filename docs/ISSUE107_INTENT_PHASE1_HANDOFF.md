@@ -32,4 +32,6 @@ npm run web:export
 
 ## 停止境界
 
+2026-11-09: F1/F2修正版の再レビュー待ち。詳細はPhase 1レポート末尾。新pure APIは`recordClientAccepted`、保護状態は`ReducedState.protection`と`ClientSnapshot.protection`。`kind=protected`ではstateは最後の検証済みread-only表示であり、新しい正常状態ではない。低レベルrecordAcceptedだけで逆通知順を処理しない。保護解除APIは今回追加していない。既存の保存/Outbox/receipt adapterへの接続はせずPhase 2も開始しない。
+
 開発担当はcommit/push・レビューPR・#107記録まで。レビュー担当のPhase 1承認前にPhase 2へ進まない。APPROVEされても実データ読取、データ移行、Rules/Functions配備、DEV/Production配信の許可にはならない。#107/#120を機能完成としてCloseしない。#120は操作モデルだけで★表示UIを実装していない。

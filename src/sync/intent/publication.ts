@@ -1,6 +1,7 @@
 import { canonical, same } from './canonical';
 import { reduceIntents } from './reducer';
-import type { Baseline, DeliveryLedger, Intent, ReducedState, Scope } from './types';
+import { recordAccepted } from './acceptance';
+import type { AcceptedReceipt, Baseline, DeliveryLedger, Intent, ReducedState, Scope } from './types';
 
 /** Inject a deterministic SHA-256 implementation; this layer performs no crypto I/O. */
 export type Digest = (canonicalJson: string) => string;
@@ -14,13 +15,16 @@ type ManifestBody = Readonly<{
   seq: number; previous: Checkpoint;
   fieldStateHash: string; projectionHash: string; resultHash: string;
   coverageHash: string; conflictHash: string; commandGroupsHash: string;
+  protectionHash: string;
 }>;
 export type Publication = Readonly<{ manifest: ManifestBody & Readonly<{ hash: string }>; state: ReducedState }>;
 export type ClientSnapshot = Readonly<{
   binding: Binding; checkpoint: Checkpoint; state: ReducedState; ledger: DeliveryLedger;
+  /** Sticky quarantined evidence; last verified state is read-only, never a successful new projection. */
+  protection: ReducedState | null;
 }>;
 export type PublicationDecision = Readonly<{
-  kind: 'applied' | 'noop' | 'stale' | 'pending' | 'rejected'; reason?: string; client: ClientSnapshot;
+  kind: 'applied' | 'noop' | 'stale' | 'pending' | 'rejected' | 'protected'; reason?: string; client: ClientSnapshot;
 }>;
 
 function hash(value: unknown, digest: Digest) {
@@ -35,6 +39,7 @@ function roots(state: ReducedState, digest: Digest) {
     resultHash: hash(state.results, digest), coverageHash: hash(state.intents, digest),
     conflictHash: hash(state.results.filter(r => r.status === 'conflict'), digest),
     commandGroupsHash: hash(state.intents.map(op => ({ commandId: op.commandId, opId: op.opId, resource: op.resource, writes: op.writes })), digest),
+    protectionHash: hash(state.protection, digest),
   };
 }
 
@@ -52,12 +57,35 @@ export function makePublication(baseline: Baseline, intents: readonly Intent[], 
 export function initialClient(binding: Binding, baseline: Baseline): ClientSnapshot {
   if (!same(binding.scope, baseline.scope) || binding.generation !== baseline.generation || binding.baselineSeal !== baseline.seal ||
     !binding.incarnation || !binding.activationToken || !Number.isSafeInteger(binding.controlEpoch) || binding.controlEpoch < 1) throw Error('Invalid activation binding');
-  return { binding, checkpoint: { seq: 0, hash: baseline.seal }, state: reduceIntents(baseline, []), ledger: { outbox: [], awaiting: [] } };
+  return { binding, checkpoint: { seq: 0, hash: baseline.seal }, state: reduceIntents(baseline, []), ledger: { outbox: [], awaiting: [] }, protection: null };
+}
+
+function settleAwaiting(state: ReducedState, ledger: DeliveryLedger): DeliveryLedger {
+  const reflected = (op: Intent) => state.results.some(r => r.opId === op.opId && r.status === 'applied') &&
+    state.intents.some(known => same(known, op));
+  const awaiting = ledger.awaiting.filter(op => !reflected(op));
+  return awaiting.length === ledger.awaiting.length ? ledger : { outbox: ledger.outbox, awaiting };
+}
+
+/** Receipt transition against the CURRENT verified snapshot, never against an old notification.
+ * Pure atomic candidate only. Hydration must verify this snapshot before calling it.
+ */
+export function recordClientAccepted(current: ClientSnapshot, receipt: AcceptedReceipt, callbackBinding: Binding): ClientSnapshot {
+  if (!same(callbackBinding, current.binding) || !same(receipt.scope, current.binding.scope) ||
+      receipt.generation !== current.binding.generation) return current;
+  const pending = [...current.ledger.outbox, ...current.ledger.awaiting].filter(op => op.opId === receipt.opId);
+  if (receipt.kind !== 'accepted' || !pending.length || pending.some(op => op.generation !== receipt.generation ||
+      !same(op.scope, receipt.scope) || canonical(op) !== receipt.canonicalIntent)) return current;
+  const received = recordAccepted(current.ledger, receipt);
+  const ledger = current.protection ? received : settleAwaiting(current.state, received);
+  return ledger === current.ledger ? current : { ...current, ledger };
 }
 
 /** Pure CAS candidate. The existing local Store/Journal/CAS/receipt adapters never call this. */
 export function applyPublication(current: ClientSnapshot, publication: Publication, callbackBinding: Binding, baseline: Baseline, digest: Digest): PublicationDecision {
-  const keep = (kind: PublicationDecision['kind'], reason: string): PublicationDecision => ({ kind, reason, client: current });
+  const keep = (kind: PublicationDecision['kind'], reason: string): PublicationDecision => ({
+    kind: current.protection ? 'protected' : kind, reason, client: current,
+  });
   try {
     const m = publication.manifest;
     if (!same(callbackBinding, current.binding) || !same(m.scope, current.binding.scope) ||
@@ -73,12 +101,13 @@ export function applyPublication(current: ClientSnapshot, publication: Publicati
     // Recompute state and every bound member, rather than trusting a caller-supplied "verified" flag.
     const expected = makePublication(baseline, publication.state.intents, current.checkpoint, current.binding.controlEpoch, digest);
     if (!same(publication, expected)) return keep('rejected', 'manifest-or-member-mismatch');
+    // Evidence is append-only even when it cannot become an authoritative publication.
+    const evidence = reduceIntents(baseline, [...current.state.intents, ...(current.protection?.intents ?? []), ...expected.state.intents]);
+    if (evidence.protection.length) return { kind: 'protected', reason: 'identity-collision',
+      client: { ...current, protection: evidence } };
     const coverage = new Set(expected.state.intents.map(canonical));
     if (current.state.intents.some(op => !coverage.has(canonical(op)))) return keep('rejected', 'operation-coverage-regression');
-    // Applied coverage must match the exact immutable pending operation, never just an opId.
-    const reflected = (op: Intent) => expected.state.results.some(r => r.opId === op.opId && r.status === 'applied') &&
-      expected.state.intents.some(known => same(known, op));
     return { kind: 'applied', client: { binding: current.binding, checkpoint: { seq: m.seq, hash: m.hash },
-      state: expected.state, ledger: { outbox: current.ledger.outbox, awaiting: current.ledger.awaiting.filter(op => !reflected(op)) } } };
+      state: expected.state, ledger: settleAwaiting(expected.state, current.ledger), protection: null } };
   } catch { return keep('rejected', 'malformed-publication'); }
 }

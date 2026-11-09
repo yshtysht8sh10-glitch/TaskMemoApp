@@ -154,6 +154,9 @@ export function reduceIntents(baseline: Baseline, delivered: readonly Intent[]):
     results.set(id, reasons ? { opId: id, status: 'conflict', reasons: [...reasons].sort(compare) }
       : { opId: id, status: 'applied', reasons: [] });
   }
+  const protection = [...new Set([...results.values()].flatMap(r => r.reasons).filter(reason =>
+    ['op-id-collision', 'split-command-unsupported', 'actor-sequence-collision'].includes(reason)))].sort(compare);
   return { scope: baseline.scope, generation: baseline.generation, baselineSeal: baseline.seal,
-    intents, fields, results: ids.map(id => results.get(id)!) };
+    intents, fields: protection.length ? fields.map(({ resource, attribute, candidates }) => ({ resource, attribute, candidates })) : fields,
+    results: ids.map(id => results.get(id)!), protection };
 }
