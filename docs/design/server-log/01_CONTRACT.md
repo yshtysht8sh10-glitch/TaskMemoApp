@@ -67,7 +67,7 @@ review後のS実装仕様でtest vectorを固定し、曖昧なencodingやbinary
 
 標準モードの各publication候補Pは、単一のimmutable source log head `Lp`とbaselineを選び、**C(P)=A(Lp)**を満たす累積snapshotとする。任意の「処理済み部分集合だけのpublication」は本規範では許可しない。祖先/dependencyが未着でも当該intentをcoverageへ含め、dependency-pendingとして保全する。未来操作を推測で追加しない。
 
-PはRealm、前activation済みcheckpoint、source Lp、coverage map root、全intent/member/chunk inventory、現在field heads/projection/result/conflict/dependency/rejection/protection roots、command group、reducer/schema versionを認証する。各covered opに現在ApplicationResultを**一つだけ**持たせる。statusはapplied / conflict / dependency-pending / rejected（処理時reject）。過去結果/過去reflectionは別の不変来歴として保持する。
+PはRealm、前activation済みcheckpoint、source Lp、coverage map root、全intent/member/chunk inventory、**そのsource時点の**field heads/projection/result/conflict/dependency/rejection/protection roots、command group、reducer/schema versionを認証する。各covered opに当該PでのApplicationResultを**一つだけ**持たせる。statusはapplied / conflict / dependency-pending / rejected（処理時reject）。過去結果/過去reflectionは別の不変来歴として保持する。現在Kのcontrol protection/受付rejectとは別である。
 
 Pを作っただけではserver publicationでもlocal appliedでもない。純粋な`makePublication`出力を署名済みactivated manifestへ昇格させるにはS4が必要。
 
@@ -75,17 +75,21 @@ Pを作っただけではserver publicationでもlocal appliedでもない。純
 
 1. publisherはRealm、leader fencing token、期待previous checkpoint、source Lpと不変jobIdをdurable stagingへ保存する。chunkはcreate-only・内容固定。chunk/page位置もhashで束縛する。
 2. 全chunk・coverage・payload・result・baseline・DAG・意味制約を検証し、inventory rootと検証記録をdurable化する。一部だけstage済みならcurrent Pにしない。サイズ上限を越える巨大transactionに頼らず、不変chunkと小さいactivation rootを分離する。
-3. activation transactionは同一controlに対してcurrent Realm/epoch/activationId、publisher fence、expected previous checkpoint、source Lpがcurrent Lのancestorであること、検証済み不変inventoryへの参照を検査する。publication pointer/checkpointとcontrolVersionを不可分更新する。新規acceptedがLp以降に増えていてもsourceを改変しない（その差はU）。
+3. activation transactionは同一controlに対してcurrent Realm/epoch/activationId、publisher fence、expected previous checkpoint、検証済み不変inventoryへの参照に加え、**`Pprev.sourceLogHead ≼ Pnew.sourceLogHead ≼ current L`**と**`C(Pprev) ⊆ C(Pnew)`**を必須検査する。≼は同Realm内で全祖先chainを検証した同一またはancestor関係、⊆はkeyと全不変payloadの一致するmap包含であり、seq/件数/hash値の大小ではない。検証記録は比較したPprev/Pnew/source/coverageへ束縛し、transaction内でcurrent previous/fenceが一致することを再確認する。source/coverage後退、比較不能log、同ID異payloadは通常activation禁止。正しいpreviousと現役publisherだけでは許可しない。publication pointer/checkpointとcontrolVersionを不可分更新する。新規acceptedがLp以降に増えていてもsourceを改変しない（その差はU）。
 4. 同じjobId/同manifestの再実行は元activation結果へ冪等に収束。違うmanifest、同checkpoint異hash、別leaderの旧fenceは保護/拒否し、先着chunkで勝者を捏造しない。世代切替は同じcontrol fenceで直列化する。
 5. activated memberを後で上書き/削除しない。staging/結果/証拠のGCは今回の契約外。sticky protection中は通常projectionへの新activationは禁止。診断用protection記録は別rootへ追記し、旧正常Pはread-onlyの最終既知値として残す。
 
 publisher crash復旧: jobIdからstagingを再読込→全chunk再照合→controlのactivation結果照会→未activationなら同expected previous/fenceで再試行。既に別Pが進んだら古い候補をactivateせず新しいpreviousに対する別jobを作り、旧job証拠を保持する。完成したchunkの存在だけでactivation済みと推定しない。server process再起動でfenceを再利用しない。
 
+**同一sourceのno-op publicationは許可する。** 同Realm・baseline・reducer/schema versionのまま、Cと意味state/results/candidates/projection/保護・group rootsがPprevと完全一致し、全通常activation条件を満たす場合だけ、previous/新checkpoint/不変job等のpublication来歴を進められる。同一job再配送は新checkpointを作らない。同一sourceで意味結果を変更する再解釈/復旧/validator更新はno-opではなく別承認。genesis P0のsourceは当該Realmの空log rootとして定義し、以後同じ単調性を適用する。
+
+後退候補の拒否ではcurrent server control（L/P pointer、checkpoint/controlVersionを含む）と既存publicationを更新しない。拒否job/候補・理由は既存rootを上書きしない追記専用診断領域へ保全する。clientも候補を適用せずstate/checkpoint/ledger/reflection/既存原証拠を不変とし、候補の診断原証拠は別途追加できる。既存sticky protectionを解除しない。identity衝突の新発見はS1の別保護fenceに従うが、拒否候補を正常Pへactivateする理由にはしない。
+
 ## 5. consistent cutの定義と照合アルゴリズム
 
 ### S5 一つのcontrol rootからの応答
 
-`CutCertificate K`はformat/purpose、Realm、expected ReplicaBinding、session/audience、request nonce、issuedAt/expiresAt、controlVersion、**LとPの不変参照**、U root、現在result partition roots、admission rejection/control protection roots、inventory rootを完全署名対象にする。replica bindingは宛先検査であり端末rawを証明しない。Pのcoverage/source Lpとprevious chainもKへ束縛される。
+`CutCertificate K`はformat/purpose、Realm、expected ReplicaBinding、session/audience、request nonce、issuedAt/expiresAt、controlVersion、**LとPの不変参照**、U root、当該Pのresult partition roots（source時点）、現在cutのadmission rejection/control protection roots、inventory rootを完全署名対象にする。replica bindingは宛先検査であり端末rawを証明しない。Pのcoverage/source Lpとprevious chainもKへ束縛される。
 
 serverはcontrolのL/P/protection/epoch pointersを**一つのread transactionのsnapshot**から取得する。不変参照先の列挙はtransaction外でもよいが、同じroot配下のデータに限る。Uとpartitionは当該L/Pから決定的に計算し署名し、mutable queryを混ぜない。更新が途中で発生してもKは取得した過去時点の一貫したcutであり、未来の不変leaseでない。K発行時にsession失効/世代切替を再検査し、変化したら古いrootを現在資格として返さずretry/retiredにする。直後の失効を瞬時に全端末へ伝える保証ではない。
 
@@ -94,13 +98,17 @@ serverはcontrolのL/P/protection/epoch pointersを**一つのread transaction�
 ### S6 照合手順（規範擬似手順、製品コードでない）
 
 1. 独立rootでKの署名、purpose、期待Realm/replica/session/nonce、期限・信頼時刻を検証。cold startでもnonce再利用禁止。K.controlVersion/P/Lを耐久pinと比較し、既知のancestorへ後退、同ID異hash、異世代混入は保護。新しいcurrent cutがold pinと比較不能なら推測採用しない。
-2. Lの全entry/ancestor/inventoryを検証しA(L)を再構築。duplicate identityの同payloadは同一entry、異payload/欠落/余分/穴は保護。既保持の真正receiptのadmission headがL以前なら全payloadの包含を必須検査する。Lより後の真正receiptを既に保持しているならKは不足cutとして完了判定不可、次cutを照会する。比較不能なheadは分岐として保護。Pの全chunkとprevious chain、baseline、source Lpを取得し、LpがLのancestorであることを検証。
+2. Lの全entry/ancestor/inventoryを検証しA(L)を再構築。duplicate identityの同payloadは同一entry、異payload/欠落/余分/穴は保護。既保持の真正receiptのadmission headがL以前なら全payloadの包含を必須検査する。Lより後の真正receiptを既に保持しているならKは不足cutとして完了判定不可、次cutを照会する。比較不能なheadは分岐として保護。Pの全chunkとprevious chain、baseline、source Lpを取得し、LpがLのancestorであることを検証。clientの連続publication chainでもS4と同じ`Pprev.source ≼ Pnew.source ≼ K.L`および全payloadによる`C(Pprev) ⊆ C(Pnew)`を検査する。source後退/比較不能/coverage後退/同ID異payloadは通常適用を拒否し、既存Phase 1の`operation-coverage-regression`検査も維持する。同一sourceのno-opはS4の完全一致条件を検証する。
 3. A(Lp)を再構築し`C(P) == A(Lp)`を**keyと全不変payloadのmap同値**で確認。CにA(L)外のkey、payload差、同opId別variantがあれば拒否/保護。
 4. `Ucalc = A(L) \ C(P)`を計算。KのUを全取得し`U(K)==Ucalc`、`C∩U=∅`、`C∪U=A(L)`をmap比較する。重複pageで欠落を相殺する件数比較は禁止。
 5. Pの全covered opについて結果を一対一照合し、集合をApplied / Conflict / DependencyPending / Rejectedへ漏れなく・重複なく分割する。全resultのopIdと元payload/context/command groupを照合。非covered opのresultも拒否。保護記録は別軸で必ず検査し、4分類に押し込んで消さない。
-6. 標準モードでは受領済み全intentとbaselineから承認済みpure reducerを再実行し、Pのstate/results/candidates/projection/保護・group rootsと完全一致を検証する。hashだけの検証で意味正当性を飛ばさない。unknown reducer/schemaは停止。E2EEへこの手順をそのまま適用する承認はない（02参照）。
+6. 標準モードでは**当該P固有のbaselineと`A(P.sourceLogHead)=A(Lp)`のみ**を入力に承認済みpure reducerを再実行し、Pのstate/results/candidates/projection/保護・group rootsと完全一致を検証する。現在log Lの`A(L)`は現在accepted全体とUの照合（手順2–4）に用い、`A(L) \ A(Lp)`を過去Pの意味検証に混入しない。P1/P2等の履歴も各Pi固有のbaseline/source `Lpi`で別々に再計算する。Kの現在control protection/AdmissionRejectionは別軸で検査し、Pのsource時点の意味状態/結果rootへ混ぜない。現在の阻害要因はcompleteをfalseにするが、正しかった過去Pのreflectionを消さない。正常なU非空cutはP検証成功・U保持・complete=falseであり、Uがあるだけで恒久protectionにしない。hashだけの検証で意味正当性を飛ばさない。unknown reducer/schemaは停止。E2EEへこの手順をそのまま適用する承認はない（02参照）。
 7. 検証済みK、受領証拠、Pのcheckpoint/state/ledger/evidence、inbox処理とserver/local境界を一候補としてlocal raw CAS保存する。保存前はmemory/seq/Outbox退役/serverConfirmedを確定しない。K期限切れ/新操作での同期判定失効も反映する。
 8. S8の全条件が成立する場合だけ`completeAt(K)`を返す。どこかのpage/receipt/result不足はunknown/pendingであり、空集合に補完しない。
+
+期限は受信時だけでなく照合中・local CAS直前・CAS完了後の同期判定時にも検査する。照合中/直前にKが失効したらfresh確認としての保存/適用を開始せず、現在のdurable state/checkpoint/ledger/reflectionを保持してfresh Kを再取得する（隔離受信原証拠の追記は別）。CAS開始後に期限が来てcommitした場合はその保存事実を保持するがfreshness unknown/complete=falseとし、完了を取り消せたと偽らず次cutで再検証する。期限切れだけで過去reflectionを消したり恒久protectionにはしない。
+
+activation済みでもmemberを取得できなければ未検証/pendingで空補完しない。改変/hash不一致が判明したら保護停止し、候補を新state/checkpointへ適用しない。別UID/scopeのraw/通知は宛先のDomain/Committed/Journal/Outboxへ保存しない。元の正しいscopeへ戻せる場合だけそのscopeの入口で再検証し、それ以外はopaque診断隔離へ保存するか拒否する。誤ったscopeのDomainへ「保全」の名目で混入させない。
 
 P2先着でP1が未取得ならP2はpendingとする。先行chainを全検証しPhase 1の順序制約どおりP1→P2をreplayしてから保存する。中間P1で完全に検証されたappliedのreflectionはP2がconflictでも保持する。chainのcoverage参照だけ、またはP1のhashだけから反映証跡を作らない。
 

@@ -15,25 +15,32 @@
 |ID|正常/異常/競合/再起動・復旧の入力|必須期待結果|
 |---|---|---|
 |C01|empty L + genesis P、1件acceptedのみ、その後Pへ含める|最初だけcomplete候補。accepted時U=1でfalse、反映CAS後全条件成立ならtrue|
-|C02|source Lp後に別acceptedが増加する間のP activation/cut照会|A(Lp)=C、差分がU。old sourceを書換えずnew acceptedを隠さない|
-|C03|A={a,b,c}、coverage={a,b}、U={c}|map同値・分割一致。ただしU非空なのでcomplete=false|
+|C02|baseline body=base、L1でcomplete a受領、source Lp=L1のP1（body=base）を作成。その後L2で独立body変更b（body=later）を受領しK=(L2,P1,U={b})|P1をbaseline+A(L1)={a}で再計算し検証成功、body=baseを保持。bはUに残りcomplete=false。A(L2)={a,b}をP1へ混ぜず、正常cutを恒久protectionにしない|
+|C03|正常: Lp=L2でA(Lp)={a:complete,b:emphasis ON}、Pのbody=base。その後L3でc:body=later追加、A(L3)={a,b,c}、C={a,b}、U={c}。異常は同LpなのにC={a}または異payload b|正常はPの意味検証成功、c保持、U非空/complete=false/protection追加なし。異常だけcoverage map不一致として拒否/保護。現在L3のbodyを過去Pへ要求しない|
 |C04|同件数だがb欠落/c重複、pageを再利用、最大ordinalだけ一致|全map/inventory検証で拒否/保護。件数/最大seqを成功根拠にしない|
 |C05|coverageに未知key、同opId異payload、別baseline/epoch member|拒否/保護、原variant両方保持。正常Pを更新しない|
 |C06|CとU重複、Aの一件が両方から欠落、U root偽造|分割/全map比較失敗。status unknown/protected、complete=false|
 |C07|Cにあるopのresult欠落/二重/非covered result混入|一対一照合失敗。opId一致だけでapplied証跡を作らない|
 |C08|Cが全Aだがconflict/dependency-pending/rejected/protectionあり|coverage完全でもcomplete=false。分類と原操作を保存|
-|C09|ページ列挙中accepted/P/controlが変化|不変K配下だけ取得し混ぜない。新root通知が来れば完了判定失効し次cutを要求|
+|C09|C09a: cut snapshot取得後、同Realmでbody変更bが新accepted。C09b: 列挙中P/control更新|取得済みK自体は元snapshotとして整合、後発bをKへ混ぜない。新receipt/root通知を観測したらcomplete無効・次cut要求。次cutでbをA/Uまたは後続coverageへ保持。新操作の存在を未観測でも未来不在のleaseとは表示しない|
 |C10|取得中に一page消失/timeout/サイズ上限|全件照合未完、空補完禁止。原本を維持しretry/unknown|
-|C11|署名済み別UID/mode/replica/session/generation/epoch、旧nonce/期限|真正署名でもexpected binding不一致で拒否。旧handleへだけ保全|
+|C11|C11a: 署名済み別UID/mode/replica/session/generation/epoch、旧nonce/期限。C11b: control snapshot取得後・cut署名前にAuth失効またはepoch変更|aは真正署名でも拒否。別UID/scopeのrawを宛先Committed/Journal/Domain/Outboxへ混入せず全byte不変。正しいscopeの再検証入口かopaque診断隔離だけに保全。bは再検査でretry/retired、旧Kを現在資格として発行/installせずclient checkpoint/ledger/reflection不変|
 |C12|同controlVersion異root、既知pinのancestor、parent欠落/fork|保護停止。bootstrap/backup同梱鍵で解決しない|
 |C13|publisher stagingの各chunk前後でkill、同job再開|P pointer不変。完成後全inventory再検証。同manifest activationは一回だけ|
 |C14|activation commit直前/直後kill・応答喪失|control/job結果照会で確定。未activationなら同fenceのみretry|
-|C15|二publisherが同previous、旧leader再開、epoch切替とactivation競合|一つのcurrent pointer、旧fence拒否。旧候補を新checkpointに再利用しない|
+|C15|C15a: 二publisherが同previous、旧leader再開、epoch競合。C15b: 現役publisher・正しいprevious=P2・古いsource=L1の新job（詳細は下記）|aは一つのcurrent pointer/旧fence拒否。bはsource/coverage後退をactivation前に拒否。server control/Pとclient state/checkpoint/ledger/reflection/既存原証拠は不変、拒否候補/jobは別診断へ追加保持|
 |C16|receipt/intent/identity/log root各write境界でserver crash|全成立/不成立。partial acceptedを正常照会で返さない|
 |C17|同op同payload連続/並行再送、actorseq/command collision|同payloadは元receipt。異payload collisionは双方保全・sticky protection、次正常activation禁止|
 |C18|pre-admission reject、accepted後の処理reject|A外AdmissionRejectionとC内Rejectedを混同しない。未解決rejectを成功扱いしない|
 |C19|server backup後退/台帳再起動/全喪失、client pin残存|比較可能な後退を検出、原本保護。clientを無条件にserverへ再登録しない|
-|C20|標準modeの全reducer再計算とmanifestが不一致、unknown version|署名だけで通さず保護。未来schemaの推測補完禁止|
+|C20|C20a: C02のP1(source=L1,body=base)と後発L2 body=later。C20b: source=L1の再計算自体とmanifestが不一致/unknown version。C20c: activation後のmember欠落または改変|aはP1をA(L1)だけで検証成功、bをUに保持しcomplete=false、恒久protectionにしない。bは署名だけで通さず保護。cの欠落は未検証/pending、改変は保護、どちらも空補完/候補適用なし、既存checkpoint/ledger/reflectionを維持|
+
+### C15b — 現役publisherでも拒否すべき完了ON→OFF→旧ON
+
+1. 同RealmのL1でcomplete a（completed/T1）、L2でaを観測したcancel b（active/null）を受領する。P1(source=L1,C={a})→P2(source=L2,C={a,b})を正常activate/検証保存する。clientはactive/null。
+2. 現役publisher/fence・正しいprevious=P2で**新job J3**を作り、P3のsourceだけL1へ戻す。C(P3)={a}、P3の意味値completed/T1はL1に対して正しい。current L=L2なのでancestor-of-currentだけなら通る反例。
+3. S4のP2.source=L2≼P3.source=L1とC(P2)⊆C(P3)が不成立でactivation拒否。server L/P2/controlVersion/checkpointを更新しない。clientへ同候補を直接配送してもS6 chain検査と既存`operation-coverage-regression`で拒否、active/null・checkpoint P2・ledger・reflection・既存原証拠が厳密不変。P1/P2/J3の原payload/job/候補を失わず、J3拒否診断だけ別追記可能。
+4. 追加独立変種: source比較不能、同source ID異hash、coverage同key異payload、source同一no-opを試す。前3者は通常activation/apply禁止。no-opはCと全意味roots完全一致の場合だけ成功し新checkpointを一度だけ作る。同job再送は元結果、同sourceで意味stateを変えた候補は拒否。既存sticky protectionは解除しない。
 
 ## 3. S-REPLICA受入一覧
 
@@ -58,6 +65,9 @@
 |R17|server accepted後local全消失、未受領唯一copy全消失を別fixture化|前者のserver分再構築を検証。後者は復元/存在検出不能な場合を明記し、成功表示しない|
 |R18|全server/client pin同時rollback、server未受領suffix全消失|検出保証外を正しく記録。online再接続で必ず検出できるというassertを置かない|
 |R19|K保存直後に入力/notice/失効/期限、U非空でもlocal Outbox空|completeAtは時点限定。未照合で失効しfalse/unknown。旧status DTO注入でもtrueにならない|
+|R19a|全件照合の途中でK期限到来|新しいstate/checkpoint/ledger/reflectionへ適用しない。既存原証拠保持、fresh K再取得。expiryだけの恒久protectionなし、complete=false/unknown|
+|R19b|全検証後・local CAS開始直前にK期限到来|CAS前再検査で当該fresh確認のcommitを開始しない。既存durable raw/checkpoint/ledger/reflection不変。隔離受信証拠は保持可|
+|R19c|CAS開始時は有効、transaction complete前にK期限到来|成立したatomic保存を巻き戻したとしない。保存事実/過去reflection保持、完了後期限検査でfreshness unknown・complete=false、次cutを要求|
 |R20|backup/export/JSON roundtrip、migration中断/rollback候補|原intent/receipt/results/reflections/conflicts/History/local-only全保持。旧Node全再生・旧P再公開をしない|
 
 ## 4. E/P/Mの負のゲート・追加受入
@@ -78,7 +88,7 @@
 |M02|pinnedNote/features/settings/History/unknown field/旧Journal/Outbox/receipt混在|raw backupにあるだけで移行成功としない。実行可能な移行先/未処理候補/履歴引継先を照合。推測変換・消失禁止|
 |M03|切替/rollback競合、旧client遅延write、移行失敗再開|明示epoch fence/安全再実行。旧snapshotで新世代変更を消さない。旧ローカル変更を隔離回収|
 
-E02–E08/P01–P02/M01–M03は計画であり、本PRで方式の全詳細が承認済みとはしない。未決定箇所は02§4の単位別にレビュー/期待値を固定してから実装する。
+**E02–E08/P01–P02/M01–M03は未決設計を含むplaceholder**で、実行可能な完成受入やPASS条件の分母へ数えない。表の期待結果は保持すべき方向・不変条件であり、全詳細の承認/試験可能性を意味しない。02§4の各独立レビューで入力・手順・oracleを固定して初めて受入ケースへ昇格する。E01だけは標準modeの未対応mode拒否という負のゲートをN1候補にするが、今回未実施。旧「53件」は提案行数の履歴であり53実行可能試験/53 PASSではない。今回追加した枝番も未実施計画で、件数を成功実績にしない。
 
 ## 5. 既存ゲートの保持方針
 
@@ -109,3 +119,18 @@ N1–N3はPhase 2B-2へ自動的に着手する宣言ではない。今回の停
 レビューはS-CUT/S-REPLICA/E-METADATA/E-SEMANTIC/P-PROVIDER/M-MIGRATIONの各単位についてAPPROVE/REQUEST CHANGES/未審査を明記する。文書のSが承認されても未決P/Eや製品実装の許可を得たとはしない。未決定項目への黙示承認は禁止。
 
 変更範囲は本ディレクトリの新規Markdownのみ。独立ブランチは承認済みPR #127のcommit直下を基点にし、既存未push/無関係DEVを含めない。既存製品コード/設計/テスト/Rules/データ/配信状態は変更していない。Issue #107へPRと対象commitを記録し、レビュー担当へ依頼後停止。#107/#120はCloseしない。
+
+## 8. REQUEST CHANGES対応表（R128、2026-11-10）
+
+修正前対象`0c52fac`、指摘正本は[レビューコメント6766456424](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/128#issuecomment-6766456424)。以下は文書の反例修正と未実施受入の追加であり、製品バグ修正試験のFAIL→PASSを実行した報告ではない。
+
+|指摘|修正箇所|反例・期待結果|残存リスク/未実施|
+|---|---|---|---|
+|R128-1 source固有の意味再計算|01 S3/S5の時点区分、S6手順6、C02/C03/C20a|source=L1でcomplete a/P1 body=base、後発L2 body=laterのbをA(L)で混ぜる誤りを排除。P1はA(L1)で検証成功、U={b}保持、complete=false、恒久protectionなし。各履歴Piも固有Lpiを使う|新verifier未実装/試験未実施。現在control保護/rejectは同期阻害として別途保持|
+|R128-2 source/coverage後退禁止|01 S4条件3・no-op/拒否規則、S6手順2、C15b|完了ON→取消OFF後、現役publisher/正しいpreviousでも古L1によるON復活候補をactivation前に拒否。server control/Pとclient state/checkpoint/ledger/reflection/既存原証拠不変。拒否jobだけ別追記|server/clientの将来実装で両検査必須。既存Phase 1 coverage-regressionを維持。no-opは同source/coverage/意味roots完全一致のみ|
+|cut取得後のaccepted追加/署名前Auth・epoch変更|C09a/C11b、01 S5|前者はKのsnapshotを汚さず次cutで追加op照合、後者は古資格を署名/installしない|provider実供給は未承認、ここでは合成試験計画のみ|
+|照合中/CAS直前/開始後の期限切れ|01 S6期限規則、R19a–c|前二者はfresh適用開始せず既存raw等保持。開始後の成立保存は保持するがfreshness unknown/complete=false|clock/skewの実供給はPゲート未決|
+|activated memberの欠落/改変・誤UID raw混入|01 S6追加規則、C20c/C11a|欠落pending/改変protected、候補非適用。別利用者のDomain/Committed/Journal/Outboxは不変。隔離保全を混入の口実にしない|実store接続なし。診断保存も原scope/opaque隔離の別境界|
+|E/P/M未決試験を完成PASS条件へ数えない|本書§4のplaceholder規則|未定義oracleをPASS/実行可能な分母にしない。独立詳細承認後にケース昇格|E/P/M未審査・未承認を維持。S-REPLICAはS-CUT再レビュー待ち|
+
+再レビューではR128-1/R128-2の規範とC02/C03/C15/C20を対照し、追加境界ケースも判定する。N1/N2/N3・実SDK・移行・配信を許可する修正ではない。
