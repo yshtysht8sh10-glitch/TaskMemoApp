@@ -69,4 +69,3 @@ it.each(['mouse', 'touch'] as const)('synthetic monthly %s drop reaches tomorrow
     Reflect.deleteProperty(document, 'elementFromPoint'); vi.useRealTimers();
   }
 });
-
