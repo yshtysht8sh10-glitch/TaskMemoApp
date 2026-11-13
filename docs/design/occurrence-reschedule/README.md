@@ -17,11 +17,13 @@
 
 現在のwhole-Node同期へ新fieldを足すだけでは安全な複数端末保証を満たさない。#107のintent/属性因果/receipt/反映分離とRoutine対応の**必要部分**の独立承認が公開前提。本PRはその実装変更を行わず、#107/N1の完成/承認や実運用有効化を主張しない。
 
-## 独立レビューで決める項目
+## 独立レビューで決める項目（REQUEST CHANGES修正版）
 
 1. identity/anchor・同日二件共存・日跨ぎ生成・延期/原日復帰の仕様。
 2. outcomeとscheduleの合成、同属性MV競合、Undo/Redo・定義変更/closeとの意味依存。
-3. 暦zone選択と旧データの由来確認、未知/不正な旧overrideの保護、後発offline端末の救済。
+3. Routine単位の不変CalendarPolicy、将来区間だけのzone変更、source closure/明示LegacyConfirmation、初回anchor許可条件とDST規範の採否。
 4. #107の必須ゲート、#113/#118との未決境界、移行/backup/rollbackの完了条件。
 
 推奨案と未決条件を本文で区別する。未承認事項を推測で実装可能とせず、レビュー後も明示実装指示まで停止する。製品コード、SDK、Rules、実データ、既存テスト、DEV/Production、#107の変更はない。
+
+レビュー[R131-1・D1 BLOCKED](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/131#issuecomment-6858422424)への対応は01§2.3–2.5（zone/根拠）と§4.1（History atomic group）、02§4.1（具体反例）/§7（対応表）を参照。D1/D2の提案を具体化する文書修正であり、D3/D4 BLOCKED・D5未審査の解除を申請したものではない。

@@ -82,29 +82,29 @@
 |A08|同じRoutineの14日分がある14日へ13日分を延期|二つの元refを別表示、片方完了で他方を消さず自動mergeしない|
 |A09|月次を翌月の発生日まで延期|元月/新月の二回を共存、元月の完了を新月へ流用しない|
 |A10|過去pending回→今日/未来へ移動|当日回と共通ref経路で成功。元日/outcomesは維持|
-|A11|再移動/同bucket順位変更|同refのschedule/rankだけ変更、一操作一History、他回の順位不変|
+|A11|schedule＋rank移動、rank-only、片側保存失敗（A11a–c）|移動Undo/Redoは両属性、rank-onlyはrankだけ。§4.1のhead/group/History規範を検査し、他ref不変|
 |A12|base復帰、再移動後base、古いat再配送|元日時へ明示復帰。因果後続baseを古いatが上書きしない|
-|A13|初回前に旧当日override昼→翌日移動→Undo/Redo|Undoで昼へ復帰、Redoで延期。field削除や原anchor消去なし|
+|A13|旧override昼＋元rankからの初回移動、完了/取消後の補償（A13a/b）|元有効scheduleとrankを両方明示復帰。anchor消去/旧map削除なし。結果/完了snapshotは補償対象外|
 |A14|元日復帰が過去日/予定なしbucketへdrop|前者は期限切れ確認、後者は理由/日時選択。不明日時へ勝手に保存しない|
 |A15|延期回を予定日/別日に完了/skip|元keyへresult、実日時は別記録。元日/予定日にも二重出現しない|
 |A16|完了/skip取消、結果をUndo/Redo|延期先のscheduleへpending表示、別回と定義完了状態は不変|
 |A17|二回を同時選択して片方だけ完了/延期|定義IDで選択dedupせず、選択したrefだけ更新|
 |A18|completed/skipped回を直接DnD|取消を案内、履歴の予定snapshotを無断変更しない|
 |A19|drag開始後の深夜跨ぎ、確認中の日跨ぎ|元ref不変、具体target日時を再確認。「明日」の意味を黙って変えない|
-|A20|calendar zone共有、PC表示zoneだけ変更|元ref/予定instantは不変。表示zone差で新しい元回を作らない|
-|A21|DSTの欠落/二重時刻、旧回zone不明|不明をclampせず確認/保護。明示offset/根拠確定後だけ予定を保存|
+|A20|Routine policy採用/変更、account default/表示zone変更、長期offline（A20a/b）|Routine単位の不変policy区間で生成。表示zoneではidentityを変えず、旧policyの未検証候補を再bindしない|
+|A21|DST gap/fold、旧回zone不明（A21a/b）|規範の固定入力で候補offset/証拠を検査。自動検証とLegacyConfirmationを区別|
 |A22|延期後にrepeatRule/startsOn/基本時刻を変更|固定anchorの既発生回は保持。新周期の将来生成へ延期値を引継がない|
 |A23|延期後に定義close（予定はclose後）/再開|保持済み元回は残り、新しい将来回だけ停止。再開でも重複なし|
-|A24|moveとclose/rule/所属/削除を並行発行|因果依存の意味検査、不能なら双方保全/保護。移動で削除を解除しない|
+|A24|初回anchorとrule/startsOn変更/closeの因果順/並行（A24a–c）。所属/削除の境界はD3/D4|先行anchor保持、新contextで再検証、真の並行は関連group双方保全と未解決表示。先着勝者なし|
 |A25|soft-delete/restoreの前後に未完了延期回あり|非表示中も原本を保持し、restoreで同schedule/refを回復|
 |A26|二端末が同refを別日へ同時移動/到着順逆転|MV候補両方・同じ候補集合へ収束、時計/Node revision勝者なし|
 |A27|異ref/本文とmoveを並行、同ref move+完了を並行|独立属性を合成、結果を未完了へ戻さず予定候補/観測snapshotを保持|
-|A28|別端末move後に旧headのUndo、二重resolve|最新変更を消さず確認/競合。全候補参照のresolveのみ有効|
+|A28|remote rank-only、schedule-only、真の並行/二重resolve（A28a–c）|両属性headを検証しUndo/Redo全groupを保留。片側補償や値一致によるhead検査省略は禁止|
 |A29|duplicate op/receipt/publication、ACK先着/後着、applied→conflict|原intent/receipt/reflection/現在競合を別保存、Outbox誤退役なし|
 |A30|offline発行→再起動→再接続、別UID/旧epoch応答|未受領copy保持、現役scopeで再検証、旧scope操作を新scopeへ書換えない|
 |A31|atomic保存前abort/quota、CAS応答喪失、Journal不一致|seq/メモリ/Outbox先行なし、原本保持/明示復旧。新refへ再採番して隠さない|
 |A32|旧Node/旧override null/旧History/旧outcome/retained混在|非破壊readerで同じ意味。初回対象回だけ根拠付きbaseline対応、全履歴不変|
-|A33|不正旧date/未来override/unknown fields/anchor矛盾|推測初期化/削除しない。原本付き候補/保護、診断後の明示取込|
+|A33|不正旧date/未来override/unknown fields、同ref並行anchor（A33a/b）|不明原本を保持。同anchorは冪等、異なるanchorは双方候補＋初回move group保護|
 |A34|通常export/完全checkpoint、JSON往復/別端末restore|互換性を区別。完全形式では全原操作/候補/証跡/local-only/rank/Historyを照合|
 |A35|旧PWAが残る/後発offline旧端末/外部producer|旧writer fenceを検証、未同期原本を退避回収。新fieldが残るだけで安全としない|
 |A36|世代切替途中失敗/rollback/再実行|元source保持、全件意味照合、明示fence切替、新予定を失う旧snapshot再公開禁止|
@@ -113,19 +113,48 @@
 |A39|大量の過去/延期回（100/500/1,000/5,000）|候補数/走査時間/起動一覧時間/同期完了を別計測、性能劣化で全件を黙って打切らない|
 |A40|iPhone PWA touch、PC mouse、深夜・月末のUI操作|移動前後の元日/予定/結果の表示が一致。jsdom/pure PASSを実機PASSとしない|
 
-A20/A21の暦policy、A24の意味依存、A28のUndo/resolve、A34–36の完全schema/運用、A38の#118部分は未決ゲートを含む。具体protocol/入力/oracleを該当独立レビューで確定してから実装試験へ昇格する。今回40行を40実行可能PASSと扱わない。全体/focused/型/Lint/build/実機試験は設計のみのため今回未実施。
+### 4.1 D1/D2再レビュー用の具体反例・oracle（未実施）
+
+共通ref O=(R,2026-11-13)、別ref X=(R,2026-11-14)、本文B、result pendingを用意する。S0=13日夜、S1=14日夜、S2=15日夜、元rank r0、移動先rank r1、remote rank r2。frontierを属性別hS0/hR0と表す。MはS1/r1へatomic移動しhS(M)/hR(M)を作る。全ケースで値だけでなく、両head/frontier、全候補group、History原command/補償refs/stage、origin/source証拠、result/本文/Xの値・head不変性を比較する。
+
+|枝番|反例/手順|固定する期待結果|
+|---|---|---|
+|A11a|S0/r0→M→Undo U→Redo V、外部変更なし|S1/r1→S0/r0→S1/r1。U/Vは両属性へ新headを作り過去headを復活させない。Historyは原Mを一件のユーザー操作として保ち、U/V来歴を追記。候補競合なし、B/result/X不変|
+|A11b|同bucket Qがrank r0→r1のみ変更、Undo/Redo|r0→r1→r0→r1、rankだけ新head。schedule S0/hS0は不変。schedule contextが後から変わればQ補償全体を保留。History対象集合はrank一つ|
+|A11c|M/U/Vのいずれかでrank memberだけ検証/保存失敗、abort/quota、片側publication欠落|group全体が未適用/保留。既存S/r・両head・確定History stage不変。両方の候補/送信義務/原証拠を保持し、片側反映/Outbox退役なし。commit応答喪失は全targetか旧rawを確定するまでunknown。実adapter試験はD3/D4未実施|
+|A13a|旧override=13日昼、rank=r0。初回anchor＋Mで14日夜/r1へ、Undo/Redo|Undoは明示at(13日昼)/r0、Redoは14日夜/r1。anchorと旧override原ISO/旧null由来は保持。base(13日夜)へ誤復帰しない。両headは補償ごと更新、他ref不変|
+|A13b|M後に遠隔complete、またはcomplete→cancel。その後MのUndo/Redoを指定|schedule/rankだけA11aと同じ補償、現在result/headは維持。completedなら行は非表示、取消後は補償後S/rへ一件。完了時actor snapshotは元の観測値のまま。通常stack上位の自分の完了をskipして黙って移動Undoしない|
+|A28a|M後、remote rank-only QでS1/r2/hS(M),hR(Q)。旧MをUndo要求|両frontier検査でgroup全体保留。現在S1/r2・両headを維持、S0/r0の未適用要求を保全。HistoryをUndo済みにしない。scheduleだけS0へ戻さない。Undo成功後のremote rank変更に対するRedoも同様|
+|A28b|M後、remote schedule-only ZでS2/r1/hS(Z),hR(M)。旧MをUndo要求|現在S2/r1を維持、補償全体保留。rankだけr0へ戻さず候補/原M/Zを保持。同値S1でも新hS(Z)なら無条件補償禁止。Redoも両head検査|
+|A28c|Mを基点にU(S0/r0)とQ(rank=r2)を並行発行、順逆/重複/各段階JSON復元。別組ではZ(schedule=S2)|最終group候補はU組(S0,r0)とQ組(S1,r2)、またはZ組(S2,r1)を同集合で保持。正常projectionのS0/r2を作らない。過去U applied reflectionは残し、現在競合/History blockedを別計上。明示resolveは全group候補/両属性を観測|
+|A20a|同Routine旧policy Tokyo、cut Tのrelease上限F=11/14。account default/PC表示zoneをLAへ変更。その後B=11/16でRoutine policy変更を確認（新zone B開始>T）|default/表示変更だけでは生成不変。D<16は旧policy、D>=16は新policy、区間重複なし。既存anchor/key/base instant/History不変。B<=FやB開始<=Tは通常変更を拒否|
+|A20b|Tokyo policyで長期offline、online側でpolicy/controlを将来Bへ更新。旧端末が保存cutのrelease上限を越える新anchor要求/既存anchor moveを発行|前者はdraft保全・新anchor未確定、端末時計先行で許可しない。既存anchor moveは旧bindingの未受領原本として保持し、再接続後にsource区間/epochを再照合。新zoneへの暗黙変換なし。日付変更線側の表示zone変更もrefを変えない|
+|A21a|固定tzRulesでAmerica/New_York、2026-03-08 02:30（gap）、2026-11-01 01:30（fold）を入力|gap候補を自動03:30にしない。foldはoffset -04:00（05:30Z）/-05:00（06:30Z）の二候補を提示し選択を記録。未選択はanchor/schedule head不変、選択後は指定instantでのみ再検証。規則版差で候補が違えば保留|
+|A21b|旧dueAt ISOだけでzone不明、retained instantと基本wall timeの由来も不足|raw/元key/retained/overrideを保持し自動verifiedへ昇格しない。LegacyConfirmationで採用zone/wall time/offset/対象範囲を記録後のみconfirmed-legacy候補として再検証。未確認別日へ波及なし、未来Dは確認だけでanchor新設不可|
+|A24a|初回anchor＋Mが因果先行、その後rule/startsOn変更またはclose。予定日経過後に完了|元anchor/予定を保持しcloseならretainedに含む。現rule非適合でも元refを完了でき、結果key不変。次回生成とXへ延期値を引継がない|
+|A24b|rule変更/closeが因果先行、旧viewから初回anchor要求|新contextへ再検証。認証過去release根拠が完全（close後はretainedあり）なら同元回を固定可。不足なら要求/原本をunresolvedに保持し新anchor未確定。旧current rule/receiptだけで許可を作らない|
+|A24c|初回anchor＋move groupと、eligibility/base/retainedを変えるrule/startsOn変更またはcloseが真に並行。両順序/重複/JSON復元|双方のgroup/anchor候補/原closureを保持し当該Routine未解決表示。通常projectionを先着選択せず、新anchor/両head/Historyを成功確定しない。他Routine/B不変。先に検証したapplied履歴は消さず現在競合と分離|
+|A33a|二端末が同Oへ同semantic anchorを初回生成、証明取得順/cutだけ異なる|anchor一つへ正規化、両source証拠/op/History要求を保存。schedule/rankが異なるなら移動の並行競合を別検査。Task二重生成なし|
+|A33b|二端末が同Oへ異なるrule版/zone/baseScheduledAt/LegacyConfirmationのanchorを提示|両anchor＋初回move groupを保全しRoutine保護。値/headを任意選択せず、元refを二つに分割しない。欠落closureはpending、改ざんは保護と区別|
+|A04+09|2026-01-31月次回を2026-02-28へ延期し、時計/cutを2/28のrelease後へ進めて通常clamp回も生成。1/31分だけcomplete→cancel、2/28分だけskip|2/28前に未発生回を作らず、release後に二つの元refで共存。1/31結果だけ完了/取消、2/28結果だけskip。各schedule/head/History/証拠を相互に上書きせず、次の3/31生成不変|
+|A27追加|二端末別日moveと第三端末complete→cancelを順逆/重複/JSON復元|同schedule候補集合、resultは因果後続pending、観測snapshot/原receipt/反映履歴を保全。他ref不変。到着時current outcomeを使ってmoveを消さない|
+|A25+30|延期後soft-delete/restoreと旧offline端末move再配送|元intent/未受領コピーとanchorを保持。moveだけで削除/所属を復活させない。restore後の採否/意味競合はD3/D4の別oracle確定前にPASSへしない|
+
+固定zone例は合成fixtureであり、旧ユーザーデータをTokyo/LAへ推定する指示ではない。DSTの具体offsetは固定tzRules fixtureに束縛し、実装時のOS最新ルールへ依存させない。
+
+D1/D2の本改訂は上表のpure状態遷移oracleを**提案**する。A11cの実保存、A20bの実control/通信、A24c/A28c/A27の実reducer、A25+30/A34–36の完全schema/運用、A38の#118はD3/D4/D5や別Issueの未承認条件を含む。UI候補/Historyの論理oracleと実adapterの実証を分け、具体protocol/入力/上限/validatorを該当レビューで固定するまで完成受入やPASSの分母へ数えない。今回全て未実施で、全体/focused/型/Lint/build/実機試験も設計のみのため未実施。
 
 ## 5. 実装分割案・独立レビューの判定単位
 
 |単位/将来工程|判断依頼|実装への条件|
 |---|---|---|
-|D1 Domainモデル|元identity/anchor/schedule、戻し/再移動、二回共存、生成/完了対象|本設計の承認と明示実装指示後に合成pure PoCだけ。zone/旧回根拠の未決を先に固定|
-|D2 UI/履歴|安定ref、当日/過去DnD、範囲確認、一括対象、結果時snapshot、Undo|D1と各oracle承認、製品store未接続のハーネスから。#107へ無断接続しない|
+|D1 Domainモデル|元identity/anchor/schedule、Routine CalendarPolicy/zone変更区間、source closure/旧回確認、初回作成・生成/完了対象|01§2.3–2.5とA20/A21/A24/A33の提案を独立承認し、明示指示後に合成pure PoCだけ。実policy/認証baseline供給はD3/D4未承認|
+|D2 UI/履歴|安定ref、当日/過去DnD、範囲確認、一括対象、結果時snapshot、write-set全体のUndo/Redo|01§4.1とA11/A13/A28の具体oracleを独立承認。製品store未接続のハーネスから。#107へ無断接続しない|
 |D3 同期拡張|新属性/schemaと因果/MV・atomic group/readSet/result合成|#107担当の別設計レビューと必要基盤承認。現N1への属性追加やN2/N3進行を本PRで許可しない|
 |D4 互換/移行/復旧|旧field対応、完全checkpoint、旧writer停止、後発端末回収、rollback|明示移行計画/全永続種別照合/両端末静止を別承認。実データは別許可|
 |D5 DEV/実機・リリース|A40等の実UI、save/restart/sync、性能/旧client|D1–4の該当承認と接続scope/使い捨てアカウント/停止手順を固定。DEV/Production配信はリリース担当の別承認|
 
-実装を始める前に未決を列挙したまま推測補完しない。特にzoneの確定、現行date方式と#113/#118の境界、同時schedule/resultの因果判定、完全形式/codecのversionをレビューで判断する。初期公開をFirebase標準に限定する案の可否も判断対象。E2EE/Drive/localの新同期実装を抱き合わせない。
+本改訂はzoneの管理単位/適用区間/旧回確認とHistory補償oracleを提案規範として固定したが、承認済みとはしない。実装を始める前に採否をレビューし、現行date方式と#113/#118の境界、同時schedule/result/groupの実reducer、zoneルール実体/認証cut供給、完全形式/codecのversion等を推測補完しない。初期公開をFirebase標準に限定する案の可否も判断対象。E2EE/Drive/localの新同期実装を抱き合わせない。
 
 ## 6. レビュー担当への引き継ぎ
 
@@ -136,3 +165,18 @@ A20/A21の暦policy、A24の意味依存、A28のUndo/resolve、A34–36の完�
 今回の変更はこの設計ディレクトリのMarkdownだけ。e18c4d1基点で調査結果を参照し、#107/既存API/再現テスト/製品コードは非変更。GitHub #130/#113/#118本文と追跡済みソース、#107の承認設計/提出APIを読んだ。実データ/端末DB/SDK/Rules/配信は操作していない。
 
 文書のリンク/表/fence、製品基点/差分範囲、#107 worktree非変更、diff checkを確認し、commit/push・独立PR・Issue #130への記録後に停止する。レビュー結果前に実装しない。
+
+## 7. 独立レビュー指摘への対応（2026-11-14、再レビュー待ち）
+
+指摘正本は[6858422424](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/131#issuecomment-6858422424)、修正前commitは`106bcf9078f472698e17103b6ae4d5a784eaefb5`。以下は文書上の反例検討/提案修正であり、製品実装のFAIL→PASSや利用者データの確認ではない。
+
+|指摘|修正した文書/節|反例と修正規範|対応受入|残存条件|
+|---|---|---|---|---|
+|D1 管理単位/表示zone/変更|01§2.3|account可変zoneによる全過去再解釈を避け、Routine単位の不変policyをgenerationへ束縛。既release上限Fより後・新暦日開始がcutより後のBで切り、旧区間/anchor/keyは不変|A20a/b、A21a/b|zoneルール実体/初期採用UI/control供給、実writer fenceはD3/D4|
+|D1 旧回根拠/初回anchor|01§2.4|当日/過去/retained/override別に自動検証と本人採用を分離。有限baseline→定義/lifecycle/policy closure、releaseAt<=cut、旧原本対応を要求。未知zoneをTokyo等に推定せず、確認はconfirmed-legacyと明示|A21b、A24a–c、A32/A33|旧原本の認証baseline対応/完全schemaはD4未承認。future/#118を確認だけで作れない|
+|D1 DST/短月/並行anchor|01§2.5|gap推測シフト禁止、fold offset選択、clampの版を固定。同semantic anchorは冪等、異anchorは初回moveごと保護。rule/closeとの因果順/並行を分ける|A21a、A24a–c、A33a/b、A04+09|候補/保護解除と意味reducerの実装はD3/D4。D1案の採否自体が再レビュー対象|
+|R131-1 正常Undo/Redo|01§4操作表/§4.1、§6末尾|M:S0/r0→S1/r1のUndoをS0/r1にせず、同write-set全体をS0/r0へ補償。before/after/両head/group/原opをHistoryに保持し新U/V headを発行|A11a、A13a/b|History/local pending/確定cursorの実adapterはD3/D4。旧Node snapshot再生は禁止|
+|R131-1 remote片属性/rank-only|01§4.1|remote r2やS2をschedule headだけで上書きしない。両head検査で補償全体保留。rank-onlyはrankだけ補償しschedule contextを検査。真の並行は整合する組の候補で保持|A11b、A28a–c|group意味競合/明示resolveのwire/実reducerはD3未承認|
+|R131-1 片側失敗/結果との境界|01§4.1|片属性失敗で両head/確定History不変。完了/取消は補償write-set外、元result/headとactor観測snapshotを保持|A11c、A13b、A27追加|実CAS/Journal/receipt/Publicationと保存障害注入はD3/D4未実施|
+
+再レビュー依頼はD1/D2の提案規範と反例への整合性に限定する。D3/D4のBLOCKED、D5未審査、#113/#118の未承認境界を維持。製品コード/SDK/Rules/実データ/配信/#107の実装を変更しない。修正を同じPR branchへpushし、PR #131とIssue #130へ対象SHA/差分を記録して停止する。
