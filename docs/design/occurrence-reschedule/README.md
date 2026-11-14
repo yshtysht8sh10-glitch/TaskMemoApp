@@ -27,3 +27,5 @@
 推奨案と未決条件を本文で区別する。未承認事項を推測で実装可能とせず、レビュー後も明示実装指示まで停止する。製品コード、SDK、Rules、実データ、既存テスト、DEV/Production、#107の変更はない。
 
 レビュー[R131-1・D1 BLOCKED](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/131#issuecomment-6858422424)への対応は01§2.3–2.5（zone/根拠）と§4.1（History atomic group）、02§4.1（具体反例）/§7（対応表）を参照。D1/D2の提案を具体化する文書修正であり、D3/D4 BLOCKED・D5未審査の解除を申請したものではない。
+
+**最新の限定修正**: [再レビュー6859122823](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/131#issuecomment-6859122823)でD2は設計仕様限定APPROVE。D1-F1だけを01§2.3/§2.3.1、02§4.2/§8で再提出する。承認済みD2規範/受入は変更しない。D3/D4はBLOCKED、D5未審査、実装着手不可を維持する。

@@ -127,8 +127,8 @@
 |A28a|M後、remote rank-only QでS1/r2/hS(M),hR(Q)。旧MをUndo要求|両frontier検査でgroup全体保留。現在S1/r2・両headを維持、S0/r0の未適用要求を保全。HistoryをUndo済みにしない。scheduleだけS0へ戻さない。Undo成功後のremote rank変更に対するRedoも同様|
 |A28b|M後、remote schedule-only ZでS2/r1/hS(Z),hR(M)。旧MをUndo要求|現在S2/r1を維持、補償全体保留。rankだけr0へ戻さず候補/原M/Zを保持。同値S1でも新hS(Z)なら無条件補償禁止。Redoも両head検査|
 |A28c|Mを基点にU(S0/r0)とQ(rank=r2)を並行発行、順逆/重複/各段階JSON復元。別組ではZ(schedule=S2)|最終group候補はU組(S0,r0)とQ組(S1,r2)、またはZ組(S2,r1)を同集合で保持。正常projectionのS0/r2を作らない。過去U applied reflectionは残し、現在競合/History blockedを別計上。明示resolveは全group候補/両属性を観測|
-|A20a|同Routine旧policy Tokyo、cut Tのrelease上限F=11/14。account default/PC表示zoneをLAへ変更。その後B=11/16でRoutine policy変更を確認（新zone B開始>T）|default/表示変更だけでは生成不変。D<16は旧policy、D>=16は新policy、区間重複なし。既存anchor/key/base instant/History不変。B<=FやB開始<=Tは通常変更を拒否|
-|A20b|Tokyo policyで長期offline、online側でpolicy/controlを将来Bへ更新。旧端末が保存cutのrelease上限を越える新anchor要求/既存anchor moveを発行|前者はdraft保全・新anchor未確定、端末時計先行で許可しない。既存anchor moveは旧bindingの未受領原本として保持し、再接続後にsource区間/epochを再照合。新zoneへの暗黙変換なし。日付変更線側の表示zone変更もrefを変えない|
+|A20a|表示zone/default変更の非干渉に加え、T0確認→旧zone release進行→T1切替を検査（§4.2）|表示変更だけでは生成不変。区間確定はT1のF/条件と不可分。未anchor/anchor済みを共に保全し、無効Bは通常activationしない。正例も§4.2で固定|
+|A20b|policy切替前/後/並行のanchor、長期offline、初回policy適用、失敗/重複/応答喪失（§4.2）|元日付の区間で再照合。旧ref/元instant/原intentを保全、未確認将来要求はdraft/隔離。T0条件の再利用/B自動補正/二重activationなし|
 |A21a|固定tzRulesでAmerica/New_York、2026-03-08 02:30（gap）、2026-11-01 01:30（fold）を入力|gap候補を自動03:30にしない。foldはoffset -04:00（05:30Z）/-05:00（06:30Z）の二候補を提示し選択を記録。未選択はanchor/schedule head不変、選択後は指定instantでのみ再検証。規則版差で候補が違えば保留|
 |A21b|旧dueAt ISOだけでzone不明、retained instantと基本wall timeの由来も不足|raw/元key/retained/overrideを保持し自動verifiedへ昇格しない。LegacyConfirmationで採用zone/wall time/offset/対象範囲を記録後のみconfirmed-legacy候補として再検証。未確認別日へ波及なし、未来Dは確認だけでanchor新設不可|
 |A24a|初回anchor＋Mが因果先行、その後rule/startsOn変更またはclose。予定日経過後に完了|元anchor/予定を保持しcloseならretainedに含む。現rule非適合でも元refを完了でき、結果key不変。次回生成とXへ延期値を引継がない|
@@ -143,6 +143,35 @@
 固定zone例は合成fixtureであり、旧ユーザーデータをTokyo/LAへ推定する指示ではない。DSTの具体offsetは固定tzRules fixtureに束縛し、実装時のOS最新ルールへ依存させない。
 
 D1/D2の本改訂は上表のpure状態遷移oracleを**提案**する。A11cの実保存、A20bの実control/通信、A24c/A28c/A27の実reducer、A25+30/A34–36の完全schema/運用、A38の#118はD3/D4/D5や別Issueの未承認条件を含む。UI候補/Historyの論理oracleと実adapterの実証を分け、具体protocol/入力/上限/validatorを該当レビューで固定するまで完成受入やPASSの分母へ数えない。今回全て未実施で、全体/focused/型/Lint/build/実機試験も設計のみのため未実施。
+
+### 4.2 D1-F1 — A20a/A20bの線形化境界反例（全て未実施）
+
+固定offsetの合成daily Routine Rを使う（実ユーザーzoneを推定する例ではない）。旧policy P9はUTC+09、新policy候補P0はUTC、基本wall time=23:00、元ref O15=(R,2026-11-15)。旧zoneの11/15 releaseは`2026-11-14T15:00:00Z`、O15の旧base instantは`2026-11-15T14:00:00Z`。新zoneでO15を再解釈した`2026-11-15T23:00:00Z`へ変更してはならない。
+
+共通T0=`2026-11-14T14:59:00Z`にB=11/15を確認する。F(T0)=11/14、新zoneのB開始=`2026-11-15T00:00:00Z`。共通T1=`2026-11-14T15:01:00Z`ではF(T1)=11/15であり、新zone B開始>T1だけは成立する。初期に他のref/本文/result/Historyは変えず、保存証拠には原requestId/payload・B・T0と、実判断T1/cut・F・head/区間・結果を含める。
+
+|枝番|順序/障害|最終policy区間、F/B、元回/anchor/要求/証拠の期待結果|
+|---|---|---|
+|A20a-F1|T0でB=15確認、T1まで待つ。O15は未anchor|F1=15、B=15なので通常activation拒否/再確認待ち。P9区間は切れずP0はactiveにならない。O15は旧policyでrelease済みのまま、anchorは未作成でも元base=11/15 14:00Zの根拠を保持。元B=15の未適用requestとT0/T1/F1/拒否証拠を保存|
+|A20a-F2|T0後の`11/14 15:00:30Z`にP9でO15のanchor＋初回moveを正当に作成。その後T1で切替要求|F1=15/B=15で切替拒否。P9/O15/旧base 14:00Z/既存anchor/source・move・Historyは不変。anchorを新zoneへrebaseせず、拒否request/根拠だけ追記する|
+|A20b-F1|切替をT1で拒否した後、`15:02Z`にP9でO15の初回anchor要求|active区間はP9のまま。新cut/sourceと既存許可条件が満たされれば同O15/旧base 14:00Zで作成できる。失敗したP0候補の存在で旧回を消さない。B=15の要求は再確認待ちのまま保持|
+|A20b-F2|O15のP9 anchor要求と、B=15切替がT1で並行（anchor先/切替先の二順）|両順ともF1=15で切替不可。anchorが許可条件を満たせばP9/O15/14:00Zで一つ、重複要求は証拠だけ保持。未anchorでも拒否条件は同じ。policy/anchorの配送順でP0版のO15を作らない|
+|A20a-OK1|別の正例でT0に本人が初めからB=16を確認し、共通T1まで遅れる|F1=15<B=16、新zoneの16日開始=11/16 00:00Z>T1なので、他条件不変なら成功。P9はD<16、P0はD>=16。O15/14:00Zは旧回として不変、未anchorでも後で固定可。B16の成功request/T1/F15/区間証拠を不可分保存。失敗B15を自動補正した事例ではない|
+|A20a-OK2|B=15をT0確認、別正例T1early=`11/14 14:59:30Z`で確定|F=14<B15、新開始>T1earlyで成功。P9はD<15/P0はD>=15。以後15日のreleaseはP0の11/15 00:00Zで、P9の将来15日回を追加しない。元々既releaseの14日回/証拠は不変。成功点T1earlyを後刻の再送で書換えない|
+|A20b-OK1|OK1のB16切替に対し、O15のP9 anchor作成が前/後/真に並行（三順）|切替のF1はanchor有無によらず15、区間P9:D<16/P0:D>=16で一致。各source/時刻が正当ならO15/14:00Zの同anchor一つへ収束。後着も元日付区間P9で検証。全要求/証拠を保持し他ref不変。binding/他前提が不明なら保留で消さない|
+|A20b-OK2|OK1成功後、offline端末が旧P9だけを使いO16を未確認で要求|新policy区間は維持（O16はP0、release=11/16 00:00Z、基本23:00Z）。旧P9のO16 anchorを通常作成せずdraft/隔離原本保持。現在のcut/元区間で本人再確認まで新baseへ自動変換しない。O15/既存anchorも不変|
+|A20b-C1|T0後・共通T1前（`15:00:45Z`）にconfigの基本時刻を23→22へ変更|既release O15を含めF1=15、B15。確認config head不一致でも切替拒否/再確認。P9区間維持、config変更そのものは戻さない。既存O15 anchorがあればbase14:00Z不変。requestは古い確認値のまま保存し、新head/Fと拒否根拠を追記|
+|A20b-C2|同時刻にclose（O15は既releaseでretainedへ）|F1=15/B15、lifecycle head変更/closed条件により切替不可。P9とclose/retained/O15/既存anchorは保持。closeをT0のopenへ戻さず、旧request/両cut/理由を保存|
+|A20b-C3|同時刻に別requestでB16の正当policy切替が先に成功|現役区間はP9:D<16/P0:D>=16、F1=15。元B15 requestはpolicy head不一致で拒否/再確認。先に成功した区間/成功証拠とO15を維持し、旧P9全域へ戻さない|
+|A20b-C4|OK1のB16要求とconfig/close/別policy更新が並行|時点fenceで順序を決める。外部変更が先ならそのheadで再確認となり当該要求は未適用。切替が先ならT1/F15/B16の成功区間・証拠を保持し、後続変更は新contextで別検証。古いT0 headで両方を確定しない。D2のHistory規則を変更しない|
+|A20b-E1|B15確認後、T1確定前にabort/通信失敗。再試行判断点が共通T1となる|元P9区間、未適用request、原B15/T0証拠を保持。再試行はF1=15を再計算して再確認待ち、旧成功条件を再利用しない。B16を自動選択しない|
+|A20b-E2|OK1のB16でT1のcommit応答だけ喪失、同requestId/payloadで再照会・重複送信|確定済みならP9:D<16/P0:D>=16と当時T1/F15/B16結果を回収、anchor/元instant不変。再activation/新B/新request採番なし。結果未確認ならunknown、旧rawまたは全targetの確定まで切替成功を表示しない|
+|A20b-E3|A20a-F1の境界拒否が確定後、同じ要求を翌日/長期offline復帰時に再送|同じB15の拒否結果と証拠を返し未適用要求を保持。未受領原本も消さない。新Bの本人再確認と別requestIdなしに成功へ変更しない。新requestは旧request参照を残し、その新T1で再評価|
+|A20b-E4|旧Routineの初回policy適用。旧zoneは明示確認/原本照合済みP9相当、T0でB15確認、共通T1で適用|未anchor O15もF1=15へ含め初回適用拒否。従来の生成/旧元ref/旧instant/原anchor/旧原本はそのまま。共有policyなしの状態を勝手にP0へ変えず、初回要求/確認/拒否証拠を保持。正例は再確認済みB16でOK1と同じ境界検査|
+|A20b-E5|初回適用で旧zone/来歴/未同期原本が未確認のまま時間経過|F=unknownで保留。Tokyo/端末時刻/空anchor mapからF14/F15と推定しない。Bは本人が選んだ値のまま、全旧データ/要求/不足証拠を保存。D4照合前に初回適用成功としない|
+|A20b-E6|T1相当の時刻確認後、確定がさらに遅れ旧release境界を越え得る実provider案|その古い読取点をT1と呼ばない。確定点の再条件評価または同等の不可分な時間fenceを立証できなければ通常activation不可。F/B/旧区間/anchorを保全。D3の実transaction試験は本PR未実施|
+
+上記は固定traceに対するD1の論理oracleで、製品CalendarPolicy/認証時刻/transaction/排他/実zone DBの試験結果ではない。D3/D4はBLOCKED、D5未審査を維持する。D2承認済みのA11/A13/A28・History/補償規範は本修正の対象外であり、内容を変更しない。
 
 ## 5. 実装分割案・独立レビューの判定単位
 
@@ -180,3 +209,19 @@ D1/D2の本改訂は上表のpure状態遷移oracleを**提案**する。A11cの
 |R131-1 片側失敗/結果との境界|01§4.1|片属性失敗で両head/確定History不変。完了/取消は補償write-set外、元result/headとactor観測snapshotを保持|A11c、A13b、A27追加|実CAS/Journal/receipt/Publicationと保存障害注入はD3/D4未実施|
 
 再レビュー依頼はD1/D2の提案規範と反例への整合性に限定する。D3/D4のBLOCKED、D5未審査、#113/#118の未承認境界を維持。製品コード/SDK/Rules/実データ/配信/#107の実装を変更しない。修正を同じPR branchへpushし、PR #131とIssue #130へ対象SHA/差分を記録して停止する。
+
+## 8. D1-F1限定修正・再レビュー引き継ぎ
+
+修正前`f2490ef881ab402993cb27487ae4bc92442c9a46`、指摘正本は[6859122823](https://github.com/yshtysht8sh10-glitch/TaskMemoApp/pull/131#issuecomment-6859122823)。D2は同レビューで**設計仕様限定APPROVE**であり、今回は変更しない。以下は設計上の固定trace/期待結果で、製品実装やtransactionのFAIL→PASSを実施した報告ではない。
+
+|D1-F1の論点|規範修正|反例/受入対応|
+|---|---|---|
+|T0確認とT1確定の混同|01§2.3と§2.3.1: T0は予約でなく、activationCutRefは実確定T1。新しいBは新確認/新request|A20a-F1/F2、A20a-OK1/OK2|
+|時間だけで進む未anchor release|F(T1)を全旧policy/config/lifecycle来歴から再計算。既release事実をanchor mapやT0/F0で代用しない|T0=11/14 14:59Z、T1=15:01ZでF14→15、B15拒否。未anchor/anchor済み双方で同結果|
+|検証と区間確定のTOCTOU|現役Auth/policy/config/lifecycleとF/B/時刻条件を同線形化点で検証・確定。古いTread+通常commitだけでは不足|A20b-C1–C4/E6。実temporal transaction/時刻/排他の供給立証はD3未承認|
+|旧policy anchorの前/後/並行|元日付の確定区間で判定。正当旧回は保全、旧policyの未確認将来要求はdraft/隔離、rebase禁止|A20b-F1/F2/OK1/OK2。O15=(R,11/15)と旧base=11/15 14:00Zを保持|
+|失敗・再送・初回適用|未成立は新T1で再評価、既成立は当時結果を回収。失効Bは自動補正しない。初回も時間経過とD4照合を検査|A20b-E1–E5。request/原B/両cut/F/anchor/区間/拒否・成功証拠を保持|
+
+D1-F1だけを独立再レビュー依頼する。D2本文（01§4.1を含む§3以降）とA11/A13/A28の値・head・History oracleは前commitと同一であることを差分で確認する。D3/D4 BLOCKED・D5未審査、#113/#118と実provider/実データの未承認条件を維持する。
+
+今回のチェックはMarkdownリンク/表/fence、D2不変、文書限定差分、git diff --checkとGit状態のみ。focused/全体テスト/型/Lint/build/実機/固定trace実行は行わず、受入表は全て未実施。修正commit/pushとPR #131・Issue #130への記録後に停止する。#130/#107をCloseしない。

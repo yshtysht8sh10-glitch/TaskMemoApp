@@ -85,9 +85,11 @@ projection entryの概念は`{originRef, schedule: resolved(value) | conflict(ca
 
 `CalendarPolicy`は概念的に`{definitionId, policyId, previousPolicyRef, zone(IANA), tzRulesRef, generatorVersion, effectiveFromOriginalDate, activationCutRef}`。policyIdは不変IDで大小を勝者判定に使わず、定義のpolicy frontierと認証されたtransitionで有効版を選ぶ。scope/generation/control epochと定義config headへ束縛し、全端末が同じ版/同じzoneルールで発生日を判定する。物理schema/署名供給の実装はD3/D4で別審査。
 
+`activationCutRef`は§2.3.1の実確定T1を指す。UI確認T0はrequestのconfirmationCutRefへ別保存し、activationの根拠として代用しない。
+
 発生日はpolicyの暦zone、表示zoneは利用端末の設定を使う。表示zone変更はinstantの表示だけで、元key/anchor/policy/発生済み集合に書き込まない。予定日のbucket判定はRoutine暦zoneを基準とし、端末表示が別日なら両日付/zoneを明示する。ドラッグ対象の「明日」も当該Routine暦zoneで具体日付に確定して確認する。異zoneのRoutineが同じ一覧にある場合、zone表示なしの共通「明日」で曖昧に保存しない。
 
-zone変更は上書きでなく明示の新policy transitionとする。検証済みcut Tで、旧policyにより**既にrelease済みとなった元日付の上限F**（anchor済みかどうかによらない）を確定し、変更境界Bを`B > F`かつ`新zoneでのBの日の開始instant > T`となる既存暦日から本人が確認する。元日付D<Bは旧policy、D>=Bは新policyという重ならない区間を認証する。startsOn/repeatRuleを変更する操作ではない。Bが存在しない暦日/閉じた定義/比較不能policyなら通常transitionは停止し別確認。
+zone変更は上書きでなく明示の新policy transitionとする。UIの確認cut **T0**では旧policyのrelease上限F(T0)と候補Bを確認するが、これは予約/activationではない。実際の区間確定の**線形化点T1**で、`B > F(T1)`かつ`新zoneでのBの日の開始instant > T1`を再検証し、§2.3.1の不可分な操作でのみ確定する。Fには未anchorのrelease済み回も含める。成功時に元日付D<Bは旧policy、D>=Bは新policyという重ならない区間を認証する。startsOn/repeatRuleを変更する操作ではない。Bが存在しない暦日/閉じた定義/比較不能policyなら通常transitionは停止し別確認。
 
 既存anchorと旧日付区間は旧policyを永久に参照し、未anchorのrelease済み回もzone変更で再解釈しない。新policyで同じ元keyを二重生成せず、旧区間での元keyをUTCや端末の現地日へ変換しない。generation移行はpolicy原本と区間/mappingを保全し、移行先zoneへ一括置換しない。長期offline端末の旧policy操作は旧contextの原intentとして保持し、再接続時に区間・世代・cutと照合する。未確認の将来区間を旧policyで作った候補を新policyへ暗黙rebaseしない。
 
@@ -95,7 +97,46 @@ zone変更は上書きでなく明示の新policy transitionとする。検証�
 
 旧Routineのpolicy採用が未確認でFを計算できなければzone transitionも未確定とする。account defaultや端末時計を仮の証拠にしてBを決めない。
 
-**旧Routineの最初の採用は既存policy変更と区別する。** 本人は今後の共有zoneを明示選択し、検証cut Tより後に開始する暦日Bから新policyを有効にする案。D4で照合する既存ref集合とも境界の衝突がないことを確認する。過去D<Bにzoneが不明なら未知区間のまま保全し、現在のzoneを遡及割当しない。旧回を操作する際は、対象refだけを覆う認証`legacy-adoption` contextをLegacyConfirmationから作りcalendarPolicyRefへ結ぶ。これはRoutine所属の限定的な旧回採用証拠で、通常の生成区間や別日のzoneを変更しない。全既存ref/未同期端末の照合が未完なら有効化できたとはみなさず、実行はD4未承認のまま。
+**旧Routineの最初の採用は既存policy変更と区別する。** 本人は今後の共有zoneを明示選択し、T0でBを確認する。初回採用も§2.3.1を適用し、実確定T1より後の暦日開始、F(T1)、既存refとの衝突を再検証する。旧zone/元生成根拠が不明ならFを推定せず採用保留とし、D4の照合/確認なしに有効化しない。過去D<Bは未知区間のまま保全し、現在のzoneを遡及割当しない。旧回を操作する際は、対象refだけを覆う認証`legacy-adoption` contextをLegacyConfirmationから作りcalendarPolicyRefへ結ぶ。これはRoutine所属の限定的な旧回採用証拠で、通常の生成区間や別日のzoneを変更しない。全既存ref/未同期端末の照合が未完なら有効化できたとはみなさず、実行はD4未承認のまま。
+
+#### 2.3.1 D1-F1 — 確認T0と切替T1の分離・不可分な時間fence
+
+**採用する案は「T1で条件を再検証して区間を原子的に確定する」方式。** T0で旧policyのreleaseを止める予約方式は採用しない。確認画面を開いたままでも旧policyは通常どおりreleaseし、未anchorだから存在しないとはみなさない。
+
+`PolicyTransitionRequest`は概念的にrequestId、不変payload digest、対象binding/definitionId、確認した旧policy frontier・config/lifecycle head、新policy内容/tzRules、**本人が選んだB**、confirmationCutRef=T0、確認証拠を保持する。T0のcut/期限/検証成功は候補確認の証拠に過ぎず、区間変更や将来releaseをfenceする権利ではない。新しいBや意味の異なるpolicyへ同requestIdを再利用しない。
+
+**F(T1)の定義**: T1直前に有効な旧policy区間と検証済みconfig/lifecycleの来歴から、`releaseAt(D) <= T1`が成立して一度releaseした元日付Dの最大値を求める。anchor/materialized rowの列挙だけから求めない。既にreleaseした事実は後のrule変更/closeで消去せず、retained/既存anchorの根拠とも照合する。未知来歴/旧zone不足/相反するrelease証拠ならF不明で保留/保護とし、空集合やF(T0)で補完しない。新zoneのB開始が未来でも、旧zoneでF(T1)>=Bなら切替不可。
+
+**T1の論理的な原子操作**は次を同じ線形化点に属させる。
+
+1. 当該requestの既存確定結果を照会する。既に同payloadが成功/拒否として確定していればその結果を返し、再activationしない。新規判断なら現役Auth/binding/世代/control epochと、T1の認証されたcut/timeを得る。
+2. 現役policy frontier、config、lifecycle、tzRulesとref/anchor/retainedの保全条件を再検証する。T0で確認した意味上のheadと異なるpolicy/config/close等を観測したら、同値でも確認contextを使い回さず再確認待ちにする。anchorの追加だけで同じ意味headが変わらない場合も、T1でF/衝突を取り直し、その追加を見落とさない。
+3. 選択済みBについて`B > F(T1)`、新zoneのB開始instant>T1、暦日の存在、区間非重複、未承認の旧回再解釈がないことを全て再評価する。既存anchor/未anchorのrelease済みD>=Bがあれば成功にしない。旧Routine初回採用にも同じ条件とD4の原本照合条件を要求する。
+4. 条件成立時だけ、旧D<B/新D>=Bの不変区間と新policyを確定し、policy frontier/区間root/control version、requestIdに対するactivation結果、T1 cut・F(T1)・B・検査したhead/根拠を不可分に保存する。途中段階の候補をactiveにしない。検証と確定の間に時間/状態が進んで条件が崩れるなら成立した操作ではない。
+
+**T1はUI確認時刻やtransaction開始/直前読取の古い時刻ではなく、区間確定を線形化する点そのもの**。同じDB transaction内でTreadを読んだだけでも、commitが旧release境界を越え得るならこの規範を満たさない。D3の実providerは、権威時刻とstate fenceを区間確定と結び、例えば確定点で評価する時間precondition/同等の期限fenceにより、条件を満たさない時刻のcommitを成立させないことを立証する必要がある。時刻に不確実幅がある場合はその確定点の上限でも全条件成立を保証するか停止する。具体的なtransaction/排他/時刻供給が存在するとこの文書で仮定せず、供給不能ならactivationゲートを閉じる。
+
+**条件不成立/境界失効**: F(T1)>=B、B開始<=T1、head変更、期限/認証不明等なら通常activationを拒否または保留する。現在の旧policy区間、既存元ref/元予定instant/anchorを変更せず、元のB・未適用request・T0/T1の根拠と拒否/保留理由を保存する。他の正当なconfig/close操作の結果をT0へ巻き戻さない。Bを翌日やF+1へ自動補正しない。本人が新context/新Bを再確認し、旧requestへ関連付けた新requestIdで要求する。期限切れ要求や失敗候補をTTLだけで削除しない。
+
+**旧policy anchor要求との順序**: anchor作成も、対象元日付に有効な区間とrelease根拠を同じ意味のfenceで照合する。
+
+- anchorがT1より前なら、そのref/元instant/原policyをT1で保全対象へ含める。ただしFはそのanchorの有無に関係なく計算する。anchorがなくても既release Dを新zoneへ移さない。
+- 切替が先に成功した場合、後着の旧policy anchor要求は**元日付で**区間を引く。D<Bなら旧policy区間の正当なrelease/sourceが完全なら初回作成を許せる（binding/結果等の既存条件は維持）。active frontierが新policyという理由だけで旧回を消さない。D>=Bの旧policy要求は通常作成せずdraft/隔離原本として保持し、現役区間での明示再確認待ち。新zoneへ同refのbase instantを自動変更しない。
+- 真に並行なら、T1とanchor作成の論理的順序をfenceで直列化し、上の前/後いずれかの規則に従う。D<Bの同semantic anchorは一つへ正規化し両要求/証拠を保持する。旧policyで正当な既release D>=Bが検証できる場合は切替が成功してはならない。矛盾する成功記録/anchor根拠が出たら保護停止し、どちらかを先着勝者にして再解釈しない。
+
+**失敗/応答喪失/重複/offline**:
+
+|窓/状況|保持・再判断条件|
+|---|---|
+|T0後・T1未成立でabort/期限切れ/通信失敗|旧区間とrequest/確認証拠を保持。再試行にはその時点の新T1でF/全条件を再計算。T0条件を再利用しない|
+|T1のcommit結果が不明|新requestや新Bを作って成功と推定しない。同requestId+payloadで確定結果を照会。unknownの間は切替成功表示/二重activationを禁止|
+|T1成功後の応答喪失/同一要求再配送|不変activation結果から当時のT1/F/B/区間を回収する。現在時刻で既成功を再判定して失敗に変えたり、区間を再作成しない|
+|境界失効の拒否が確定後の再配送|同じ拒否結果/原Bを返す。新Bは本人の再確認と新requestが必要。原request/証拠を保持|
+|config/close/policy変更が先/並行|先なら現在headと不一致で再確認。並行は確定点のstate fenceで一方の順序に決め、競合した側を再確認へ。切替後に正当に確定した別操作や過去anchorを巻き戻さない|
+|長期offlineの旧policy操作|保存済みcutを越える初回anchorは従来どおりdraft。再接続時に実activation結果と元日付の区間を取得し、D<Bの正当旧回は保全、D>=Bの未確認要求は隔離/再確認。旧epochの原intentを新bindingへ勝手に書換えない|
+|旧Routineの初回policy適用|T0後に未anchorの旧回がreleaseした場合もF(T1)へ含める。根拠/zone/未同期原本の照合不足は保留。本人の初回確認や空のanchor mapを成功根拠にしない|
+
+本節はD1の論理規範のみ。実際のtemporal transaction、anchor作成との排他、durable request/activation台帳、認証時刻、D4初回取込みの実行は未実装・未承認。D2の承認済み§4.1やそのUndo/Redo oracleは変更しない。
 
 ### 2.4 sourceContextRef・旧回の根拠・初回anchorの許可
 
