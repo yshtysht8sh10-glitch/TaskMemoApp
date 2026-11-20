@@ -32,6 +32,7 @@ import {
   treeDiagnosticLog,
 } from "@/components/treeDiagnostics";
 import { DeadlineView } from "@/components/DeadlineView";
+import { TaskSearch } from '../components/TaskSearch';
 import { QuickTitleEditor } from "@/components/QuickTitleEditor";
 import { DateTimeField } from "@/components/DateTimeField";
 import { DateField } from "@/components/DateField";
@@ -213,6 +214,7 @@ export default function HomeScreen() {
     DEFAULT_TREE_DISPLAY_PREFERENCES.showCompletedMemos,
   );
   const [view, setView] = useState<MainView>("deadline");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [deadlineExpanded, setDeadlineExpanded] = useState<
     Set<DeadlineGroupKey>
   >(
@@ -679,6 +681,9 @@ export default function HomeScreen() {
       {textEdit && <TextEditScreen session={textEdit.session} excluded={textEdit.excluded} prepare={sync.prepareTextEdit} commit={sync.commitTextEdit} discard={sync.discardTextEdit} onClose={() => setTextEdit(null)} />}
       {textView && <TextViewScreen snapshot={textView} onClose={() => setTextView(null)} />}
       <StatusBar style={resolved === "dark" ? "light" : "dark"} />
+      {searchOpen && <TaskSearch nodes={nodes} editable={sync.startup.editable}
+        onClose={() => setSearchOpen(false)}
+        onOpenMemo={memo => { setSearchOpen(false); openMemoEditor(memo); }} />}
       {sync.applicationState === 'error' && <View accessibilityRole="alert" style={{ padding: 12, backgroundColor: colors.surfaceAlt }}>
         <Text style={{ color: colors.danger, fontWeight: 'bold' }}>編集基盤を開けません · 原本を保持して停止しています</Text>
         <Text selectable style={{ color: colors.text }}>{sync.error}</Text>
@@ -762,6 +767,11 @@ export default function HomeScreen() {
         />
       </View>
       <View accessibilityLiveRegion="polite" style={{ paddingHorizontal: 16, paddingVertical: 8 }}>
+        {view === 'deadline' && sync.startup.showData && <Pressable accessibilityRole="button"
+          accessibilityLabel="タスクを検索" onPress={() => setSearchOpen(true)}
+          style={{ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-end', paddingHorizontal: 12 }}>
+          <Text style={{ color: colors.accent }}>タスクを検索</Text>
+        </Pressable>}
         <Text style={{ color: colors.textSecondary }}>{sync.startup.message}</Text>
         {!!sync.user && !!sync.error && <Text accessibilityRole="alert" style={{ color: colors.danger }}>{sync.error}</Text>}
         {!!sync.user && !sync.startup.editable && <Pressable accessibilityRole="button" onPress={() => setSyncOpen(true)} style={{ paddingVertical: 12 }}>
