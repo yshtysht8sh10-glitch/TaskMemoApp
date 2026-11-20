@@ -27,7 +27,7 @@
 |D319|長期offlineでzone変更/DST gap-foldを跨ぐ|既存anchor不変、新releaseは認証source待ち。表示zoneで元ref変更なし。不明instant候補を捏造しない|
 |D320|T0=11/14 14:59Z、T1=15:01Z、旧+09→新UTC、B15、未anchor O15|F14→15、activation拒否。旧区間不変、O15 base=11/15 14:00Zを保持する根拠、request B15/T0/T1/F/拒否証拠を保全|
 |D321|D320で旧O15 anchorあり/anchor要求が前・後・並行|全順序でB15拒否。元ref/base/anchor不変、未適用request残存。anchor件数をF根拠にしない|
-|D322|B16を別途確認して同T1、またはB15を14:59:30Zで確定|条件成立時だけ旧D<B/新D>=B区間を一回確定。O15旧anchorは元baseを保持。request結果/T1/F/Bの完全証拠|
+|D322|B16を別途確認して同T1、またはB15を14:59:30Zで確定|前者F15<B16、区間旧D<16/新D>=16、O15旧anchor/base保持。後者は未releaseのO15旧anchorがない正常入力でF14<B15、旧D<15/新D>=15、O14原本保持、O15を先行anchor生成しない。両者request結果/T1/F/Bを一回だけ確定|
 |D323|Tread境界前、commit境界ちょうど/不確実幅が境界跨ぎ|B>Fが確定点で偽なら拒否。transaction内先読みだけを成功にしない|
 |D324|cut後config/close/policy/Auth/epoch変更、期限切れ|旧確認を使わず保留/拒否。現役の正当変更は保持、本人が新context/Bを確認|
 |D325|切替成功応答喪失→後続policy変更→旧成功照会/重複|旧成功事実のみ回収。現役区間/frontierを戻さず二重activationなし。同ID異Bは拒否|
