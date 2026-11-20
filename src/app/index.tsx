@@ -2234,6 +2234,7 @@ function EditorModal({
                     ) : (
                       <>
                         <MemoDeadlineField preset={preset} custom={custom} styles={styles}
+                          original={memo}
                           visibleGroupIds={visibleGroupIds} granularity={todayGranularity}
                           onChange={(next, value) => { setPreset(next); if (value !== undefined) setCustom(value); }} />
                       </>

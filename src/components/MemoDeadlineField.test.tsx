@@ -9,10 +9,24 @@ import { allDeadlineGroupIds } from '../domain/deadlineView';
 vi.mock('react-native', () => ({
   View: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
-  Pressable: ({ children, onPress }: { children: React.ReactNode; onPress: () => void }) => <button onClick={onPress}>{children}</button>,
+  Pressable: ({ children, onPress, accessibilityState }: { children: React.ReactNode; onPress: () => void; accessibilityState?: { selected?: boolean } }) => <button aria-pressed={accessibilityState?.selected} onClick={onPress}>{children}</button>,
 }));
 vi.mock('../theme/theme', () => ({ useAppTheme: () => ({ colors: {} }) }));
 const styles = { chips: {}, chip: {}, chipOn: {}, chipText: {}, chipTextOn: {} };
+
+it('highlights the actual tomorrow value on reopen and direct date edits without emitting changes', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(2026, 10, 18, 8));
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div'), root = createRoot(host), change = vi.fn();
+  const render = async (custom: string) => act(async () => root.render(<MemoDeadlineField preset="custom" custom={custom} styles={styles} onChange={change} visibleGroupIds={new Set(allDeadlineGroupIds())} granularity="today" />));
+  try {
+    await render('2026/11/19 23:59');
+    expect([...host.querySelectorAll('[aria-pressed="true"]')].map(b => b.textContent)).toEqual(['明日（11/19）']);
+    await render('2026/11/19 15:00');
+    expect([...host.querySelectorAll('[aria-pressed="true"]')].map(b => b.textContent)).toEqual(['日時指定']);
+    expect(change).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); vi.useRealTimers(); }
+});
 
 it('uses the current display settings instead of showing disabled presets', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

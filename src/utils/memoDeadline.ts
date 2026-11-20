@@ -22,6 +22,27 @@ export function chooseMemoDeadline(choice: MemoDeadlineChoice, now = new Date(),
   return { preset: 'custom', custom: formatDateTimeInput(dueAt) };
 }
 
+/** Match the actual editor instant, never period membership.
+ * If presets coincide, the first displayed (possibly merged) choice wins. */
+export function selectedMemoDeadlineChoice(preset: DuePreset, custom: string,
+  choices: readonly { key: MemoDeadlineChoice }[], now = new Date(),
+  granularity: TodayGranularity = 'amPm', original?: { duePreset: DuePreset; dueAt: Date | null } | null): MemoDeadlineChoice | null {
+  if (preset === 'none') return choices.some(item => item.key === 'none') ? 'none' : null;
+  if (original && original.duePreset === preset && !original.dueAt)
+    return choices.some(item => item.key === 'none') ? 'none' : null;
+  // The editor shows minutes but preserves an unchanged stored instant's seconds/ms.
+  const value = original && original.duePreset === preset && original.dueAt && custom === formatDateTimeInput(original.dueAt)
+    ? original.dueAt : parseLocalDateTime(custom);
+  if (value) {
+    for (const item of choices) {
+      if (item.key === 'none' || item.key === 'custom') continue;
+      const concrete = chooseMemoDeadline(item.key, now, granularity).custom;
+      if (concrete && parseLocalDateTime(concrete)?.getTime() === value.getTime()) return item.key;
+    }
+  }
+  return 'custom';
+}
+
 export function memoDeadlineDraft(preset: DuePreset, custom: string, context?: DeadlineCreateContext,
   now = new Date(), original?: { duePreset: DuePreset; dueAt: Date | null } | null) {
   if (!context && original && original.duePreset === preset &&
