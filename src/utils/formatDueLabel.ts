@@ -1,23 +1,11 @@
 import type { MemoNode } from '@/models/node';
 
-const PRESET_LABELS: Partial<Record<MemoNode['duePreset'], string>> = {
-  today: '今日まで',
-  tomorrow: '明日まで',
-  morning: '午前中',
-  afternoon: '午後まで',
-  thisWeek: '今週まで',
-  thisMonth: '今月まで',
-  thisYear: '今年まで',
-};
+/** Display the stored instant; never recalculate a relative preset. */
+export function formatDeadlineInstant(date: Date | null): string | null {
+  if (!date || !Number.isFinite(date.getTime())) return null;
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}まで`;
+}
 
 export function formatDueLabel(memo: MemoNode): string | null {
-  if (memo.duePreset === 'none' || memo.dueAt === null) {
-    return null;
-  }
-
-  if (memo.duePreset === 'custom') {
-    return `${memo.dueAt.getFullYear()}/${memo.dueAt.getMonth() + 1}/${memo.dueAt.getDate()}まで`;
-  }
-
-  return PRESET_LABELS[memo.duePreset] ?? null;
+  return formatDeadlineInstant(memo.dueAt);
 }
