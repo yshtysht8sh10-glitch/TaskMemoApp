@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CategoryNode, MemoNode, Node } from '../models/node';
 import { searchTasks } from './taskSearch';
+import { completeRoutineDefinition } from './routineLifecycle';
 
 const now = new Date(2026, 10, 21, 12);
 const task = (id: string, patch: Partial<MemoNode> = {}): MemoNode => ({
@@ -52,6 +53,23 @@ describe('read-only task search #132', () => {
       routineHistory: { '2026-11-20': now.toISOString(), '2026-11-21': now.toISOString() } });
     expect(searchTasks([root, memo], '写真', now)).toEqual([]);
     expect(searchTasks([root, task('future', { parentId: 'r', repeatRule: { frequency: 'month', interval: 1, startsOn: '2026-12-01' } })], '写真', now)).toEqual([]);
+  });
+  it('does not include explicitly skipped days, while cancellation restores only that original day', () => {
+    const root = { ...folder('r', 'Routine'), categoryKind: 'routineRoot' as const };
+    const memo = task('r1', { parentId: 'r', repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-11-21' },
+      routineOutcomes: { '2026-11-21': { state: 'skipped', changedAt: now.toISOString(), version: 1 } } });
+    expect(searchTasks([root, memo], '写真', now)).toEqual([]);
+    const cancelled = { ...memo, routineOutcomes: { '2026-11-21': { state: 'pending' as const, changedAt: now.toISOString(), version: 2 } } };
+    expect(searchTasks([root, cancelled], '写真', now).map(r => r.occurrenceKey)).toEqual(['2026-11-21']);
+    expect(memo.routineOutcomes?.['2026-11-21'].state).toBe('skipped');
+  });
+  it('keeps retained pending occurrences after a definition closes without generating a future day', () => {
+    const root = { ...folder('r', 'Routine'), categoryKind: 'routineRoot' as const };
+    const memo = task('r1', { parentId: 'r', dueAt: new Date(2026, 10, 20, 9), repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-11-20' } });
+    const closed = completeRoutineDefinition([root, memo], memo.id, now);
+    const before = JSON.stringify(closed);
+    expect(searchTasks(closed, '写真', new Date(2026, 10, 22, 12)).map(r => r.occurrenceKey).sort()).toEqual(['2026-11-20', '2026-11-21']);
+    expect(JSON.stringify(closed)).toBe(before);
   });
   it('supports nested folders and damaged cyclic ancestry without hanging', () => {
     expect(searchTasks([folder('a', '親'), folder('b', '子', 'a'), task('1', { parentId: 'b' })], '写真', now)[0].folder).toBe('親 > 子');

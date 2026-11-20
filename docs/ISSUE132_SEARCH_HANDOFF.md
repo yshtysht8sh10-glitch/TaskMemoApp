@@ -28,14 +28,14 @@ IME入力にEnter/Escapeによる確定・画面遷移を割り当てていな�
 
 |検証|結果|
 |---|---|
-|新規domain/UI|14 PASS。日本語composition、Enter、0件、クリア、同名ID、元定義への選択、startup編集禁止、5,000件、元データ不変|
-|関連focused|79 PASS / 5 files。検索14＋Routine/期限/実DeadlineViewドラッグ既存回帰|
-|全体|1,298 PASS / 46既存skip、165 files PASS / 4 files skip。skipは未実施|
+|新規domain/UI|17 PASS。日本語composition、Enter、0件、クリア、同名ID、元定義への選択、startup編集禁止、5,000件、元データ不変、skip取消、close後retained、受信後の結果更新|
+|関連focused|82 PASS / 5 files。検索17＋Routine/期限/実DeadlineViewドラッグ既存回帰|
+|全体|1,301 PASS / 46既存skip、165 files PASS / 4 files skip。skipは未実施|
 |TypeScript|PASS|
 |Lint|PASS|
 |Web export|PASS、4 static routes、公開設定bundle検査成功。合成DEV設定・EXPO_OFFLINEでbuildのみ。通信・配信ではない|
 
-最初の検索受入テストは未実装module importでFAIL、その後14件PASS。これは新機能の未実装確認であり、既存製品の安全性反例ではない。全体ログに既存jsdom Window.alert未実装の診断出力があるが、テスト失敗はない。
+最初の検索受入テストは未実装module importでFAIL、その後17件PASS。これは新機能の未実装確認であり、既存製品の安全性反例ではない。全体ログに既存jsdom Window.alert未実装の診断出力があるが、テスト失敗はない。
 
 合成通常Task、同名部分一致、50回、PC Node実行の検索関数のみの参考値：
 
@@ -54,5 +54,7 @@ IME入力にEnter/Escapeによる確定・画面遷移を割り当てていな�
 2. Modal終了時に元一覧が維持される構造、既存編集への導線、startup gateを確認する。
 3. iPhone PWA・Android・PCの実入力、キーボード表示、横幅、スクリーンリーダー、実スクロール位置は実機未検証。jsdomでRNをDOMへ置換した試験を実機PASSとは扱わない。
 4. DEV配信は禁止されているためIssue本文のDEV確認条件は未実施。ローカル自動検証とbuildまで。独立レビュー・実機確認・リリース判断は別段階。
+
+追加のローカルブラウザ確認では、実TaskSearch＋React Native WebをFirebaseなしの合成専用ページへbundleし、390px/1050pxのiframeで検索・0件・クリア・正しいID選択・閉じるを実行した。アクセシビリティツリーで30件/1件/0件、selected:t29、returnedを確認した。これは全アプリの編集/保存や実スマホキーボードの試験ではない。スクリーンショット取得は2回timeoutし、見た目・折返し・色の画像検証は未完了。補助bundle初回はweb拡張の解決設定不足で失敗し、補助scriptのresolveExtensionsだけ修正した。製品Web exportは成功している。
 
 本番データ・認証・Rules・Functions・Journal/Outbox・main/releaseへのマージ・配信・Issue Closeは実施しない。

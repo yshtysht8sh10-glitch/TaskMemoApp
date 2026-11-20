@@ -34,7 +34,8 @@ async function mount(editable = true) {
   const type = async (text: string) => { await act(async () => {
     input.value = text; input.dispatchEvent(new Event('input', { bubbles: true }));
   }); };
-  return { host, input, open, close, type };
+  const receive = async (next: MemoNode[]) => act(async () => root.render(<TaskSearch nodes={next} editable={editable} onOpenMemo={open} onClose={close} />));
+  return { host, input, open, close, type, receive };
 }
 
 it('Japanese composition and Enter do not submit, dismiss, or open a task', async () => {
@@ -71,4 +72,12 @@ it('allows read-only search while startup editing is gated', async () => {
   const result = host.querySelector('button[aria-label^="集合写真"]') as HTMLButtonElement;
   expect(result.disabled).toBe(true);
   await act(async () => result.click()); expect(open).not.toHaveBeenCalled();
+});
+it('refreshes results from received data without changing the query or opening stale rows', async () => {
+  const { host, input, type, receive, open } = await mount(); await type('写真');
+  await receive(nodes.map(node => ({ ...node, status: 'completed' })));
+  expect(input.value).toBe('写真');
+  expect(host.textContent).toContain('0件');
+  expect(host.querySelector('button[aria-label^="集合写真"]')).toBeNull();
+  expect(open).not.toHaveBeenCalled();
 });

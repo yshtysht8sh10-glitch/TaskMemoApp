@@ -15,8 +15,8 @@ export function TaskSearch({ nodes, editable, onOpenMemo, onClose }: {
   const { colors } = useAppTheme();
   const [query, setQuery] = useState('');
   // Search sessions are short; use the current date again on every input/data render.
-  const dateKey = new Date().toDateString();
-  const results = useMemo(() => searchTasks(nodes, query, new Date(dateKey)), [nodes, query, dateKey]);
+  const today = new Date(), year = today.getFullYear(), month = today.getMonth(), day = today.getDate();
+  const results = useMemo(() => searchTasks(nodes, query, new Date(year, month, day)), [nodes, query, year, month, day]);
   const renderItem = ({ item }: { item: TaskSearchResult }) => <Pressable
     accessibilityRole="button" accessibilityLabel={`${item.memo.title} · ${item.folder}${item.occurrenceKey ? ` · ${item.occurrenceKey}分` : ''}`}
     disabled={!editable} onPress={() => onOpenMemo(item.memo)}
