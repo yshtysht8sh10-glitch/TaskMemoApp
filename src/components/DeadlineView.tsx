@@ -34,7 +34,7 @@ import { beforeIdForInsertion } from "../domain/insertionPosition";
 import { nativeDeadlineGroupForPlaceholder, nativeDeadlineInsertion } from "../domain/nativeDeadlineDrop";
 import type { MemoNode, Node } from "../models/node";
 import { formatDateTimeInput, parseLocalDateTime } from "../utils/dueDates";
-import { formatDueLabel } from "../utils/formatDueLabel";
+import { formatDueLabel, formatDeadlineInstant } from "../utils/formatDueLabel";
 import { useAppTheme, type ThemeColors } from "../theme/theme";
 import { useInlineTitleEdit } from "../hooks/useInlineTitleEdit";
 import { CountBadge } from "../components/CountBadge";
@@ -524,7 +524,7 @@ export function DeadlineView({
     if (!routineCategoryForMemo(nodes, memo))
       return `${formatDueLabel(memo) ?? (memo.dueAt ? memo.dueAt.toLocaleString() : "期限なし")} · ${categoryPath(nodes, memo.parentId)}`;
     const occurrence = memo.routineOccurrenceKey ? memo.dueAt : routineOccurrenceDueAt(nodes, memo, currentDate);
-    return `🔁 ${repeatRuleLabel(memo.repeatRule)} · ${memo.routineOccurrenceKey ? `${memo.routineOccurrenceKey}分` : occurrence ? "今日分" : "本日の発生なし"} · ${categoryPath(nodes, memo.parentId)}`;
+    return `🔁 ${repeatRuleLabel(memo.repeatRule)} · ${memo.routineOccurrenceKey ? `${memo.routineOccurrenceKey}分` : occurrence ? "今日分" : "本日の発生なし"} · ${formatDeadlineInstant(occurrence) ?? '期限なし'} · ${categoryPath(nodes, memo.parentId)}`;
   };
   const sourceMemo = (memo: MemoNode) => nodes.find((node): node is MemoNode => node.id === (memo.routineSourceId ?? memo.id) && node.type === 'memo') ?? memo;
   const renderRow = (item: DeadlineRow, isActive: boolean, drag: () => void) =>

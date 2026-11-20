@@ -44,6 +44,7 @@ it.each(['mouse', 'touch'] as const)('DeadlineView %s enables missed Routine dra
   try {
     await act(async () => root.render(<DeadlineView {...props} />));
     await act(async () => root.render(<DeadlineView {...props} onMenu={menu} />));
+    expect(host.textContent).toContain('2026/10/3 09:00まで');
     await act(async () => (host.querySelector(`[data-taskmemo-dnd-key="${old}"] [data-menu]`) as HTMLElement).click());
     expect(menu).toHaveBeenLastCalledWith(expect.objectContaining({ routineSourceId: 'm', routineOccurrenceKey: '2026-10-03' }));
     const moving = host.querySelector(`[data-taskmemo-dnd-key="${old}"] [draggable]`) as HTMLElement;
