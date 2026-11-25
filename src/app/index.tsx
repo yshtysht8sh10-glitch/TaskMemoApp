@@ -1,5 +1,6 @@
 import { FormTextInput } from '../components/FormTextInput';
 import { TaskQueues } from '../components/TaskQueues';
+import { RoutineHistoryPanel } from '../components/RoutineHistoryPanel';
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
@@ -142,7 +143,6 @@ import {
   parseLocalDateKey,
   repeatRuleLabel,
   routineCategoryForParent,
-  routineHistoryDays,
   toggleRoutineCompletion,
 } from "@/domain/routine";
 import {
@@ -2221,15 +2221,7 @@ function EditorModal({
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        {routineHistoryDays({ ...memo, repeatRule: repeatFrequency === "none" ? null : { frequency: repeatFrequency, interval: Number(repeatInterval), startsOn: repeatStartsOn } }).map((day) => (
-                          <Action
-                            key={day.key}
-                            label={`${day.completed ? "✓" : "—"} ${day.key}`}
-                            onPress={() =>
-                              onToggleRoutineHistory(memo.id, day.date)
-                            }
-                          />
-                        ))}
+                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} />
                       </>
                     )}
                   </>
