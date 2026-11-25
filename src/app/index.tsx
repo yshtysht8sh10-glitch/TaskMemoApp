@@ -2221,14 +2221,13 @@ function EditorModal({
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        {routineHistoryDays({ ...memo, repeatRule: repeatFrequency === "none" ? null : { frequency: repeatFrequency, interval: Number(repeatInterval), startsOn: repeatStartsOn } }).map((day) => (
-                          <Action
-                            key={day.key}
-                            label={`${day.completed ? "✓" : "—"} ${day.key}`}
-                            onPress={() =>
-                              onToggleRoutineHistory(memo.id, day.date)
-                            }
-                          />
+                        {routineHistoryDays(memo).map((day) => (
+                          <View key={day.key} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <Text style={styles.destination}>{day.key} {day.outcome === 'completed' ? '完了' : day.outcome === 'skipped' ? 'スキップ' : '-'}</Text>
+                            {day.outcome !== 'skipped' && <Action
+                              label={day.completed ? '完了を取り消す' : '完了'}
+                              onPress={() => onToggleRoutineHistory(memo.id, day.date)} />}
+                          </View>
                         ))}
                       </>
                     )}
