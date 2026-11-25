@@ -1,9 +1,8 @@
 import type { MemoNode, Node } from "@/models/node";
 import {
   localDateKey,
-  parseLocalDateKey,
   routineCategoryForMemo,
-  routineOutcomeOn,
+  recordedRoutineResults,
 } from "./routine";
 import { isIdea } from "./memoType";
 
@@ -53,25 +52,15 @@ export function completionHistoryGroups(
         completedAt: node.completedAt ?? node.updatedAt,
       });
     if (routineCategoryForMemo(nodes, node))
-      for (const dateKey of new Set([...Object.keys(node.routineHistory ?? {}), ...Object.keys(node.routineOutcomes ?? {})])) {
-        const outcome = routineOutcomeOn(node, dateKey);
-        if (outcome === 'pending') continue;
-        const timestamp = node.routineOutcomes?.[dateKey]?.changedAt ?? node.routineHistory?.[dateKey];
-        const occurrenceDate = parseLocalDateKey(dateKey);
-        const completedAt = timestamp ? new Date(timestamp) : null;
-        if (
-          occurrenceDate &&
-          completedAt &&
-          !Number.isNaN(completedAt.getTime())
-        )
-          items.push({
-            key: `routine:${node.id}:${dateKey}`,
-            kind: "routineOccurrence",
-            memo: node,
-            occurrenceDate,
-            completedAt,
-            outcome,
-          });
+      for (const result of recordedRoutineResults(node)) {
+        items.push({
+          key: `routine:${node.id}:${result.key}`,
+          kind: "routineOccurrence",
+          memo: node,
+          occurrenceDate: result.date,
+          completedAt: result.changedAt,
+          outcome: result.outcome,
+        });
       }
   }
   const dateFor = (item: CompletionHistoryItem) =>
