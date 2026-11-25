@@ -29,6 +29,8 @@ routineHistoryとoutcomesが同日にある場合は引き続きoutcomes優先�
 
 既存setRoutineOutcomeはisRoutineDueOnによって現在ruleを再検査する。このため、周期変更前の保存済みスキップを取り消せない場合がある。#137は表示だけを直し、この書込契約を無断で変えない。
 
+合成で11/18の保存済みskipを持つ定義を毎月11/25開始へ変更した場合、clearRoutineSkip(11/18)が現在rule検査で対象日エラーとなることも再現した（artifact 117-old-skip-cancel.ts）。これを解消済みとはせず、過去結果を根拠とした対象検証を下記のレビュー対象とする。
+
 新結果commandは対象のRoutine IDと元日付を固定し、次のいずれかの根拠を必要とする。
 
 1. 現行生成処理がその日に生成している本日/過去未処理回。
