@@ -85,3 +85,17 @@ it('refreshes expanded results after received updates without duplicating today'
   await click('さらに履歴を表示'); expect(dates()).toHaveLength(61);
   expect(new Set(dates()).size).toBe(61); expect(toggle).not.toHaveBeenCalled();
 });
+it('refreshes a same-length row when its received outcome changes', async () => {
+  const memo = task(1), { dates, render, host } = await mount(memo);
+  expect(dates()).toEqual(['2026-11-24 完了']);
+  await render({ ...memo, routineOutcomes: { '2026-11-24': { state: 'skipped', changedAt: now.toISOString(), version: 1 } } });
+  expect(dates()).toEqual(['2026-11-24 スキップ']);
+  expect(host.querySelector('button[aria-label="2026-11-24の完了を取り消す"]')).toBeNull();
+});
+it('rechecks today after a date boundary even when the memo object stays unchanged', async () => {
+  const memo = task(0); memo.repeatRule = { frequency: 'day', interval: 1, startsOn: '2026-11-25' };
+  const { dates, render } = await mount(memo);
+  expect(dates()).toEqual(['2026-11-25 -']);
+  vi.setSystemTime(new Date(2026, 10, 26, 0, 1)); await render(memo);
+  expect(dates()).toEqual(['2026-11-26 -']);
+});
