@@ -1,5 +1,9 @@
 import { FormTextInput } from '../components/FormTextInput';
+<<<<<<< HEAD
 import { TaskQueues } from '../components/TaskQueues';
+=======
+import { RoutineHistoryPanel } from '../components/RoutineHistoryPanel';
+>>>>>>> 74aad5f (feat: progressively expand all saved Routine history (#138))
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
@@ -142,7 +146,6 @@ import {
   parseLocalDateKey,
   repeatRuleLabel,
   routineCategoryForParent,
-  routineHistoryDays,
   toggleRoutineCompletion,
 } from "@/domain/routine";
 import {
@@ -2221,14 +2224,7 @@ function EditorModal({
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        {routineHistoryDays(memo).map((day) => (
-                          <View key={day.key} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <Text style={styles.destination}>{day.key} {day.outcome === 'completed' ? '完了' : day.outcome === 'skipped' ? 'スキップ' : '-'}</Text>
-                            {day.outcome !== 'skipped' && <Action
-                              label={day.completed ? '完了を取り消す' : '完了'}
-                              onPress={() => onToggleRoutineHistory(memo.id, day.date)} />}
-                          </View>
-                        ))}
+                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} />
                       </>
                     )}
                   </>
