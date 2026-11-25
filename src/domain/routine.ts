@@ -1,5 +1,6 @@
 import type { CategoryNode, MemoNode, Node, RepeatRule, RoutineOutcome } from "../models/node";
 import { lifecycleOccurrenceDueAt } from './routineLifecycle';
+import { assertRoutineOutcomesReadable, validRoutineOutcome } from './routineOutcomeMerge';
 
 export const localDateKey = (date = new Date()) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -56,22 +57,41 @@ export const isRoutineSkippedOn = (memo: MemoNode, date = new Date()) =>
   routineOutcomeOn(memo, localDateKey(date)) === 'skipped';
 
 export function nextRoutineOutcome(memo: MemoNode, key: string, state: RoutineOutcome['state'], now: Date): RoutineOutcome {
-  return { state, changedAt: now.toISOString(), version: (memo.routineOutcomes?.[key]?.version ?? 0) + 1 };
+  assertRoutineOutcomesReadable(memo.routineOutcomes);
+  const old = memo.routineOutcomes?.[key];
+  if (old && new Date(old.changedAt).toISOString() !== old.changedAt)
+    throw new Error('旧実績の時刻形式を安全に比較できません。原本を保持して保留します。');
+  const version = (old?.version ?? 0) + 1;
+  if (!Number.isSafeInteger(version)) throw new Error('実績の版上限です。原本を保持して停止します。');
+  return { state, changedAt: now.toISOString(), version };
 }
 
-function setRoutineOutcome(nodes: Node[], memoId: string, date: Date, state: RoutineOutcome['state'], now: Date) {
+export const isFinalRoutineOutcome = (state: RoutineOutcome['state']) =>
+  state === 'completed' || state === 'skipped' || state === 'missed';
+
+/** Stable ID + original date. Existing saved evidence survives rule changes. */
+export function setRoutineResult(nodes: Node[], memoId: string, date: Date, state: RoutineOutcome['state'], now = new Date()) {
   const memo = nodes.find((n): n is MemoNode => n.id === memoId && n.type === 'memo');
-  if (!memo || memo.deletedAt || memo.purgedAt || !isRoutineDueOn(nodes, memo, date))
-    throw new Error('対象日のルーティーンが見つかりません。');
   const key = localDateKey(date);
+  if (!memo || memo.deletedAt || memo.purgedAt || !routineCategoryForMemo(nodes, memo) || !parseLocalDateKey(key) || key > localDateKey(now))
+    throw new Error('対象日のルーティーンが見つかりません。');
+  assertRoutineOutcomesReadable(memo.routineOutcomes);
+  const saved = validRoutineOutcome(memo.routineOutcomes?.[key]) ||
+    (typeof memo.routineHistory?.[key] === 'string' && Number.isFinite(Date.parse(memo.routineHistory[key]!)));
+  if (!saved && !isRoutineDueOn(nodes, memo, date)) throw new Error('未発生または根拠のない過去回です。');
   if (routineOutcomeOn(memo, key) === state) return nodes;
+  const outcome = nextRoutineOutcome(memo, key, state, now);
   const routineHistory = { ...memo.routineHistory };
-  // Keep old completion data intact except the selected date when it changes.
-  if (state === 'completed') routineHistory[key] = now.toISOString();
-  else if (routineHistory[key]) routineHistory[key] = null;
-  return nodes.map(n => n.id !== memoId ? n : { ...memo,
-    ...(Object.keys(routineHistory).length ? { routineHistory } : {}),
-    routineOutcomes: { ...memo.routineOutcomes, [key]: nextRoutineOutcome(memo, key, state, now) }, updatedAt: now });
+  if (state === 'completed') routineHistory[key] = outcome.changedAt;
+  else if (key in routineHistory) routineHistory[key] = null;
+  return nodes.map(n => n.id !== memoId ? n : { ...memo, routineOutcomes: { ...memo.routineOutcomes, [key]: outcome },
+    ...(Object.keys(routineHistory).length ? { routineHistory } : {}), updatedAt: now });
+}
+export const clearRoutineResult = (nodes: Node[], memoId: string, date: Date, now = new Date()) =>
+  setRoutineResult(nodes, memoId, date, 'pending', now);
+
+function setRoutineOutcome(nodes: Node[], memoId: string, date: Date, state: RoutineOutcome['state'], now: Date) {
+  return setRoutineResult(nodes, memoId, date, state, now);
 }
 
 export const skipRoutineOccurrence = (nodes: Node[], memoId: string, date: Date, now = new Date()) =>
@@ -147,7 +167,7 @@ export function routineOccurrenceDueAt(
     return null;
   if (
     !lifecycleOccurrenceDueAt(memo, now) ||
-    isRoutineCompletedOn(memo, now) || isRoutineSkippedOn(memo, now)
+    isFinalRoutineOutcome(routineOutcomeOn(memo, localDateKey(now)))
   )
     return null;
   if (memo.routineLifecycle) return lifecycleOccurrenceDueAt(memo, now);
@@ -180,7 +200,7 @@ export function missedRoutineOccurrences(nodes: Node[], memo: MemoNode, now = ne
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const missed: MemoNode[] = [];
   for (let date = start; date < today; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)) {
-    if (isRoutineCompletedOn(memo, date) || isRoutineSkippedOn(memo, date)) continue;
+    if (isFinalRoutineOutcome(routineOutcomeOn(memo, localDateKey(date)))) continue;
     const dueAt = routineOccurrenceDueAt(nodes, memo, date);
     if (!dueAt) continue;
     const key = localDateKey(date);
@@ -220,28 +240,18 @@ export function clearRoutineCompletion(
   date: Date,
   now = new Date(),
 ) {
-  const key = localDateKey(date);
-  return nodes.map((node) => {
-    if (
-      node.id !== memoId ||
-      node.type !== "memo" ||
-      !isRoutineCompletedOn(node, date)
-    )
-      return node;
-    const routineHistory = { ...node.routineHistory, [key]: null };
-    return { ...node, routineHistory, ...(node.routineOutcomes?.[key] ? {
-      routineOutcomes: { ...node.routineOutcomes, [key]: nextRoutineOutcome(node, key, 'pending', now) },
-    } : {}), updatedAt: now };
-  });
+  const memo = nodes.find((n): n is MemoNode => n.id === memoId && n.type === 'memo');
+  return memo && isRoutineCompletedOn(memo, date) ? clearRoutineResult(nodes, memoId, date, now) : nodes;
 }
 
 /** Saved results shared by the completed list and the Routine editor.
  * Target dates are identities; changedAt is the actual action timestamp. */
 export function recordedRoutineResults(memo: MemoNode) {
-  const results: { key: string; date: Date; outcome: 'completed' | 'skipped'; changedAt: Date }[] = [];
+  assertRoutineOutcomesReadable(memo.routineOutcomes);
+  const results: { key: string; date: Date; outcome: 'completed' | 'skipped' | 'missed'; changedAt: Date }[] = [];
   for (const key of new Set([...Object.keys(memo.routineHistory ?? {}), ...Object.keys(memo.routineOutcomes ?? {})])) {
     const outcome = routineOutcomeOn(memo, key);
-    if (outcome !== 'completed' && outcome !== 'skipped') continue;
+    if (outcome !== 'completed' && outcome !== 'skipped' && outcome !== 'missed') continue;
     const timestamp = memo.routineOutcomes?.[key]?.changedAt ?? memo.routineHistory?.[key];
     const date = parseLocalDateKey(key), changedAt = timestamp ? new Date(timestamp) : null;
     if (date && changedAt && Number.isFinite(changedAt.getTime())) results.push({ key, date, outcome, changedAt });
@@ -249,7 +259,7 @@ export function recordedRoutineResults(memo: MemoNode) {
   return results.sort((a, b) => b.key.localeCompare(a.key));
 }
 
-export type RoutineHistoryDay = { key: string; date: Date; completed: boolean; outcome: 'completed' | 'skipped' | 'pending' };
+export type RoutineHistoryDay = { key: string; date: Date; completed: boolean; outcome: RoutineOutcome['state'] };
 
 export function routineHistoryDays(
   memo: MemoNode,

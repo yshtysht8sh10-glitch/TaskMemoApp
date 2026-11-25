@@ -44,6 +44,7 @@ export class TaskMemoV2SyncController {
   }
 
   async start() {
+    this.assertRoutineResultsNetworkClosed();
     recordSyncActivity(this.options.localOnly ? "localOnlyStart" : "normalStart", { deviceId: this.store.deviceId });
     this.stop();
     if (this.options.localOnly) {
@@ -149,6 +150,15 @@ export class TaskMemoV2SyncController {
   async resume() {
     this.paused = false;
     await this.start();
+  }
+
+  private assertRoutineResultsNetworkClosed() {
+    if (!this.store.restrictedRoutineResults || this.options.localOnly) return;
+    this.stop();
+    const message = '未達の実通信は未承認です。未送信操作を保持して停止します。';
+    this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, kind: 'permanent', message });
+    this.onChange();
+    throw new Error(message);
   }
 
   stop() { this.snapshotSource = 'checking'; recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
@@ -274,6 +284,7 @@ export class TaskMemoV2SyncController {
   }
 
   async flush() {
+    this.assertRoutineResultsNetworkClosed();
     if (this.options.localOnly) return;
     recordSyncActivity("normalFlush", { deviceId: this.store.deviceId });
     if (this.paused) {
