@@ -2,6 +2,7 @@ import type { Node } from "../models/node";
 import type { SyncNodeValue } from "./types";
 import { validRoutineLifecycle } from '../domain/routineLifecycleRegister';
 import { validQueueState } from '../domain/queueRegisters';
+import { assertRoutineOutcomesReadable } from '../domain/routineOutcomeMerge';
 
 const DATE_FIELDS = ["createdAt", "updatedAt", "deletedAt", "purgedAt", "dueAt", "completedAt"] as const;
 
@@ -24,6 +25,7 @@ export function nodeToV2Value(node: Node): SyncNodeValue {
 }
 
 export function nodeFromV2Value(source: SyncNodeValue): Node {
+  assertRoutineOutcomesReadable(source.routineOutcomes);
   if (source.taskQueue !== undefined && (source.type!=='category' || typeof source.taskQueue!=='boolean')) throw Error('キュー定義が不正です。');
   if (source.queueState !== undefined && (source.type!=='memo' || !validQueueState(source.queueState))) throw Error('キューTaskの状態が不正です。');
   if (source.routineLifecycle !== undefined && !validRoutineLifecycle(source.routineLifecycle)) throw Error('Routine完了期間が不正です。原本を保持して停止します。');
