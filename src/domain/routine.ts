@@ -235,18 +235,34 @@ export function clearRoutineCompletion(
   });
 }
 
+/** Saved results shared by the completed list and the Routine editor.
+ * Target dates are identities; changedAt is the actual action timestamp. */
+export function recordedRoutineResults(memo: MemoNode) {
+  const results: { key: string; date: Date; outcome: 'completed' | 'skipped'; changedAt: Date }[] = [];
+  for (const key of new Set([...Object.keys(memo.routineHistory ?? {}), ...Object.keys(memo.routineOutcomes ?? {})])) {
+    const outcome = routineOutcomeOn(memo, key);
+    if (outcome !== 'completed' && outcome !== 'skipped') continue;
+    const timestamp = memo.routineOutcomes?.[key]?.changedAt ?? memo.routineHistory?.[key];
+    const date = parseLocalDateKey(key), changedAt = timestamp ? new Date(timestamp) : null;
+    if (date && changedAt && Number.isFinite(changedAt.getTime())) results.push({ key, date, outcome, changedAt });
+  }
+  return results.sort((a, b) => b.key.localeCompare(a.key));
+}
+
+export type RoutineHistoryDay = { key: string; date: Date; completed: boolean; outcome: 'completed' | 'skipped' | 'pending' };
+
 export function routineHistoryDays(
   memo: MemoNode,
   end = new Date(),
   count = 7,
-) {
-  if (!isValidRepeatRule(memo.repeatRule)) return [];
-  const start = parseLocalDateKey(memo.repeatRule.startsOn)!;
-  const days: { key: string; date: Date; completed: boolean }[] = [];
-  for (let date = new Date(end.getFullYear(), end.getMonth(), end.getDate()); date >= start && days.length < count; date = new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)) {
-    if (!isRepeatRuleDate(memo.repeatRule, date) ||
-      (memo.routineLifecycle && !lifecycleOccurrenceDueAt(memo, date) && routineOutcomeOn(memo, localDateKey(date)) === 'pending')) continue;
-    days.push({ key: localDateKey(date), date, completed: isRoutineCompletedOn(memo, date) });
+): RoutineHistoryDay[] {
+  const today = localDateKey(end);
+  const days: RoutineHistoryDay[] = recordedRoutineResults(memo)
+    .filter(result => result.key <= today)
+    .map(result => ({ key: result.key, date: result.date, completed: result.outcome === 'completed', outcome: result.outcome }));
+  if (memo.status === 'active' && memo.deletedAt === null && !memo.purgedAt && memo.memoType !== 'idea' &&
+    isValidRepeatRule(memo.repeatRule) && lifecycleOccurrenceDueAt(memo, end) && routineOutcomeOn(memo, today) === 'pending') {
+    days.unshift({ key: today, date: new Date(end.getFullYear(), end.getMonth(), end.getDate()), completed: false, outcome: 'pending' });
   }
-  return days;
+  return days.slice(0, Math.max(0, count));
 }
