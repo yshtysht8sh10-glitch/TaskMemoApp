@@ -1,9 +1,6 @@
 import { FormTextInput } from '../components/FormTextInput';
-<<<<<<< HEAD
 import { TaskQueues } from '../components/TaskQueues';
-=======
 import { RoutineHistoryPanel } from '../components/RoutineHistoryPanel';
->>>>>>> 74aad5f (feat: progressively expand all saved Routine history (#138))
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 import { initialRoutineFrequency, routineRuleForSave } from '../utils/routineEditor';
