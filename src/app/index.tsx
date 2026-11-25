@@ -1,4 +1,5 @@
 import { FormTextInput } from '../components/FormTextInput';
+import { routineResultLabel } from '../components/RoutineResultActions';
 import { RoutineHistoryPanel } from '../components/RoutineHistoryPanel';
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
@@ -136,7 +137,7 @@ import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigati
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
   clearRoutineCompletion,
-  clearRoutineSkip,
+  clearRoutineResult,
   routineCategoryForMemo,
   localDateKey,
   parseLocalDateKey,
@@ -961,7 +962,7 @@ export default function HomeScreen() {
             onRestoreCompleted={(item) =>
               apply("完了を未完了に戻す", (current) =>
                 item.kind === "routineOccurrence"
-                  ? (item.outcome === 'skipped' ? clearRoutineSkip : clearRoutineCompletion)(
+                  ? clearRoutineResult(
                       current,
                       item.memo.id,
                       item.occurrenceDate!,
@@ -992,7 +993,7 @@ export default function HomeScreen() {
                   items.reduce(
                     (next, item) =>
                       item.kind === "routineOccurrence"
-                        ? (item.outcome === 'skipped' ? clearRoutineSkip : clearRoutineCompletion)(
+                        ? clearRoutineResult(
                             next,
                             item.memo.id,
                             item.occurrenceDate!,
@@ -2435,15 +2436,15 @@ function ListPanel({
                           </Text>
                         </Pressable>
                       )}
-                      <Text style={[styles.cardTitle, item.outcome === 'skipped' && styles.danger]}>{item.outcome === 'skipped' ? '↷ ' : '✓ '}{item.memo.title}</Text>
+                      <Text style={[styles.cardTitle, (item.outcome === 'skipped' || item.outcome === 'missed') && styles.danger]}>{item.outcome === 'missed' ? '! ' : item.outcome === 'skipped' ? '↷ ' : '✓ '}{item.memo.title}</Text>
                     </View>
                     <Text style={styles.meta}>
                       {item.kind === "routineOccurrence"
-                        ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分 ${item.outcome === 'skipped' ? 'スキップ' : '完了'}`
+                        ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分 ${routineResultLabel(item.outcome ?? 'completed')}`
                         : `元: ${parentName(item.memo.parentId)}`}
                     </Text>
                     <Text style={styles.meta}>
-                      {item.outcome === 'skipped' ? 'スキップ' : '完了'}: {item.completedAt.toLocaleString()}
+                      {routineResultLabel(item.outcome ?? 'completed')}: {item.completedAt.toLocaleString()}
                     </Text>
                     {!selectionMode && (
                       <View style={styles.cardActions}>
@@ -2451,7 +2452,7 @@ function ListPanel({
                           onPress={() => onRestoreCompleted(item)}
                           style={styles.smallButton}
                         >
-                          <Text style={styles.buttonText}>{item.outcome === 'skipped' ? 'スキップを取り消す' : '未完了へ戻す'}</Text>
+                          <Text style={styles.buttonText}>{item.outcome === 'missed' ? '未達を取り消す' : item.outcome === 'skipped' ? 'スキップを取り消す' : '未完了へ戻す'}</Text>
                         </Pressable>
                         {item.kind === "memo" && (
                           <Pressable
