@@ -60,10 +60,10 @@ describe('routine', () => {
     expect(deadlineGroups(todayCompleted, now).find((group) => group.key === 'overdue')?.memos.map((item) => item.routineOccurrenceKey)).toContain('2026-09-15');
   });
   it.each([
-    [{ frequency: 'day', interval: 1, startsOn: '2026-09-16' }, ['2026-09-30', '2026-09-29', '2026-09-28']],
-    [{ frequency: 'week', interval: 1, startsOn: '2026-09-16' }, ['2026-09-30', '2026-09-23', '2026-09-16']],
-    [{ frequency: 'week', interval: 2, startsOn: '2026-09-16' }, ['2026-09-30', '2026-09-16']],
-  ] as const)('実績は直近の実行周期だけを表示する', (rule, expected) => {
+    [{ frequency: 'day', interval: 1, startsOn: '2026-09-16' }, ['2026-09-30']],
+    [{ frequency: 'week', interval: 1, startsOn: '2026-09-16' }, ['2026-09-30']],
+    [{ frequency: 'week', interval: 2, startsOn: '2026-09-16' }, ['2026-09-30']],
+  ] as const)('未記録の過去回を生成せず本日分のみ表示する（#137で#77表示仕様を改訂）', (rule, expected) => {
     const task = memo(rule);
     expect(routineHistoryDays(task, new Date(2026, 8, 30), 3).map((day) => day.key)).toEqual(expected);
   });
