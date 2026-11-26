@@ -169,7 +169,11 @@ it.each([1, 2])('R145: an ACK introducing missed stops the running drain with %i
   expect(restarted.historyDepths.past).toBe(count);
 });
 
-it('R145: mayStart rechecks a new restriction while an upload waits in the adapter queue', async () => {
+it.each([
+  { laterCancellation: false, observation: 'display' },
+  { laterCancellation: true, observation: 'display' },
+  { laterCancellation: true, observation: 'transport' },
+])('R145: queued protection, pending=$laterCancellation first observed by $observation', async ({ laterCancellation, observation }) => {
   const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-queued-fence', new IDBFactory());
   const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now });
   await store.command('title', 'update', nodes => nodes.map(n => n.id === 'a' ? { ...n, title: 'draft' } : n));
@@ -177,14 +181,22 @@ it('R145: mayStart rechecks a new restriction while an upload waits in the adapt
   let resolveStarted!: () => void, release!: () => void;
   const started = new Promise<void>(r => { resolveStarted = r; }), wait = new Promise<void>(r => { release = r; });
   let allowed: boolean | undefined;
+  let queuedMayStart: (() => boolean) | undefined;
   const controller = new TaskMemoV2SyncController(store, { connect: async () => {}, upload: async (_op, _expected, _current, mayStart) => {
-    resolveStarted(); await wait; allowed = mayStart?.();
+    queuedMayStart = mayStart; resolveStarted(); await wait; allowed = mayStart?.();
     throw { kind: 'offline', message: 'queued operation not started' };
   } });
   const running = controller.start(); await started;
   const record = store.versionedNode('a')!;
   await store.receive({ ...record, revision: 100, lastOpId: 'remote:100', lastDeviceId: 'remote',
     value: { ...record.value, routineOutcomes: { [key]: { state: 'missed', changedAt: now.toISOString(), version: 100 } } } });
+  if (observation === 'display') expect(controller.state.phase).toBe('error');
+  else expect(queuedMayStart?.()).toBe(false);
+  if (laterCancellation) {
+    await store.receive({ ...record, revision: 101, lastOpId: 'remote:101', lastDeviceId: 'remote',
+      value: { ...record.value, routineOutcomes: { [key]: { state: 'pending', changedAt: now.toISOString(), version: 101 } } } });
+    expect(store.restrictedRoutineResults).toBe(false);
+  }
   release(); await running;
   expect(allowed).toBe(false); expect(store.outbox).toEqual(original);
   expect(controller.state.phase).toBe('error');

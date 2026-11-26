@@ -27,11 +27,15 @@ export class TaskMemoV2SyncController {
   snapshotSource: 'checking' | 'cache' | 'server' = 'checking';
   private currentState: SyncState = initialSyncState();
   private routineResultsProtected = false;
+  private get routineResultsBlocked() {
+    if (this.options.localOnly) return false;
+    this.routineResultsProtected ||= this.store.restrictedRoutineResults;
+    return this.routineResultsProtected;
+  }
   // Protection dominates every asynchronous state update, including profile
   // listeners already queued before unsubscribe. This controller has no unlock.
   get state(): SyncState {
-    if (!this.options.localOnly && (this.routineResultsProtected || this.store.restrictedRoutineResults)) {
-      this.routineResultsProtected = true;
+    if (this.routineResultsBlocked) {
       return { phase: 'error', pendingCount: this.store.pendingCount, lastError: ROUTINE_RESULTS_PROTECTION };
     }
     return this.currentState;
@@ -168,8 +172,7 @@ export class TaskMemoV2SyncController {
   }
 
   private assertRoutineResultsNetworkClosed() {
-    if (this.options.localOnly || !(this.routineResultsProtected || this.store.restrictedRoutineResults)) return;
-    this.routineResultsProtected = true;
+    if (!this.routineResultsBlocked) return;
     this.stop();
     const message = ROUTINE_RESULTS_PROTECTION;
     this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, kind: 'permanent', message });
@@ -336,7 +339,7 @@ export class TaskMemoV2SyncController {
         try {
           if (this.stopped || generation !== this.generation) return;
           const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
-            () => !this.stopped && generation === this.generation && !this.store.restrictedRoutineResults);
+            () => !this.stopped && generation === this.generation && !this.routineResultsBlocked);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
           this.assertRoutineResultsNetworkClosed();
