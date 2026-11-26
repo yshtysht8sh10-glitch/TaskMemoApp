@@ -2,6 +2,7 @@
 
 2026-11-26 / 開発担当。設計正本PR139/e422fbf、ローカル実装PR145/6224b19。
 本ブランチはPR145の後続で、PR144のDEV配信には含めない。
+PR145のM145-1修正`fcfd1f3`へ再基底し、通信閉鎖の修正も前提として保持する。
 
 ## 分割と依存
 
@@ -47,7 +48,8 @@ snapshot二回一致は静止や排他の証明ではない。書込み/入力�
 ## A1の試験
 
 - focused: 8 PASS、skip 0。
-- 全体: 1299 PASS / 46 skip（169 files PASS / 4 skip）。
+- 初回の全体（6224b19基点）: 1299 PASS / 46 skip（169 files PASS / 4 skip）。
+- fcfd1f3再基底後の関連backup/Store/Controller: 49 PASS。新headの全体/build結果はPRへ記録する。
 - TypeScript、Lint、node --check、git diff --check PASS。
 - public変更を含むため、Web exportも固定commitで実施しPRへ結果を追記する。
 - すべて合成localStorage/fake-indexeddb/VM。実保存領域・実ユーザーデータにはアクセスしていない。
