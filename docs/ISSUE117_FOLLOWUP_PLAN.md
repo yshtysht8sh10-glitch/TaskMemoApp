@@ -72,3 +72,14 @@ ACKでOutboxから消え、serverだけにあるreceipt原操作はローカル�
 通常backupと完全復旧snapshotを区別し、未回収一覧と停止理由をmanifestへ持つ方針とする。
 復旧・rollbackは原本を保護し、自動Journal clear、未送信退役、旧writerへの戻しを行わない。
 未知rawの安全な解釈ができない場合、退避成功と操作再開許可を分離して停止を維持する。
+
+## M146-1 物理DB構成の照合
+
+c9df15aの独立レビューで、out-of-line keyや追加storeを持つ同名DBでも、値だけを集めて
+ファイル準備成功となる欠落が見つかった。原DBを変更していないことと、完全に取得したことは別である。
+既知構成をversion=1、store一覧はscopesのみ、keyPath='scope'、autoIncrement=false、索引なしに限定する。
+これは現ApplicationJournalの作成定義と一致する。未知構成の汎用dump/移行は推測実装しない。
+
+5負ケース（外部キー、追加store、未知version、autoIncrement、追加index）を先に実行し5 FAILを確認。
+構成照合をgetAll前へ追加してから、backup17 PASS。共有/downloadを有効化せず、元storage keyと
+DB version/storeを維持することを検証した。新SHAの独立再レビューまでA1承認とは扱わない。

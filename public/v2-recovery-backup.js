@@ -96,15 +96,19 @@
       request.onerror = () => reject(request.error || new Error('IndexedDBを開けません。'));
     });
     try {
-      if (!database.objectStoreNames.contains('scopes')) throw new Error('IndexedDBのV2保存領域が見つかりません。');
+      if (database.version !== 1 || database.objectStoreNames.length !== 1 || !database.objectStoreNames.contains('scopes'))
+        throw new Error('未対応のIndexedDB構成です。原本を保持して中止しました。');
       const transaction = database.transaction('scopes', 'readonly');
+      const store = transaction.objectStore('scopes');
+      if (store.keyPath !== 'scope' || store.autoIncrement || store.indexNames.length !== 0)
+        throw new Error('未対応のIndexedDBキー/索引構成です。原本を保持して中止しました。');
       const done = new Promise((resolve, reject) => {
         transaction.oncomplete = resolve;
         transaction.onabort = () => reject(transaction.error || new Error('IndexedDBの読み取りが中断されました。'));
         transaction.onerror = () => reject(transaction.error || new Error('IndexedDBの読み取りに失敗しました。'));
       });
       const records = await new Promise((resolve, reject) => {
-        const request = transaction.objectStore('scopes').getAll();
+        const request = store.getAll();
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error || new Error('IndexedDBを読み取れません。'));
       });
