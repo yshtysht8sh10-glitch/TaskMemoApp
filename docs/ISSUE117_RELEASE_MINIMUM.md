@@ -76,3 +76,39 @@ Local reports: `artifacts/117-m152-before.json`, `117-m152-after.json`, and
 Full suite, type/lint and the fixed-SHA build results are recorded in PR #152.
 These tests are synthetic; iPhone PWA cutover/acceptance is still unverified.
 Production Hosting, Rules, data version and user data have not been changed.
+
+## Completed-recovery source: narrow Ver3 copy qualification
+
+Normal migration rejection remains the default. A historical legacy WAL/plan may
+be retained while copying the *active IndexedDB committed envelope* only when:
+
+- recoveryCompleted is exactly true, localRecoveryMode exactly false, active
+  Journal is null, and the self-repair completion timestamp is valid;
+- preserved recovery committed/WAL exactly equal the present legacy pair, and
+  that pair's existing SHA-256 fingerprint equals the IndexedDB fingerprint;
+- the retained plan is version 1 and its sourceFingerprint binds the same exact
+  pair (SHA-256 of JSON.stringify([committedRaw, journalRaw]));
+- preserved self-repair committed is a recognized Ver2 envelope with the same
+  device as active committed; unknown evidence versions stop;
+- the existing full VersionedNode/profile Cloud comparison succeeds, including
+  local profile values, and existing empty-Outbox/dirty/migration/ownership/version
+  guards all succeed.
+
+The plan remains opaque archived evidence: its ACKs are not reinterpreted as
+current receipts and its operations are never replayed. These local markers are
+not independent server proof. The existing Owner precondition of all writers and
+tabs being quiescent still applies. Incomplete or different recovery layouts stop.
+
+The same IndexedDB transaction adds the separate Ver3 record. It never rewrites
+the source, legacy storage, archived raw, History or plan. The destination retains
+all source archive fields. Passing a null active Journal uses that null directly;
+it must not fall back to the historical legacy WAL. Restart uses the existing
+destination without recopying the source. No recovery is resumed or auto-cleared.
+
+Regression-first: initial synthetic layout failed 1 case (16 negative controls
+passed) before implementation. Final regression additionally includes a nonempty
+saved Node/History, wrong evidence device/version, missing explicit recovery mode,
+Cloud revision mismatch and destination abort/quota injection. Related/full/type/
+lint/build and independent review results are recorded separately in PR #152;
+synthetic tests do not claim iPhone cutover success. New source SHA/package hashes
+require Owner approval. No Production mutation is part of this fix.

@@ -1,5 +1,5 @@
 import type { ApplicationJournalPersistence } from "./applicationStore";
-import { assertVersion3Baseline, prepareVersion3Copy, versionedScope } from './dataVersion';
+import { assertVersion3Baseline, dataVersion, prepareVersion3Copy, versionedScope } from './dataVersion';
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
 import { applyRevisionOperation } from "./revisionModel";
@@ -82,6 +82,22 @@ function validateEnvelope(raw: string | null) {
   return parsed;
 }
 
+/** A completed recovery archive is retained evidence, never a queue to resume. */
+function isCompletedRecoveryArchive(source: StoredScope, legacyCommitted: string | null, legacyJournal: string | null) {
+  if (source.recoveryCompleted !== true || source.localRecoveryMode !== false || source.journal !== null ||
+      !legacyCommitted || !legacyJournal || source.preservedRecoveryCommitted !== legacyCommitted ||
+      source.preservedRecoveryJournal !== legacyJournal || !source.preservedSelfRepairCommitted ||
+      !source.selfRepairCompletedAt || !Number.isFinite(Date.parse(source.selfRepairCompletedAt)) ||
+      !source.authoritativeRecoveryPlan) return false;
+  const plan = JSON.parse(source.authoritativeRecoveryPlan);
+  const beforeRepair = validateEnvelope(source.preservedSelfRepairCommitted);
+  const current = validateEnvelope(source.committed);
+  const archived = [beforeRepair, validateEnvelope(legacyCommitted), validateEnvelope(legacyJournal)];
+  if (archived.some(record => !record || dataVersion(record.dataVersion) !== 2)) return false;
+  return plan?.version === 1 && plan.sourceFingerprint === source.legacyFingerprint &&
+    !!current && beforeRepair?.deviceId === current.deviceId;
+}
+
 /** Web-only adapter. The legacy source is never written, deleted, or silently re-imported. */
 export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPersistence {
   private constructor(private readonly database: IDBDatabase, private readonly scope: string) {}
@@ -98,12 +114,17 @@ export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPe
       const destination = await requestResult(store.get(scope)) as StoredScope | undefined;
       if (!destination) {
         const source = await requestResult(store.get(baseScope)) as StoredScope | undefined;
-        if (source?.localRecoveryMode || source?.authoritativeRecoveryPlan || source?.journal != null || legacyJournal !== null) throw new Error('復旧/保存待ちの原本があります。切替を停止しました。');
+        if (source && source.scope !== baseScope) throw new Error('保存元のscopeが一致しません。');
         if (source && source.legacyFingerprint !== sourceFingerprint) throw new Error('旧保存元が変更されています。');
+        const completedArchive = source && isCompletedRecoveryArchive(source, legacyCommitted, legacyJournal);
+        if (source?.localRecoveryMode || source?.journal != null ||
+            ((source?.authoritativeRecoveryPlan || legacyJournal !== null) && !completedArchive))
+          throw new Error('復旧/保存待ちの原本があります。切替を停止しました。');
         const raw = source?.committed ?? legacyCommitted;
         if (!raw) throw new Error('切替元の保存済みデータがありません。空初期化せず停止しました。');
         assertVersion3Baseline(raw, baseline);
-        const copied = raw ? prepareVersion3Copy(raw, source?.journal ?? legacyJournal) : null;
+        // null on the active IDB source must not fall back to an archived legacy WAL.
+        const copied = prepareVersion3Copy(raw, source ? source.journal : legacyJournal);
         store.add({ ...source, scope, legacyFingerprint: emptyFingerprint, committed: copied, journal: null });
       }
       await done;
