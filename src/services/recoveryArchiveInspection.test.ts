@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { inspectRecoveryArchive } from './recoveryArchiveInspection';
-import { createNode } from '../domain/nodeOperations';
+import { createNode, moveNode, softDeleteNode } from '../domain/nodeOperations';
+import { clearRoutineResult, setRoutineResult } from '../domain/routine';
 import { nodeToV2Value } from '../sync/nodeV2Codec';
 import { accountScope } from '../sync/ownership';
+import { TaskMemoV2ApplicationStore } from '../sync/taskMemoApplicationStore';
+import type { ApplicationJournalPersistence } from '../sync/applicationStore';
 const now = new Date('2026-11-26T00:00:00.000Z');
 const binding = { origin: 'https://taskmemoapp-dev.web.app', scope: accountScope('development', 'taskmemoapp-dev', 'synthetic'), generation: 1 };
 function envelope() {
@@ -91,4 +94,61 @@ it('a matching opId with a different History resource is not considered valid ev
   target.resourceId = 'other'; target.after = { ...target.after, id: 'other' };
   const result = await inspect(archive(JSON.stringify(e)));
   expect(result.candidates).toEqual([]); expect(result.restoreAllowed).toBe(false);
+});
+it('valid before/after images of one Node are separate historical states, not duplicate live Nodes', async () => {
+  const e = envelope(), target = e.history.past[0].targets[0];
+  Object.assign(target, { before: { ...target.after, title: 'before' } });
+  const a = archive(JSON.stringify(e)), result = await inspect(a);
+  expect(result.status).toBe('candidate-only'); expect(result.candidates).toHaveLength(1);
+  expect(result.candidates[0].raw).toBe(a.indexedDb.records[0].committed);
+  expect(result.originalBytes).toEqual(encode(a)); expect(result.restoreAllowed).toBe(false);
+});
+it.each(['update', 'undo', 'redo'])('real Store %s archives keep original History/Outbox in a candidate', async stage => {
+  let committed: string | null = null, journal: string | null = null;
+  const persistence: ApplicationJournalPersistence = { loadCommitted: async () => committed, loadJournal: async () => journal,
+    writeCommitted: async raw => { committed = raw; }, writeJournal: async raw => { journal = raw; }, clearJournal: async () => { journal = null; },
+    writeAtomic: async (expected, raw) => { expect(committed).toBe(expected); committed = raw; journal = null; } };
+  const store = await TaskMemoV2ApplicationStore.open(persistence, createNode([], 'memo', { title: 'before', parentId: null }, now, 'n'), { deviceId: 'd', now: () => now });
+  await store.command('edit', 'update', nodes => nodes.map(node => ({ ...node, title: 'after' })));
+  if (stage !== 'update') await store.undo();
+  if (stage === 'redo') await store.redo();
+  const a = archive(committed!), result = await inspect(a);
+  expect(result.status).toBe('candidate-only'); expect(result.candidates).toHaveLength(1);
+  expect(result.candidates[0].raw).toBe(committed); expect(result.originalBytes).toEqual(encode(a));
+  expect(result.restoreAllowed).toBe(false); expect(journal).toBeNull();
+});
+it.each(['child-create', 'move', 'delete', 'completed', 'skipped', 'missed', 'cancel'])('real non-root Store %s History is not treated as a complete historical graph', async stage => {
+  let committed: string | null = null, journal: string | null = null;
+  const persistence: ApplicationJournalPersistence = { loadCommitted: async () => committed, loadJournal: async () => journal,
+    writeCommitted: async raw => { committed = raw; }, writeJournal: async raw => { journal = raw; }, clearJournal: async () => { journal = null; },
+    writeAtomic: async (expected, raw) => { expect(committed).toBe(expected); committed = raw; journal = null; } };
+  let nodes = createNode([], 'category', { title: 'parent', parentId: null }, now, 'parent');
+  if (['completed', 'skipped', 'missed', 'cancel'].includes(stage)) nodes = nodes.map(node => node.type === 'category' ? { ...node, categoryKind: 'routineRoot' as const } : node);
+  if (stage !== 'child-create') {
+    nodes = createNode(nodes, 'memo', { title: 'child', parentId: 'parent' }, now, 'n');
+    nodes = nodes.map(node => node.type === 'memo' ? { ...node, repeatRule: { frequency: 'day' as const, interval: 1, startsOn: '2026-11-26' } } : node);
+  }
+  const store = await TaskMemoV2ApplicationStore.open(persistence, nodes, { deviceId: 'd', now: () => now, isolatedRoutineResults: true });
+  if (stage === 'child-create') await store.command('create', 'create', current => createNode(current, 'memo', { title: 'child', parentId: 'parent' }, now, 'n'));
+  else if (stage === 'move') await store.command('move', 'update', current => moveNode(current, 'n', null, undefined, now));
+  else if (stage === 'delete') await store.command('delete', 'softDelete', current => softDeleteNode(current, 'n', false, now));
+  else {
+    const state = stage === 'cancel' ? 'completed' : stage as 'completed' | 'skipped' | 'missed';
+    await store.command('result', 'update', current => setRoutineResult(current, 'n', now, state, now));
+    if (stage === 'cancel') await store.command('cancel', 'update', current => clearRoutineResult(current, 'n', now, now));
+  }
+  const a = archive(committed!), result = await inspect(a);
+  expect(result.status).toBe('candidate-only'); expect(result.candidates).toHaveLength(1);
+  expect(result.candidates[0].raw).toBe(committed); expect(result.originalBytes).toEqual(encode(a));
+  expect(result.issues).toContain('HISTORY_GRAPH_UNVERIFIED'); expect(result.restoreAllowed).toBe(false);
+});
+it.each(['title', 'parent', 'self-parent', 'date'])('rejects invalid historical %s without inferring repairs', async kind => {
+  const e = envelope(), image = { ...e.history.past[0].targets[0].after };
+  Object.assign(e.history.past[0].targets[0], { before: image });
+  if (kind === 'title') Object.assign(image, { title: 12 });
+  if (kind === 'parent') Object.assign(image, { parentId: {} });
+  if (kind === 'self-parent') image.parentId = 'n';
+  if (kind === 'date') image.updatedAt = 'broken';
+  const a = archive(JSON.stringify(e)), result = await inspect(a);
+  expect(result.candidates).toEqual([]); expect(result.originalBytes).toEqual(encode(a)); expect(result.restoreAllowed).toBe(false);
 });

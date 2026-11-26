@@ -54,3 +54,18 @@ A1原本退避17件を含むfocused 38 PASS。全体・型・Lint・Web結果は
 未検証: 実SDK、実端末、完全復旧、サーバーreceipt真正性、暗号化archive、巨大ファイルの上限。
 JSメモリに載る範囲の検査であり、大規模archiveへのストリーミング/上限設計は別途必要。
 unknown/privateデータをログへ出力しない。検査失敗から自動復元・保護解除へ進む経路は存在しない。
+
+## M149-1 正当なHistory snapshotの検証責務
+
+独立レビューで、同じNodeのbefore/afterを一つの一覧decoderへ渡すとID重複で拒否し、
+子Nodeのsnapshot単体も親不在で拒否する問題が見つかった。Domainは同時点の全体集合として検査するが、
+Historyの各imageは別時点の部分情報である。image専用の形状検査でID/種別/rank/日時/本文/結果を検査し、
+当時の親グラフを現在Domainから推測して埋めない。親IDの型・自分自身参照は検証する。
+親を持つimageはHISTORY_GRAPH_UNVERIFIEDを明示し、candidate-only/restoreAllowed=falseを維持する。
+
+修正前は単一更新例1 FAIL/21 PASS、公開Storeのupdate/Undo/Redo追加後4 FAIL/21 PASS。
+独立レビューも公開Store由来の更新/子作成2 FAILを記録した。修正後は、公開Storeからの
+update/Undo/Redo、子作成/移動/削除、完了/スキップ/未達/取消を含む36 PASS。
+不正title/parent型/自己親/日時は引き続き拒否し、原本bytes/raw/History/Outboxを維持する。
+テストfixture作成中の7失敗（atomic persistenceの欠落、引数とRoutine親種別）はfixtureを
+公開APIへ合わせて修正したもので、製品の修正前FAILへ算入していない。

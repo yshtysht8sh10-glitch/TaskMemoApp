@@ -1,5 +1,7 @@
 import { canonical } from '../textFormat/syntax';
-import { decodeLegacyNodes } from '../sync/legacyLocalCodec';
+import { decodeLegacyNodes, isSupportedRawRank } from '../sync/legacyLocalCodec';
+import { decodeLegacyDate } from '../sync/legacyDateCodec';
+import type { SyncNodeValue } from '../sync/types';
 import { assertRoutineOutcomesReadable } from '../domain/routineOutcomeMerge';
 
 export type RecoveryInspectionBinding = { origin: string; scope: string; generation: number };
@@ -24,6 +26,21 @@ const prefixes = [
   ['@taskmemo/sync-v2/taskmemo-application/v2/', 'legacy-committed'],
   ['@taskmemo/sync-v2/taskmemo-application-journal/v2/', 'legacy-journal'],
 ] as const;
+
+// Historical images are not a simultaneous Node graph. Do not synthesize
+// parents or validate them against today's Domain; that graph is unavailable.
+function assertHistoryImage(image: unknown, id: string) {
+  if (!isObject(image) || image.id !== id || !['memo', 'category'].includes(String(image.type)) ||
+    typeof image.title !== 'string' || !isSupportedRawRank(image as SyncNodeValue) ||
+    !(image.parentId === null || (typeof image.parentId === 'string' && image.parentId !== id))) throw Error();
+  for (const key of ['createdAt', 'updatedAt', 'deletedAt', 'purgedAt', 'dueAt', 'completedAt']) {
+    if (image[key] != null) decodeLegacyDate(image[key], key);
+  }
+  if (image.createdAt == null || image.updatedAt == null) throw Error();
+  if (image.type === 'memo' && (typeof image.body !== 'string' || !['active', 'completed'].includes(String(image.status)) ||
+    !['task', 'idea'].includes(String(image.memoType ?? 'task')) || typeof image.duePreset !== 'string')) throw Error();
+  assertRoutineOutcomesReadable(image.routineOutcomes);
+}
 
 /** Isolated, read-only preflight. A local checksum/binding match NEVER grants
  * restore authority, server receipt authenticity, or a consistent cut. */
@@ -105,7 +122,10 @@ export async function inspectRecoveryArchive(bytes: Uint8Array, options: {
           if (!isObject(target.after)) throw Error();
           if (target.resourceType === 'node') {
             if (target.after.id !== target.resourceId || !(target.before === null || (isObject(target.before) && target.before.id === target.resourceId))) throw Error();
-            decodeLegacyNodes(JSON.stringify([target.before, target.after].filter(value => value !== null)));
+            for (const image of [target.before, target.after]) if (image !== null) {
+              assertHistoryImage(image, target.resourceId);
+              if ((image as Record<string, unknown>).parentId !== null) issues.add('HISTORY_GRAPH_UNVERIFIED');
+            }
           } else {
             if (target.resourceId !== target.resourceType || !isObject(target.before)) throw Error();
             const field = target.resourceType === 'pinnedNote' ? 'body' : 'ideasEnabled';
