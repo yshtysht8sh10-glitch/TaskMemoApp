@@ -1,3 +1,4 @@
+import { versionedScope } from '../sync/dataVersion';
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
@@ -154,6 +155,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     if (controller) {
       const currentStatus = activeLocalRef.current ? configured ? 'signed-out' : 'disabled' : repairRunningRef.current ? 'self-repairing' : localRecoveryModeRef.current ? 'local-recovery' : ownershipStatus ?? controller.state.phase;
       startupEditableRef.current = startupPresentation({ preferencesReady: true, authReady: authResolvedRef.current,
+        versionBlocked: controller.versionBlocked,
         applicationState: store ? 'ready' : 'opening', account: !activeLocalRef.current, snapshotSource: controller.snapshotSource,
         status: currentStatus, elapsed: true, cacheEditing: cacheEditingRef.current }).editable;
       setStatus(currentStatus); setError(controller.state.lastError);
@@ -226,13 +228,21 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
             lastCompletedOperationIndex: event.lastCompletedOperationIndex,
           }) : undefined,
         });
+        await adapter.connect();
+        if (currentGeneration !== generation) return;
+        const version = adapter.dataVersion ?? 2;
+        if (version === 3 && Platform.OS !== 'web') throw new Error('Ver3のNative切替は未検証です。原本を保持して停止しました。');
         const scope = `${db.app.options.projectId}/${nextUser.uid}`;
+        const version3Baseline = version === 3 ? await adapter.readRecoverySnapshot!() : null;
+        if (currentGeneration !== generation) return;
         if (Platform.OS !== 'web') accountWriterRef.current = claimNativeScopeWriter(scope);
         const legacyJournal = guardedRecovery ? await new TaskMemoV2ApplicationJournal(scope).loadJournal() : null;
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-start" });
         const persistence = Platform.OS === "web"
-          ? await IndexedDbTaskMemoApplicationJournal.open(scope, undefined, { allowLegacyCopy: !legacyJournal })
+          ? version === 3 ? await IndexedDbTaskMemoApplicationJournal.openVersion3(scope, version3Baseline!)
+            : await IndexedDbTaskMemoApplicationJournal.open(scope, undefined, { allowLegacyCopy: !legacyJournal })
           : new TaskMemoV2ApplicationJournal(scope, accountWriterRef.current?.token);
+        if (version === 2 && persistence instanceof IndexedDbTaskMemoApplicationJournal) await persistence.assertNoVersion3Sibling();
         if (guardedRecovery) recordRecoveryObservation({ recoveryPhase: "indexeddb-open-complete" });
         if (currentGeneration !== generation) return;
         const activeLocalMode = persistence instanceof IndexedDbTaskMemoApplicationJournal &&
@@ -254,6 +264,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           if (currentGeneration !== generation) return;
           localRecoveryModeRef.current = true;
           const store = await TaskMemoV2ApplicationStore.open(persistence, [], {
+            dataVersion: version,
             deviceId: "local-recovery", preserveSortKeys: true });
           const evidence = await persistence.loadLocalRecoveryEvidence();
           if (!evidence.recoveredAt || evidence.nodeCount === null || evidence.archivedOutboxCount === null ||
@@ -271,7 +282,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           return;
         }
         if (persistence instanceof IndexedDbTaskMemoApplicationJournal) {
-          await repairRedundantJournalAtStartup(persistence, adapter, scope, () => currentGeneration === generation);
+          await repairRedundantJournalAtStartup(persistence, adapter, versionedScope(scope, version), () => currentGeneration === generation);
           if (currentGeneration !== generation) return;
         }
         if (guardedRecovery && await persistence.loadJournal()) {
@@ -341,7 +352,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           throw new Error("旧journalとIndexedDBの状態が一致しません。復旧を停止しました。");
         if (await persistence.loadJournal()) await adapter.connect();
         if (currentGeneration !== generation) return;
-        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` }, firebase.environment === "production");
+        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { dataVersion: version, writePermission: () => currentGeneration === generation && adapter.dataVersionValid !== false && adapter.dataVersion === version, deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` }, firebase.environment === "production");
         if (currentGeneration !== generation) return;
         const local = localApplicationRef.current;
         const targetScope = activeScopeRef.current;
@@ -388,6 +399,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     return () => clearTimeout(timer);
   }, [applicationState, authReady, user]);
   const startup = startupPresentation({ preferencesReady: ready, authReady, applicationState,
+    versionBlocked: controllerRef.current?.versionBlocked,
     account: !!user, snapshotSource, status, elapsed: startupElapsed, cacheEditing });
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
     if (!startupEditableRef.current) { setError('読み込み・クラウド確認中は編集できません。'); return true; }
@@ -433,6 +445,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     return succeeded;
   };
   const repairSync = async (diagnosticOnly = false) => {
+    if (storeRef.current?.dataVersion === 3) throw new Error('Ver3の自己修復は未検証のため停止しています。通常同期とバックアップは使用できます。');
     const persistence = persistenceRef.current, adapter = adapterRef.current, store = storeRef.current;
     if (repairRunningRef.current || !localRecoveryModeRef.current || !persistence || !adapter || !store) return;
     repairRunningRef.current = true;
@@ -571,6 +584,8 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
       },
     } : undefined,
     configured, environment: firebase.environment, configurationError: firebase.error, authReady, user, status, error, signIn, signUp, legacyPinnedNoteCandidates,
+    dataVersion: storeRef.current?.dataVersion ?? null,
+    routineResultsEnabled: storeRef.current?.routineResultsEnabled === true && startup.editable,
     applicationState, startup, useCachedData: () => { cacheEditingRef.current = true; setCacheEditing(true); publish(); }, activeScope: activeScopeRef.current, ownershipReview, ownershipPendingCount, ownershipRecovery,
     reviewOwnership, commitOwnership, skipOwnership, closeOwnershipReview, retrySync,
     selfRepairProgress, repairSync,

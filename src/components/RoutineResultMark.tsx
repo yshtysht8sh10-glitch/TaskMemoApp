@@ -6,6 +6,7 @@ type Result = RoutineHistoryDay['outcome'];
 export function routineResultAppearance(state: Result, mode: 'light' | 'dark', colors: Pick<ThemeColors, 'text' | 'textSecondary'>) {
   switch (state) {
     case 'completed': return { label: '完了', color: mode === 'dark' ? '#72d89a' : '#18723c' };
+    case 'missed': return { label: '未達', color: mode === 'dark' ? '#ff8a8a' : '#b4232a' };
     case 'skipped': return { label: 'スキップ', color: mode === 'dark' ? colors.text : '#000000' };
     case 'pending': return { label: '-', color: colors.textSecondary };
   }
@@ -16,6 +17,7 @@ export function RoutineResultIcon({ state, color }: { state: Result; color: stri
   return <View testID={`routine-result-icon-${state}`} aria-hidden accessibilityElementsHidden
     importantForAccessibility="no-hide-descendants" style={[styles.icon, { borderColor: color }, state !== 'skipped' && styles.circle]}>
     {state === 'completed' && <Text style={[styles.check, { color }]}>✓</Text>}
+    {state === 'missed' && <Text style={[styles.check, { color }]}>×</Text>}
     {state === 'skipped' && <>
       <View testID="skip-triangle" style={[styles.triangle, { borderLeftColor: color }]} />
       <View testID="skip-bar" style={[styles.bar, { backgroundColor: color }]} />

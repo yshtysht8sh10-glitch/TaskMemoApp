@@ -97,7 +97,7 @@ export type MemoNode = BaseNode & {
 export type Node = CategoryNode | MemoNode;
 
 export type RoutineOutcome = {
-  state: 'completed' | 'skipped' | 'pending';
+  state: 'completed' | 'skipped' | 'missed' | 'pending';
   changedAt: string;
   version: number;
 };

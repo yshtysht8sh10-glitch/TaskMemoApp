@@ -2,6 +2,7 @@ import { isValidSortKey } from '../domain/sortKeys';
 import { canonical } from '../textFormat/syntax';
 import type { SyncNodeValue } from './types';
 import { decodeLegacyDate } from './legacyDateCodec';
+import { assertRoutineOutcomesReadable } from '../domain/routineOutcomeMerge';
 
 /** Exact content fingerprint. Kept private: contains user data, never log it. */
 export const sourceFingerprint = (value: unknown) => canonical(value);
@@ -18,6 +19,7 @@ export function decodeLegacyNodes(raw: string | null): SyncNodeValue[] {
   const ids = new Map<string, SyncNodeValue>();
   const ranks = new Set<string>();
   for (const n of nodes) {
+    if (n && typeof n === 'object') assertRoutineOutcomesReadable(n.routineOutcomes);
     const failed = [
       !n || typeof n.id !== 'string' || !n.id ? 'id: 非空文字列が必要' : '',
       n && ids.has(n.id) ? 'id: 重複' : '',

@@ -1,4 +1,4 @@
-export const TASKMEMO_SYNC_PROTOCOL = 2;
+export const TASKMEMO_SYNC_PROTOCOL = 3;
 
 export type CompatibilityGate = {
   schemaVersion: 1;

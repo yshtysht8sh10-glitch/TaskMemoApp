@@ -2,6 +2,10 @@ import { expect, it } from 'vitest';
 import { startupPresentation } from './startupPresentation';
 const account = { preferencesReady: true, authReady: true, applicationState: 'ready' as const, account: true,
   snapshotSource: 'checking' as const, status: 'synced', elapsed: false, cacheEditing: false };
+it('data version protection cannot be bypassed through cached editing', () => {
+  const state = startupPresentation({ ...account, elapsed: true, cacheEditing: true, ...{ versionBlocked: true } });
+  expect(state).toMatchObject({ showData: false, editable: false, canUseCache: false });
+});
 it('hides pre-auth Local and pre-load empty data even when a controller says synced', () => {
   expect(startupPresentation({ ...account, authReady: false, account: false }).showData).toBe(false);
   expect(startupPresentation({ ...account, applicationState: 'opening' }).showData).toBe(false);

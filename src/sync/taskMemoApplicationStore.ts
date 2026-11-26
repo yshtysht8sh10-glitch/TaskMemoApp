@@ -1,4 +1,5 @@
 import { findRoutineRoot, newRoutineRoot, isRoutineRoot, assertRoutineRootTransition } from '../domain/routineRoot';
+import { dataVersion, type DataVersion } from './dataVersion';
 import type { NodeHistory } from "../domain/nodeHistory";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
 import { recordSortKeyPass } from "./sortKeyDiagnostics";
@@ -15,6 +16,7 @@ import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures
 import { decodeLegacyNodes } from './legacyLocalCodec';
 import { integrateOwnershipSortKeys } from './ownershipSortKeys';
 import { nextRoutineOutcome } from '../domain/routine';
+import { assertRoutineOutcomesReadable, containsMissedResult } from '../domain/routineOutcomeMerge';
 import { replayRoutineLifecycle } from '../domain/routineLifecycleRegister';
 import { pendingAnonymousChanges, planOwnershipReconcile, sameOwnershipProfile, type AnonymousSnapshot, type OwnershipLedger, type OwnershipPlan } from './ownershipReconcile';
 
@@ -50,6 +52,7 @@ type StoredHistoryEntry = {
 };
 export type LegacyPinnedNoteCandidate = { body: string; updatedAt: string };
 type Envelope = {
+  dataVersion?: DataVersion;
   ownershipLedgers?: Record<string, OwnershipLedger>;
   ownershipTransaction?: { plan: OwnershipPlan; choices: Record<string, 'local' | 'account'>; opIds: string[]; appliedIds: string[]; history: StoredHistoryEntry; state: 'uploading' | 'conflict' };
   ownershipRecoverySeed?: NonNullable<Envelope['ownershipTransaction']>;
@@ -66,11 +69,22 @@ type Envelope = {
     features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean };
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean; dataVersion?: DataVersion; writePermission?: () => boolean;
+  /** Test harness only. Never grants server capability; the sync controller refuses this store. */
+  isolatedRoutineResults?: boolean };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const PINNED_NOTE_HISTORY_COALESCE_MS = 1_000;
+
+/** Inspect all retained result evidence, including History and unreceived operations. */
+function validateResultEvidence(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'routineOutcomes') assertRoutineOutcomesReadable(child);
+    else validateResultEvidence(child);
+  }
+}
 
 export class TaskMemoV2ApplicationStore {
   private diagnosticDomain?: Envelope['domain'];
@@ -92,12 +106,21 @@ export class TaskMemoV2ApplicationStore {
     return next;
   }
   private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date,
-    private committedRaw: string | null) {}
+    private committedRaw: string | null, readonly isolatedRoutineResults = false, private readonly writePermission: () => boolean = () => true) {}
 
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
     recordSyncActivity("hydrate");
     const journal = await persistence.loadJournal();
-    if (journal && persistence.writeAtomic) throw new Error('未確定journalがあります。整合性確認が完了するまで保存・同期を停止します。');
+    if (journal && persistence.writeAtomic) throw new Error('未確定journalがあります。原本を保持し、整合性確認が完了するまで保存・同期を停止します。');
+    // Validate before recovery can write/clear the WAL. Unknown raw stays in place.
+    const committedRaw = await persistence.loadCommitted();
+    for (const raw of [journal, committedRaw]) if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.version !== 2) throw new Error('未知の保存形式です。原本を保持して停止しました。');
+      if (dataVersion(parsed.dataVersion) !== (options.dataVersion ?? 2)) throw new Error('保存データVerが一致しません。原本を保持しました。');
+      validateResultEvidence(parsed);
+    }
+    for (const node of initialNodes) assertRoutineOutcomesReadable((node as MemoNode).routineOutcomes);
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
     const hydrateStarted = new Date();
@@ -105,7 +128,7 @@ export class TaskMemoV2ApplicationStore {
     recordSortKeyPass("hydrate", initialNodes, normalizedInitialNodes, 0, hydrateStarted, Date.now() - hydrateStarted.getTime());
     const loadedEnvelope = committed ? JSON.parse(committed) as Envelope : null;
     let envelope: Envelope = loadedEnvelope ?? {
-      version: 2, deviceId: options.deviceId, nextLocalSeq: 1,
+      version: 2, dataVersion: options.dataVersion ?? 2, deviceId: options.deviceId, nextLocalSeq: 1,
       domain: Object.fromEntries(normalizedInitialNodes.map((node) => [node.id, { value: nodeToV2Value(node), revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
       history: { past: [], future: [] }, sync: { outbox: [], seenOpIds: [] },
       profile: {
@@ -149,7 +172,7 @@ export class TaskMemoV2ApplicationStore {
         envelope.sync.outbox.push(operation);
       }
     }
-    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()), committed);
+    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()), committed, options.isolatedRoutineResults === true, options.writePermission);
     // Remote/committed snapshots are not user edits. Auto-rewriting their sortKeys
     // produced normal Outbox operations and a listener/upload feedback loop.
     store.envelope = envelope;
@@ -158,6 +181,12 @@ export class TaskMemoV2ApplicationStore {
   }
 
   get nodes() { return Object.values(this.envelope.domain).map((record) => nodeFromV2Value(record.value)); }
+  get restrictedRoutineResults() {
+    return this.isolatedRoutineResults || (!this.routineResultsEnabled && (Object.values(this.envelope.domain).some(record => containsMissedResult(record.value)) ||
+      this.envelope.sync.outbox.some(op => containsMissedResult(op.payload.node))));
+  }
+  get routineResultsEnabled() { return this.envelope.dataVersion === 3; }
+  get dataVersion() { return dataVersion(this.envelope.dataVersion); }
   get outbox() { return [...this.envelope.sync.outbox]; }
   get pendingCount() { return this.envelope.sync.outbox.length + (this.envelope.profile.pinnedNote.dirtySince ? 1 : 0); }
   get historyDepths() { return { past: this.envelope.history.past.length, future: this.envelope.history.future.length }; }
@@ -877,14 +906,22 @@ export class TaskMemoV2ApplicationStore {
   }
 
   private async commit(next: Envelope, atomic = false) {
+    if (!this.writePermission()) throw new Error('データVer/認証が変更されました。保存せず原本を保持しました。');
     if (this.storageFailure) throw this.storageFailure;
     atomic = atomic || Boolean(this.persistence.writeAtomic) || next.ownership?.kind === 'local' || Boolean(next.ownershipTransaction || next.ownershipRecoverySeed);
     const previousIds = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
     const generated = next.sync.outbox.filter(operation => !previousIds.has(operation.opId));
+    validateResultEvidence(next);
+    const resultWrite = generated.some(op => containsMissedResult(op.payload.node) ||
+      containsMissedResult(this.envelope.domain[op.targetNodeId]?.value));
+    if (resultWrite && !this.isolatedRoutineResults && !this.routineResultsEnabled) throw new Error('未達の製品書込みは閉鎖中です。');
+    // Missed transactions use the existing raw CAS path, not a new persistence protocol.
+    if ((this.isolatedRoutineResults || this.routineResultsEnabled) && generated.length) atomic = true;
     const value = JSON.stringify(next);
     try {
       if (atomic) {
         if (!this.persistence.writeAtomic) throw new Error('原子的なテキスト保存に対応したstorageが必要です。');
+        if (!this.writePermission()) throw new Error('データVer/認証が変更されました。保存を停止しました。');
         await this.persistence.writeAtomic(this.committedRaw, value);
       } else {
         // Compatibility for the non-transactional foundation/test adapter only.

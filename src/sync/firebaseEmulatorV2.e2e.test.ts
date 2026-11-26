@@ -16,7 +16,7 @@ import type { IndexedDbTaskMemoApplicationJournal } from "./indexedDbApplication
 import { beginSelfRepairDiagnostics, finishSelfRepairDiagnostics, getSelfRepairDiagnostics } from "./selfRepairDiagnostics";
 import { applyRevisionOperation } from "./revisionModel";
 import type { SyncOperation } from "./types";
-import { skipRoutineOccurrence, clearRoutineSkip, completeRoutineOccurrence } from '../domain/routine';
+import { skipRoutineOccurrence, clearRoutineSkip, completeRoutineOccurrence, setRoutineResult, clearRoutineResult } from '../domain/routine';
 import { completionHistoryGroups } from '../domain/completionHistory';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
 
@@ -43,6 +43,38 @@ describe.runIf(enabled)("V2 Firestore Emulator", () => {
     });
   });
   afterAll(async () => environment.cleanup());
+
+  it('Ver3 saves, syncs and cancels missed; old writer cannot replace the record or create a receipt', async () => {
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(doc(context.firestore(), 'users/owner/syncMetadataV2/compatibility'), { ...v2Gate, minimumSyncProtocol: 3 });
+    });
+    class AtomicMemory extends MemoryPersistence {
+      writeAtomic = async (expected: string | null, value: string) => { expect(this.committed).toBe(expected); this.committed = value; this.journal = null; };
+    }
+    const at = new Date(2026, 10, 26, 12);
+    const root: Node = { id: 'r', type: 'category', categoryKind: 'routineRoot', title: 'R', parentId: null, sortKey: 'a0', createdAt: at, updatedAt: at, deletedAt: null };
+    const routine: MemoNode = { id: 'routine', type: 'memo', title: 'R', parentId: 'r', sortKey: 'a0', body: '', status: 'active', completedAt: null, dueAt: at, duePreset: 'custom', createdAt: at, updatedAt: at, deletedAt: null, repeatRule: { frequency: 'day', interval: 1, startsOn: '2026-11-26' } };
+    const a = await TaskMemoV2ApplicationStore.open(new AtomicMemory(), [root, routine], { deviceId: 'new-a', dataVersion: 3, bootstrapInitialNodes: true });
+    const b = await TaskMemoV2ApplicationStore.open(new AtomicMemory(), [], { deviceId: 'new-b', dataVersion: 3 });
+    const db = environment.authenticatedContext('owner').firestore() as unknown as Firestore;
+    const ca = new TaskMemoV2SyncController(a, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    const cb = new TaskMemoV2SyncController(b, createFirebaseSyncAdapter(db, 'owner', 'test', { emulator: true }));
+    try {
+      await ca.start(); await ca.flush(); await cb.start();
+      await waitFor(() => b.nodes.some(node => node.id === 'routine'));
+      await a.command('missed', 'update', nodes => setRoutineResult(nodes, 'routine', at, 'missed', at)); await ca.flush();
+      await waitFor(() => (b.nodes.find(node => node.id === 'routine') as MemoNode).routineOutcomes?.['2026-11-26']?.state === 'missed');
+      const saved = (await getDoc(doc(db, 'users/owner/nodesV2/routine'))).data()!;
+      const { dataVersion: _version, ...oldRecord } = saved;
+      await assertFails(setDoc(doc(db, 'users/owner/nodesV2/routine'), oldRecord));
+      await assertFails(setDoc(doc(db, 'users/owner/syncOperationsV2/old:1'), { ownerUid: 'owner', schemaVersion: 2, operation: { opId: 'old:1' }, acknowledgement: { opId: 'old:1' } }));
+      expect((await getDoc(doc(db, 'users/owner/nodesV2/routine'))).data()).toEqual(saved);
+      await a.command('cancel', 'update', nodes => clearRoutineResult(nodes, 'routine', at, at)); await ca.flush();
+      await waitFor(() => (b.nodes.find(node => node.id === 'routine') as MemoNode).routineOutcomes?.['2026-11-26']?.state === 'pending');
+      await a.undo(); await ca.flush(); await waitFor(() => (b.nodes.find(node => node.id === 'routine') as MemoNode).routineOutcomes?.['2026-11-26']?.state === 'missed');
+      await a.redo(); await ca.flush(); await waitFor(() => (b.nodes.find(node => node.id === 'routine') as MemoNode).routineOutcomes?.['2026-11-26']?.state === 'pending');
+    } finally { ca.stop(); cb.stop(); }
+  }, 20000);
 
   it('applies the real SDK initial snapshot through one atomic envelope commit and skips an identical restart', async () => {
     const keys = generateNKeysBetween(null, null, 50);

@@ -20,11 +20,30 @@ const classify = (reason: unknown): { kind: SyncFailureKind; message: string } =
   }
   return { kind: "temporary", message: reason instanceof Error ? reason.message : String(reason) };
 };
+const ROUTINE_RESULTS_PROTECTION = '未達の実通信は未承認です。未送信操作を保持して停止します。';
 
 /** Common V2 Application bridge. Durable local state precedes network I/O. */
 export class TaskMemoV2SyncController {
   snapshotSource: 'checking' | 'cache' | 'server' = 'checking';
-  state: SyncState;
+  private currentState: SyncState = initialSyncState();
+  private routineResultsProtected = false;
+  private versionMismatch = false;
+  get versionBlocked() { this.versionMismatch ||= this.adapter.dataVersionValid === false; return this.versionMismatch; }
+  private get routineResultsBlocked() {
+    if (this.options.localOnly) return false;
+    this.routineResultsProtected ||= this.store.restrictedRoutineResults;
+    return this.routineResultsProtected;
+  }
+  // Protection dominates every asynchronous state update, including profile
+  // listeners already queued before unsubscribe. This controller has no unlock.
+  get state(): SyncState {
+    if (this.versionBlocked) return { phase: 'error', pendingCount: this.store.pendingCount, lastError: this.currentState.lastError ?? 'データVerを確認できません。原本を保持して停止しています。' };
+    if (this.routineResultsBlocked) {
+      return { phase: 'error', pendingCount: this.store.pendingCount, lastError: ROUTINE_RESULTS_PROTECTION };
+    }
+    return this.currentState;
+  }
+  set state(value: SyncState) { this.currentState = value; }
   ownershipAssessment: 'checking' | 'ready' | 'unavailable';
   private unsubscribe?: () => void;
   private running = false;
@@ -44,6 +63,7 @@ export class TaskMemoV2SyncController {
   }
 
   async start() {
+    this.assertRoutineResultsNetworkClosed();
     recordSyncActivity(this.options.localOnly ? "localOnlyStart" : "normalStart", { deviceId: this.store.deviceId });
     this.stop();
     if (this.protectStorage()) return;
@@ -60,6 +80,7 @@ export class TaskMemoV2SyncController {
     try {
       await this.adapter.connect();
       if (generation !== this.generation) return;
+      if ((this.adapter.dataVersion ?? 2) !== this.store.dataVersion) { this.versionMismatch = true; throw new Error('ローカルとCloudのデータVerが一致しません。原本を保持して停止しました。'); }
       await this.adapter.auditOutbox?.(this.store.outbox);
       if (generation !== this.generation) return;
       this.receiptsAudited = true;
@@ -76,27 +97,29 @@ export class TaskMemoV2SyncController {
         async (record) => {
           await this.receiveRecords([record], generation);
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
         (source) => { if (generation !== this.generation || source === this.snapshotSource) return; this.snapshotSource = source; this.onChange(); },
         (records) => this.receiveRecords(records, generation),
       );
       const unsubscribePinnedNote = this.adapter.subscribePinnedNote?.(
         async (record) => {
           if (generation !== this.generation) return;
+          this.assertVersion();
           await this.store.receivePinnedNote(record);
           if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
       const unsubscribeFeatures = this.adapter.subscribeFeatures?.(
         async (record) => {
           if (generation !== this.generation) return;
+          this.assertVersion();
           await this.store.receiveFeatures(record);
           if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
       const unsubscribeNodes = this.unsubscribe;
       this.unsubscribe = () => { unsubscribeNodes?.(); unsubscribePinnedNote?.(); unsubscribeFeatures?.(); };
@@ -114,6 +137,7 @@ export class TaskMemoV2SyncController {
   }
 
   private async receiveRecords(records: VersionedNode[], generation: number) {
+    this.assertVersion();
     if (generation !== this.generation) return;
     const before = this.state;
     const results = await this.store.receiveBatch(records);
@@ -164,9 +188,23 @@ export class TaskMemoV2SyncController {
     await this.start();
   }
 
+  private assertRoutineResultsNetworkClosed() {
+    this.assertVersion();
+    if (!this.routineResultsBlocked) return;
+    this.stop();
+    const message = ROUTINE_RESULTS_PROTECTION;
+    this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, kind: 'permanent', message });
+    this.onChange();
+    throw Object.assign(new Error(message), { kind: 'permanent' as const });
+  }
+  private assertVersion() {
+    if (this.versionBlocked) throw new Error('データVerを確認できません。原本を保持して読込み・書込みを停止しました。');
+  }
+
   stop() { this.snapshotSource = 'checking'; recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
 
   async updatePinnedNote(body: string, debounceMs = 500) {
+    this.assertVersion();
     await this.store.setPinnedNoteDraft(body);
     this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -182,6 +220,7 @@ export class TaskMemoV2SyncController {
   }
 
   async adoptLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    this.assertVersion();
     await this.store.setPinnedNoteDraft(candidate.body);
     await this.store.discardLegacyPinnedNoteCandidate(candidate);
     await this.store.queuePinnedNoteOperation();
@@ -192,16 +231,19 @@ export class TaskMemoV2SyncController {
   }
 
   async discardLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    this.assertVersion();
     await this.store.discardLegacyPinnedNoteCandidate(candidate);
     this.onChange();
   }
 
   async importLegacyPinnedNoteCandidates(candidates: LegacyPinnedNoteCandidate[]) {
+    this.assertVersion();
     await this.store.importLegacyPinnedNoteCandidates(candidates);
     this.onChange();
   }
 
   async updateIdeasEnabled(value: boolean, type: SyncOperationType = "update") {
+    this.assertVersion();
     const operation = await this.store.setIdeasEnabled(value, type);
     if (operation) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -211,6 +253,7 @@ export class TaskMemoV2SyncController {
   }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
+    this.assertVersion();
     const operations = await this.store.command(label, type, transform, options);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -221,6 +264,7 @@ export class TaskMemoV2SyncController {
 
   /** Lazy system setup. Never infer an empty account from an empty local cache. */
   async ensureRoutineRoot() {
+    this.assertVersion();
     const generation = this.generation;
     if (!this.options.localOnly && this.ownershipAssessment !== 'ready')
       throw new Error('アカウントの初期取り込み確認が完了するまでお待ちください。');
@@ -249,6 +293,7 @@ export class TaskMemoV2SyncController {
   prepareTextEdit(session: TextSession, text: string) { return this.store.prepareTextEdit(session, text); }
   discardTextEdit(session: TextSession) { this.store.discardTextEdit(session); }
   async saveTextEdit(plan: TextPlan, confirmation?: { fingerprint: string; deletedIds: string[] }) {
+    this.assertVersion();
     const operations = await this.store.commitTextEdit(plan, confirmation);
     if (operations.length) this.state = transitionSyncState(this.state, { type: 'local-operation', pendingCount: this.store.pendingCount });
     this.onChange();
@@ -261,6 +306,7 @@ export class TaskMemoV2SyncController {
 
   /** Confirm the durable local write; cloud upload continues independently. */
   async commandLocal(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
+    this.assertVersion();
     const operations = await this.store.command(label, type, transform, options);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -273,6 +319,7 @@ export class TaskMemoV2SyncController {
   }
 
   async undo(now?: Date) {
+    this.assertVersion();
     const operations = await this.store.undo(now);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -282,6 +329,7 @@ export class TaskMemoV2SyncController {
   }
 
   async redo(now?: Date) {
+    this.assertVersion();
     const operations = await this.store.redo(now);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -292,6 +340,7 @@ export class TaskMemoV2SyncController {
 
   async flush() {
     if (this.protectStorage()) return;
+    this.assertRoutineResultsNetworkClosed();
     if (this.options.localOnly) return;
     recordSyncActivity("normalFlush", { deviceId: this.store.deviceId });
     if (this.paused) {
@@ -321,18 +370,23 @@ export class TaskMemoV2SyncController {
     try {
       while (!this.stopped && generation === this.generation && this.store.outbox.length) {
         if (this.protectStorage()) return;
+        this.assertRoutineResultsNetworkClosed();
         if (this.store.pendingOwnership?.state === 'conflict') return;
         const operation = this.store.outbox[0];
         this.state = transitionSyncState(this.state, { type: "upload-started", pendingCount: this.store.pendingCount, retry: operation.attemptCount > 0 });
         try {
           if (this.stopped || generation !== this.generation) return;
           const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
-            () => !this.stopped && generation === this.generation && !this.store.protectionError);
+            () => !this.stopped && generation === this.generation && !this.routineResultsBlocked && !this.versionBlocked && !this.store.protectionError);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
+          this.assertRoutineResultsNetworkClosed();
           this.refresh();
         } catch (reason) {
           if (this.protectStorage()) return;
+          // A restriction learned while awaiting upload/ACK is a permanent local
+          // stop, not an offline retry or an ownership conflict.
+          this.assertRoutineResultsNetworkClosed();
           if (operation.ownership) await this.store.markOwnershipConflict();
           const problem = classify(reason);
           this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });

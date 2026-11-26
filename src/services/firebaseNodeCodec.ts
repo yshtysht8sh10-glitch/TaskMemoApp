@@ -1,6 +1,6 @@
 import { Timestamp } from "firebase/firestore";
 import type { MemoNode, Node } from "@/models/node";
-import { mergeRoutineOutcomes } from '../domain/routineOutcomeMerge';
+import { mergeRoutineOutcomes, assertRoutineOutcomesReadable } from '../domain/routineOutcomeMerge';
 
 const DATE_FIELDS = [
   "createdAt",
@@ -26,6 +26,7 @@ export function nodeFromFirestore(
   id: string,
   source: Record<string, unknown>,
 ): Node {
+  assertRoutineOutcomesReadable(source.routineOutcomes);
   const value: Record<string, unknown> = { ...source, id };
   for (const field of DATE_FIELDS) {
     const date = value[field];
