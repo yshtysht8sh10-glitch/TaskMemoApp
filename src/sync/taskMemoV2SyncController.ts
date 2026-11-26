@@ -27,6 +27,8 @@ export class TaskMemoV2SyncController {
   snapshotSource: 'checking' | 'cache' | 'server' = 'checking';
   private currentState: SyncState = initialSyncState();
   private routineResultsProtected = false;
+  private versionMismatch = false;
+  get versionBlocked() { return this.versionMismatch || this.adapter.dataVersionValid === false; }
   private get routineResultsBlocked() {
     if (this.options.localOnly) return false;
     this.routineResultsProtected ||= this.store.restrictedRoutineResults;
@@ -35,7 +37,7 @@ export class TaskMemoV2SyncController {
   // Protection dominates every asynchronous state update, including profile
   // listeners already queued before unsubscribe. This controller has no unlock.
   get state(): SyncState {
-    if (this.adapter.dataVersionValid === false) return { phase: 'error', pendingCount: this.store.pendingCount, lastError: 'データVerを確認できません。原本を保持して停止しています。' };
+    if (this.versionBlocked) return { phase: 'error', pendingCount: this.store.pendingCount, lastError: 'データVerを確認できません。原本を保持して停止しています。' };
     if (this.routineResultsBlocked) {
       return { phase: 'error', pendingCount: this.store.pendingCount, lastError: ROUTINE_RESULTS_PROTECTION };
     }
@@ -77,7 +79,7 @@ export class TaskMemoV2SyncController {
     try {
       await this.adapter.connect();
       if (generation !== this.generation) return;
-      if ((this.adapter.dataVersion ?? 2) !== this.store.dataVersion) throw new Error('ローカルとCloudのデータVerが一致しません。原本を保持して停止しました。');
+      if ((this.adapter.dataVersion ?? 2) !== this.store.dataVersion) { this.versionMismatch = true; throw new Error('ローカルとCloudのデータVerが一致しません。原本を保持して停止しました。'); }
       await this.adapter.auditOutbox?.(this.store.outbox);
       if (generation !== this.generation) return;
       this.receiptsAudited = true;

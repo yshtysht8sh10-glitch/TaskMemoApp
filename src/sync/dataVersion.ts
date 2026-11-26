@@ -9,7 +9,7 @@ export function versionedScope(scope: string, version: DataVersion) { return ver
 export function prepareVersion3Copy(raw: string, journal: string | null): string {
   const e = JSON.parse(raw);
   if (dataVersion(e.dataVersion) !== 2 || journal !== null || e.version !== 2 || !Array.isArray(e.sync?.outbox) || e.sync.outbox.length ||
-    e.profile?.pinnedNote?.dirtySince || e.ownershipTransaction || e.ownershipRecoverySeed)
+    e.profile?.pinnedNote?.dirtySince || e.profile?.pinnedNote?.migrationPending || e.profile?.features?.migrationPending || e.ownershipTransaction || e.ownershipRecoverySeed)
     throw new Error('未同期・復旧中のデータがあります。元データを保持して切替を停止しました。');
   return JSON.stringify({ ...e, dataVersion: 3 });
 }
@@ -19,6 +19,8 @@ export function assertVersion3Baseline(raw: string, baseline: { nodes: import('.
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
   if (canonical(e.domain) !== canonical(Object.fromEntries(baseline.nodes.map(record => [record.value.id, record]))) ||
     canonical(e.profile?.pinnedNote?.synced ?? null) !== canonical(baseline.pinnedNote ?? null) ||
-    canonical(e.profile?.features?.synced ?? null) !== canonical(baseline.features ?? null))
+    canonical(e.profile?.features?.synced ?? null) !== canonical(baseline.features ?? null) ||
+    e.profile?.pinnedNote?.localBody !== (baseline.pinnedNote?.value.body ?? '') ||
+    e.profile?.features?.localIdeasEnabled !== (baseline.features?.value.ideasEnabled ?? false))
     throw new Error('端末とCloudの保存済みデータが一致しません。原本を保持し切替を停止しました。');
 }

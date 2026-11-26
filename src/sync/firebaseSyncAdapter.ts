@@ -102,8 +102,10 @@ export function createFirebaseSyncAdapter(
   const checkTransaction = async (transaction: { get: (ref: ReturnType<typeof doc>) => Promise<{ data(): Record<string, unknown> | undefined }> }) => {
     const gate = validateCompatibilityGate((await transaction.get(doc(db, 'users', uid, 'syncMetadataV2', 'compatibility'))).data());
     const global = (await transaction.get(doc(db, 'syncControl', 'current'))).data();
-    if (versionInvalid || gate.minimumSyncProtocol !== (connectedVersion ?? 2) || global?.schemaVersion !== 1 || global?.writesEnabled !== true)
+    if (versionInvalid || gate.minimumSyncProtocol !== (connectedVersion ?? 2) || global?.schemaVersion !== 1 || global?.writesEnabled !== true) {
+      versionInvalid = true;
       throw { code: 'permission-denied', message: 'データVer/同期状態が変わりました。再接続してください。' };
+    }
     connectedVersion ??= 2; // Existing direct V2 repair callers still validate the live transaction gate.
   };
   const metadata = () => connectedVersion === 3 ? { dataVersion: 3 } : {};
@@ -491,7 +493,11 @@ export function createFirebaseSyncAdapter(
           await options.ensureAccountReady();
           gate = await getDocFromServer(doc(db, "users", uid, "syncMetadataV2", "compatibility"));
         }
-        try { connectedVersion = dataVersion(validateCompatibilityGate(gate.exists() ? gate.data() : undefined).minimumSyncProtocol); versionInvalid = false; }
+        try {
+          const next = dataVersion(validateCompatibilityGate(gate.exists() ? gate.data() : undefined).minimumSyncProtocol);
+          if (versionInvalid || (connectedVersion !== undefined && next !== connectedVersion)) { versionInvalid = true; throw new Error('接続後のデータVer変更を検知しました。再起動してください。'); }
+          connectedVersion = next;
+        }
         catch (error) { throw { code: "permission-denied", message: String(error) }; }
       } catch (reason) {
         throw adapterError(reason);

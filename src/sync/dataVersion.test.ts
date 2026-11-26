@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { IndexedDbTaskMemoApplicationJournal } from './indexedDbApplicationStorage';
 import { prepareVersion3Copy, assertVersion3Baseline } from './dataVersion';
+import { createNode } from '../domain/nodeOperations';
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } }));
 import { TaskMemoV2ApplicationStore } from './taskMemoApplicationStore';
 import { validateCompatibilityGate } from './compatibilityGate';
@@ -13,6 +14,9 @@ it('allows only known server data versions', () => {
 it('copies a verified quiescent snapshot once into a separate scope and forbids downgrade', async () => {
   const factory = new IDBFactory(), source = await IndexedDbTaskMemoApplicationJournal.open('test/u', factory);
   await TaskMemoV2ApplicationStore.open(source, [], { deviceId: 'original' });
+  const settled = JSON.parse((await source.loadCommitted())!);
+  settled.profile.pinnedNote.migrationPending = false; settled.profile.features.migrationPending = false;
+  await source.writeAtomic((await source.loadCommitted())!, JSON.stringify(settled));
   const before = await source.loadCommitted(), baseline = { nodes: [] };
   const destination = await IndexedDbTaskMemoApplicationJournal.openVersion3('test/u', baseline, factory);
   const raw = await destination.loadCommitted();
@@ -28,6 +32,10 @@ it.each(['outbox', 'journal', 'cloud'])('does not copy or discard unresolved %s'
   if (kind === 'cloud') expect(() => assertVersion3Baseline(raw, { nodes: [{ value: { id: 'other' } } as never] })).toThrow();
   else expect(() => prepareVersion3Copy(raw, kind === 'journal' ? raw : null)).toThrow();
 });
+it.each(['body', 'features'])('baseline rejects local-only %s even if the cached synced profile matches', kind => {
+  const raw = JSON.stringify({ domain: {}, profile: { pinnedNote: { synced: null, localBody: kind === 'body' ? 'keep' : '' }, features: { synced: null, localIdeasEnabled: kind === 'features' } } });
+  expect(() => assertVersion3Baseline(raw, { nodes: [] })).toThrow();
+});
 it('unknown local data version stops before writing or clearing Journal', async () => {
   const raw = JSON.stringify({ version: 2, dataVersion: 99 }); let writes = 0;
   await expect(TaskMemoV2ApplicationStore.open({ loadCommitted: async () => raw, loadJournal: async () => raw,
@@ -39,4 +47,15 @@ it('normal backup carries a version older apps cannot accept and rejects unknown
   expect(data.schemaVersion).toBe(5); expect(data.dataVersion).toBe(3);
   expect(parseNodeBackup(raw)).toEqual([]);
   expect(() => parseNodeBackup(JSON.stringify({ ...data, dataVersion: 99 }))).toThrow();
+});
+it.each(['before-command', 'before-CAS'])('revoked version permission %s cannot save or retire pending operations', async stage => {
+  let raw: string | null = null, journal: string | null = null, allowed = true, revokeOnRead = false;
+  const p = { loadCommitted: async () => { if (revokeOnRead) allowed = false; return raw; }, loadJournal: async () => journal,
+    writeCommitted: async (v: string) => { raw = v; }, writeJournal: async (v: string) => { journal = v; }, clearJournal: async () => { journal = null; },
+    writeAtomic: async (expected: string | null, v: string) => { expect(raw).toBe(expected); raw = v; } };
+  const store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'test', dataVersion: 3, writePermission: () => allowed });
+  const before = raw;
+  if (stage === 'before-command') allowed = false; else revokeOnRead = true;
+  await expect(store.command('new', 'create', nodes => createNode(nodes, 'memo', { title: 'keep', parentId: null }, new Date(), 'new'))).rejects.toThrow(/Ver/);
+  expect(raw).toBe(before); expect(journal).toBeNull(); expect(store.nodes).toEqual([]); expect(store.outbox).toEqual([]);
 });

@@ -16,8 +16,11 @@ DEVはPR147/0b408a1基点（Queue保持）。本番抽出時はProduction候補9
 - ローカルenvelopeのdataVersion省略は2。3は別scope `<project>/<uid>/data-v3`へ一度だけコピーする。
   旧scopeは保持。新scopeの存在確認/元IDB raw読取/新scope作成は同じtransactionで行う。
   Journal/Outbox/dirty pinned note/ownership中は停止。保存済みDomain/ProfileとCloud baseline不一致も停止。
+  Profileの受信済みsynced値だけでなくlocalBody/localIdeasEnabledを照合し、migrationPendingも拒否する。
   コピーが確定しStore検査が成功する前に通常同期/編集を起動しない。既存新scopeは上書きしない。
   新scopeが存在した後のgate2降格は拒否する。Native切替とVer3自己修復は未検証のため停止。
+  起動後のVer変更はadapter/controllerを失効させ、キャッシュ編集選択でも読書停止を迂回させない。
+  各Store commitとCAS直前でもVer/認証の有効性を確認し、未送信操作を退役しない。
 - 通常backupはschema5/dataVersion3。旧parserはschema5を拒否。新版は旧schema1–4も読む。
   未知/不一致Verを拒否し、Ver2 Storeへmissedをimportすることも内容検査で拒否する。
 - 外部AI Functionsは現行assertGateのgate3拒否を維持し、今回は対応させない。
