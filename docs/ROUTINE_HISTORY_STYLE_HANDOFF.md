@@ -20,3 +20,7 @@ DEVはQueueを含むこの系統を用い、独立承認後にHostingのみ配�
 Productionは現公開e18c4d1から#140/#141/#142と本UIだけを抽出する。Queueや#117は取り込まない。
 現Productionの公開JSとHosting releaseをGETで確認済み。ユーザー文書の読取りなし。
 Productionは本番候補SHA/検証/対象/rollbackを提示してOwnerの別承認を待つ。
+
+独立レビューでWebの装飾icon aria-hiddenがNative属性から変換されないMinorを受けた。
+実react-native-webを使用する3ケースを追加し、3 FAIL→明示aria-hidden付与後PASSを確認。
+Nativeの隠蔽指定も残し、色/形状/寸法/保存処理は変更しない。新SHAの差分レビューを依頼する。

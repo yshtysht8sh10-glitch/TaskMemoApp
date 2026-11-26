@@ -13,7 +13,7 @@ export function routineResultAppearance(state: Result, mode: 'light' | 'dark', c
 
 /** Native shapes avoid platform-dependent emoji color and additional icon fonts. */
 export function RoutineResultIcon({ state, color }: { state: Result; color: string }) {
-  return <View testID={`routine-result-icon-${state}`} accessibilityElementsHidden
+  return <View testID={`routine-result-icon-${state}`} aria-hidden accessibilityElementsHidden
     importantForAccessibility="no-hide-descendants" style={[styles.icon, { borderColor: color }, state !== 'skipped' && styles.circle]}>
     {state === 'completed' && <Text style={[styles.check, { color }]}>✓</Text>}
     {state === 'skipped' && <>
