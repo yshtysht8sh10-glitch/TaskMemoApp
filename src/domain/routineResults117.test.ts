@@ -225,3 +225,48 @@ it('R145: localOnly retains isolated results and operations without connecting, 
   expect(connect).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled();
   expect(await p.loadCommitted()).toBe(original); expect(store.outbox).toHaveLength(1);
 });
+
+it.each((['pinned', 'features'] as const).flatMap(kind =>
+  (['node-first', 'profile-first'] as const).flatMap(order => [false, true].map(duplicate => ({ kind, order, duplicate }))))
+)('R145-2: $kind $order duplicate=$duplicate cannot clear protection', async ({ kind, order, duplicate }) => {
+  const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-profile-race', new IDBFactory());
+  const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now });
+  let receiveNode!: Parameters<NonNullable<SyncAdapter['subscribe']>>[0], receiveProfile!: () => void | Promise<void>;
+  let reportError!: (error: unknown) => void;
+  const upload = vi.fn();
+  const stamp = { revision: 1, lastOpId: 'profile:1', lastDeviceId: 'profile', lastLocalSeq: 1 };
+  const controller = new TaskMemoV2SyncController(store, { connect: async () => {}, upload,
+    subscribe: (onRecord, onError) => { receiveNode = onRecord; reportError = onError; return () => {}; },
+    subscribePinnedNote: onRecord => { if (kind === 'pinned') receiveProfile = () => onRecord({ ...stamp, value: { body: 'synthetic' } }); return () => {}; },
+    subscribeFeatures: onRecord => { if (kind === 'features') receiveProfile = () => onRecord({ ...stamp, value: { ideasEnabled: true } }); return () => {}; },
+  });
+  await controller.start();
+  const current = store.versionedNode('a')!;
+  const record = { ...current, revision: 100, lastOpId: 'remote:100', lastDeviceId: 'remote',
+    value: { ...current.value, routineOutcomes: { [key]: { state: 'missed', changedAt: now.toISOString(), version: 100 } } } };
+  const notifications: Promise<unknown>[] = [];
+  const profileNotifications: Promise<void>[] = [];
+  const node = () => notifications.push(Promise.resolve(receiveNode(record)));
+  const profile = () => { const promise = Promise.resolve(receiveProfile()); profileNotifications.push(promise); notifications.push(promise); };
+  const first = order === 'node-first' ? node : profile, second = order === 'node-first' ? profile : node;
+  first(); second(); if (duplicate) { second(); first(); }
+  await Promise.allSettled(notifications);
+  expect((await Promise.allSettled(profileNotifications)).every(result => result.status === 'fulfilled')).toBe(true);
+  expect(controller.state).toMatchObject({ phase: 'error', pendingCount: 0 });
+  expect(controller.state.lastError).toMatch(/未承認/);
+  reportError({ kind: 'offline', message: 'stale subscription error' });
+  controller.pause('ownership');
+  expect(controller.state.phase).toBe('error');
+  await expect(controller.resume()).rejects.toMatchObject({ kind: 'permanent' });
+  expect(upload).not.toHaveBeenCalled(); expect(store.outbox).toEqual([]);
+  const envelope = JSON.parse((await p.loadCommitted())!);
+  expect(envelope.domain.a.value.routineOutcomes[key].state).toBe('missed');
+  if (kind === 'pinned') expect(envelope.profile.pinnedNote.synced.value.body).toBe('synthetic');
+  else expect(envelope.profile.features.localIdeasEnabled).toBe(true);
+  // A later valid server cancellation is not authority to unlock this controller.
+  await store.receive({ ...record, revision: 101, lastOpId: 'remote:101', lastLocalSeq: 101,
+    value: { ...record.value, routineOutcomes: { [key]: { state: 'pending', changedAt: now.toISOString(), version: 101 } } } });
+  expect(store.restrictedRoutineResults).toBe(false);
+  expect(controller.state.phase).toBe('error');
+  await expect(controller.resume()).rejects.toMatchObject({ kind: 'permanent' });
+});
