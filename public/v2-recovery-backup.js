@@ -53,6 +53,26 @@
     } catch { return null; }
   }
 
+  // The archive is JSON. Never silently turn Date into text, Map into {}, or
+  // undefined/non-finite values into omissions/null in unknown future metadata.
+  function assertJsonPreserves(value, seen = new WeakSet()) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+    if (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0)) return;
+    const fail = () => { throw new Error('JSONで損失なく退避できない保存形式です。原本を保持して中止しました。'); };
+    if (typeof value !== 'object' || seen.has(value)) fail();
+    seen.add(value);
+    if (Array.isArray(value)) {
+      if (Reflect.ownKeys(value).length !== value.length + 1) fail();
+      for (let index = 0; index < value.length; index++)
+        if (!Object.prototype.hasOwnProperty.call(value, index)) fail();
+    } else {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== null && Object.getPrototypeOf(prototype) !== null) fail();
+      if (Reflect.ownKeys(value).length !== Object.keys(value).length) fail();
+    }
+    for (const entry of Object.values(value)) assertJsonPreserves(entry, seen);
+  }
+
   async function digest(value) {
     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
     return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -90,6 +110,7 @@
       });
       await done;
       for (const record of records) {
+        assertJsonPreserves(record);
         if (typeof record.scope !== 'string' || typeof record.legacyFingerprint !== 'string')
           throw new Error('IndexedDBのV2データを検証できません。');
         // Do not hydrate, repair or interpret the payload to export it. Unknown

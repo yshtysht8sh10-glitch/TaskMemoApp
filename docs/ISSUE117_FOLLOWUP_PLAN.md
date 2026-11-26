@@ -38,6 +38,8 @@ IDB-only/破損JSON/未知versionの3失敗を原本救出の再現として使�
   preservedRecoveryJournal、preservedSelfRepairCommitted、authoritativeRecoveryPlan、未知metadataも保持。
 - 物理保存形式（scope/fingerprint、rawがstring/null）を検証不能なら安全に中断。
   未知の物理DB/store/schemaを推測して開設・変換しない。
+- 未知metadataがDate/Map/undefined/非有限数等でJSON化に損失が出る場合は、ファイル準備を中断し原本を保持。
+  異種型・疎配列・参照共有/循環を別の意味へ変換して成功扱いしない。JSON値の未知metadataだけをそのまま保持する。
 - archiveにcaptureメタデータを追加し、local-raw、consistentCut=false、automaticRestoreAllowed=false、
   serverReceipts/drafts=not-collectedを明示する。
 - JSON parseや集計が失敗してもユーザー内容・UID・rawを画面/ログへ表示しない。
@@ -57,6 +59,9 @@ capture情報は状態の説明であり、旧復元ツールがこの新情報�
 - TypeScript、Lint、node --check、git diff --check PASS。
 - public変更を含むため、Web exportも固定commitで実施しPRへ結果を追記する。
 - すべて合成localStorage/fake-indexeddb/VM。実保存領域・実ユーザーデータにはアクセスしていない。
+
+追加で非JSON metadata4件の4 FAILを確認し、損失検出後はbackup focused12 PASS。
+Date/Map/undefined/Infinityが元IndexedDBに残り、共有・書込みが発生しないことを確認した。
 
 ## A2以降に残る重大条件
 
