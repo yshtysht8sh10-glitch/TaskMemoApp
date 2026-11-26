@@ -1,4 +1,7 @@
 import { FormTextInput } from '../components/FormTextInput';
+import { routineResultLabel } from '../components/RoutineResultActions';
+import { setRoutineResult } from '../domain/routine';
+import type { RoutineOutcome } from '../models/node';
 import { TaskQueues } from '../components/TaskQueues';
 import { RoutineHistoryPanel } from '../components/RoutineHistoryPanel';
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
@@ -137,7 +140,7 @@ import { navigateToStorageDiagnostics } from "@/utils/storageDiagnosticsNavigati
 import { ExternalAiConnectionPanel } from "@/components/ExternalAiConnectionPanel";
 import {
   clearRoutineCompletion,
-  clearRoutineSkip,
+  clearRoutineResult,
   routineCategoryForMemo,
   localDateKey,
   parseLocalDateKey,
@@ -972,7 +975,7 @@ export default function HomeScreen() {
             onRestoreCompleted={(item) =>
               apply("完了を未完了に戻す", (current) =>
                 item.kind === "routineOccurrence"
-                  ? (item.outcome === 'skipped' ? clearRoutineSkip : clearRoutineCompletion)(
+                  ? clearRoutineResult(
                       current,
                       item.memo.id,
                       item.occurrenceDate!,
@@ -1003,7 +1006,7 @@ export default function HomeScreen() {
                   items.reduce(
                     (next, item) =>
                       item.kind === "routineOccurrence"
-                        ? (item.outcome === 'skipped' ? clearRoutineSkip : clearRoutineCompletion)(
+                        ? clearRoutineResult(
                             next,
                             item.memo.id,
                             item.occurrenceDate!,
@@ -1293,6 +1296,7 @@ export default function HomeScreen() {
             toggleRoutineCompletion(current, memoId, date, new Date()),
           )
         }
+        onRoutineResult={sync.routineResultsEnabled ? (memoId, date, state) => apply('Routineの結果を変更', current => setRoutineResult(current, memoId, date, state, new Date())) : undefined}
         onClose={(reason) => changeEditor(null, reason)}
         onSave={async (draft, close = true) => {
           recordEditorDiagnostic('editor-save-begin', { close });
@@ -1567,6 +1571,7 @@ export default function HomeScreen() {
               <Text style={styles.buildInfoText}>Display mode: {typeof window !== 'undefined' && ((window.navigator as Navigator & { standalone?: boolean }).standalone === true || window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser'}</Text>
             </>}
             <Text style={styles.buildInfoText}>Sync: V{sync.protocol}</Text>
+            <Text style={styles.buildInfoText}>データVer: {sync.dataVersion ?? '確認中'} / アプリ対応: 2・3</Text>
             <Text style={styles.buildInfoText}>Environment: {appBuildInfo.environment}</Text>
           </View>
           {Platform.OS === "web" && (
@@ -1919,6 +1924,7 @@ function EditorModal({
   visibleGroupIds,
   todayGranularity,
   onToggleRoutineHistory,
+  onRoutineResult,
   onClose,
   onSave,
   onCompleteRoutine,
@@ -1928,6 +1934,7 @@ function EditorModal({
   visibleGroupIds: ReadonlySet<DeadlineGroupKey>;
   todayGranularity: TodayGranularity;
   onToggleRoutineHistory: (memoId: string, date: Date) => void;
+  onRoutineResult?: (memoId: string, date: Date, state: RoutineOutcome['state']) => void;
   onCompleteRoutine: (id: string) => Promise<boolean>;
   onClose: (reason: string) => void;
   onSave: (draft: {
@@ -2221,7 +2228,7 @@ function EditorModal({
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} />
+                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} onResult={onRoutineResult} />
                       </>
                     )}
                   </>
@@ -2448,15 +2455,15 @@ function ListPanel({
                           </Text>
                         </Pressable>
                       )}
-                      <Text style={[styles.cardTitle, item.outcome === 'skipped' && styles.danger]}>{item.outcome === 'skipped' ? '↷ ' : '✓ '}{item.memo.title}</Text>
+                      <Text style={[styles.cardTitle, (item.outcome === 'skipped' || item.outcome === 'missed') && styles.danger]}>{item.outcome === 'missed' ? '! ' : item.outcome === 'skipped' ? '↷ ' : '✓ '}{item.memo.title}</Text>
                     </View>
                     <Text style={styles.meta}>
                       {item.kind === "routineOccurrence"
-                        ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分 ${item.outcome === 'skipped' ? 'スキップ' : '完了'}`
+                        ? `ルーティーン・${item.occurrenceDate!.getMonth() + 1}/${item.occurrenceDate!.getDate()}分 ${routineResultLabel(item.outcome ?? 'completed')}`
                         : `元: ${parentName(item.memo.parentId)}`}
                     </Text>
                     <Text style={styles.meta}>
-                      {item.outcome === 'skipped' ? 'スキップ' : '完了'}: {item.completedAt.toLocaleString()}
+                      {routineResultLabel(item.outcome ?? 'completed')}: {item.completedAt.toLocaleString()}
                     </Text>
                     {!selectionMode && (
                       <View style={styles.cardActions}>
@@ -2464,7 +2471,7 @@ function ListPanel({
                           onPress={() => onRestoreCompleted(item)}
                           style={styles.smallButton}
                         >
-                          <Text style={styles.buttonText}>{item.outcome === 'skipped' ? 'スキップを取り消す' : '未完了へ戻す'}</Text>
+                          <Text style={styles.buttonText}>{item.outcome === 'missed' ? '未達を取り消す' : item.outcome === 'skipped' ? 'スキップを取り消す' : '未完了へ戻す'}</Text>
                         </Pressable>
                         {item.kind === "memo" && (
                           <Pressable

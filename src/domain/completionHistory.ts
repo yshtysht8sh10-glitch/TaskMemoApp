@@ -20,7 +20,7 @@ export type CompletionHistoryItem = {
   memo: MemoNode;
   occurrenceDate?: Date;
   completedAt: Date;
-  outcome?: 'completed' | 'skipped';
+  outcome?: 'completed' | 'skipped' | 'missed';
 };
 export type CompletionHistoryGroup = {
   key: string;

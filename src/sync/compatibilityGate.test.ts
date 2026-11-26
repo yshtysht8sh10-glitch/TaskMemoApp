@@ -11,7 +11,8 @@ describe("sync compatibility gate", () => {
   });
   it("fails closed when missing, malformed, disabled, or newer than the client", () => {
     expect(() => validateCompatibilityGate(undefined)).toThrow("ありません");
-    expect(() => validateCompatibilityGate({ ...valid, minimumSyncProtocol: 3 })).toThrow("最新版");
+    expect(() => validateCompatibilityGate({ ...valid, minimumSyncProtocol: 3 })).not.toThrow();
+    expect(() => validateCompatibilityGate({ ...valid, minimumSyncProtocol: 4 })).toThrow("最新版");
     expect(() => validateCompatibilityGate({ ...valid, v2Enabled: false })).toThrow("停止");
   });
   it("keeps an explicitly V2 production client on the V2 path when the server gate rejects it", () => {

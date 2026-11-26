@@ -1,8 +1,9 @@
 import type { DuePreset, MemoStatus, Node } from "@/models/node";
+import { dataVersion } from '../sync/dataVersion';
 import { isValidSortKey } from '../domain/sortKeys';
 import { validRoutineLifecycle } from '../domain/routineLifecycleRegister';
 import { validQueueState } from '../domain/queueRegisters';
-import { validRoutineOutcome } from '../domain/routineOutcomeMerge';
+import { validRoutineOutcome, assertRoutineOutcomesReadable } from '../domain/routineOutcomeMerge';
 import { parseLocalDateKey } from '../domain/routine';
 import { allDeadlineGroupIds, TODAY_GRANULARITIES, type DeadlineGroupKey, type TodayGranularity } from "../domain/deadlineView";
 import type { ReminderPreferences } from "@/domain/reminders";
@@ -11,7 +12,7 @@ import type { ListDisplayPreferences, TreeDisplayPreferences } from "./viewPrefe
 import type { ThemeMode } from "@/theme/theme";
 import type { LegacyPinnedNoteCandidate } from "@/sync/taskMemoApplicationStore";
 
-export const BACKUP_SCHEMA_VERSION = 4;
+export const BACKUP_SCHEMA_VERSION = 5;
 const DATE_FIELDS = [
   "createdAt",
   "updatedAt",
@@ -36,7 +37,7 @@ const PINNED_NOTE_HEIGHT_MIN = 72;
 const PINNED_NOTE_HEIGHT_MAX = 280;
 
 export type NodeBackup = {
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
   exportedAt: string;
   nodes?: Node[];
   pinnedNote?: { body: string; updatedAt: string };
@@ -59,7 +60,7 @@ const validDateString = (value: unknown, nullable = false) =>
 export function serializeNodeBackup(nodes: Node[], exportedAt = new Date()) {
   return JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: 5, dataVersion: 3,
       exportedAt: exportedAt.toISOString(),
       nodes,
     },
@@ -69,7 +70,7 @@ export function serializeNodeBackup(nodes: Node[], exportedAt = new Date()) {
 }
 
 export function serializeTaskMemoBackup(nodes: Node[], pinnedNote: { body: string; updatedAt: Date }, settings: TaskMemoBackupSettings, exportedAt = new Date(), legacyPinnedNoteCandidates: LegacyPinnedNoteCandidate[] = []) {
-  return JSON.stringify({ schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: exportedAt.toISOString(), content: { nodes, pinnedNote, legacyPinnedNoteCandidates }, settings }, null, 2);
+  return JSON.stringify({ schemaVersion: BACKUP_SCHEMA_VERSION, dataVersion: 3, exportedAt: exportedAt.toISOString(), content: { nodes, pinnedNote, legacyPinnedNoteCandidates }, settings }, null, 2);
 }
 
 export function parseNodeBackup(raw: string): Node[] {
@@ -83,9 +84,11 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
   } catch {
     throw new Error("JSON形式が正しくありません。");
   }
-  if (!isObject(backup) || ![1, 2, 3, BACKUP_SCHEMA_VERSION].includes(backup.schemaVersion as number))
+  if (!isObject(backup) || ![1, 2, 3, 4, BACKUP_SCHEMA_VERSION].includes(backup.schemaVersion as number))
     throw new Error("対応していないバックアップ形式です。");
-  const content = (backup.schemaVersion === 3 || backup.schemaVersion === 4) && isObject(backup.content) ? backup.content : backup;
+  dataVersion(backup.dataVersion);
+  if (backup.schemaVersion === 5 && backup.dataVersion !== 3) throw new Error('バックアップのデータVerが一致しません。');
+  const content = [3, 4, 5].includes(backup.schemaVersion as number) && isObject(backup.content) ? backup.content : backup;
   if (!validDateString(backup.exportedAt) || !Array.isArray(content.nodes))
     throw new Error("バックアップの基本情報が不正です。");
 
@@ -132,6 +135,7 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
         !validDateString(value.completedAt, true)
       )
         throw new Error(`${value.id}のMemo日付が不正です。`);
+      assertRoutineOutcomesReadable(value.routineOutcomes);
       if (value.routineOutcomes !== undefined && (!isObject(value.routineOutcomes) ||
         Object.entries(value.routineOutcomes).some(([key, outcome]) => !parseLocalDateKey(key) || !validRoutineOutcome(outcome))))
         throw new Error(`${value.id}のルーティーン実施状態が不正です。`);
@@ -177,14 +181,14 @@ export function parseTaskMemoBackup(raw: string): TaskMemoBackupData {
     return restored as Node;
   });
   let pinnedNote: TaskMemoBackupData["pinnedNote"] = null;
-  if (backup.schemaVersion === 2 || backup.schemaVersion === 3 || backup.schemaVersion === 4) {
+  if ([2, 3, 4].includes(backup.schemaVersion as number) || (backup.schemaVersion === 5 && backup.content !== undefined)) {
     if (!isObject(content.pinnedNote) || typeof content.pinnedNote.body !== "string" || !validDateString(content.pinnedNote.updatedAt))
       throw new Error("常設メモのデータが不正です。");
     pinnedNote = { body: content.pinnedNote.body, updatedAt: new Date(content.pinnedNote.updatedAt as string) };
   }
-  const settings = backup.schemaVersion === 3 || backup.schemaVersion === 4 ? parseSettings(backup.settings) : null;
+  const settings = [3, 4].includes(backup.schemaVersion as number) || (backup.schemaVersion === 5 && backup.content !== undefined) ? parseSettings(backup.settings) : null;
   let legacyPinnedNoteCandidates: LegacyPinnedNoteCandidate[] = [];
-  if (backup.schemaVersion === 4) {
+  if (backup.schemaVersion === 4 || (backup.schemaVersion === 5 && backup.content !== undefined)) {
     if (!Array.isArray(content.legacyPinnedNoteCandidates)) throw new Error("常設メモの回復候補が不正です。");
     legacyPinnedNoteCandidates = content.legacyPinnedNoteCandidates.map((candidate) => {
       if (!isObject(candidate) || typeof candidate.body !== "string" || !validDateString(candidate.updatedAt)) throw new Error("常設メモの回復候補が不正です。");

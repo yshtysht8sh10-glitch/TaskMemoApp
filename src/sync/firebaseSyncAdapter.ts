@@ -3,6 +3,7 @@ import { collection, doc, documentId, getCountFromServer, getDocFromServer, getD
 import { FIREBASE_PROJECT_IDS, type TaskMemoEnvironment } from "../services/firebaseConfig";
 import { applyFeaturesOperation, applyPinnedNoteOperation, applyRevisionOperation } from "./revisionModel";
 import { validateCompatibilityGate } from "./compatibilityGate";
+import { dataVersion, type DataVersion } from './dataVersion';
 import type { RecoveryConvergenceRequest, SyncAcknowledgement, SyncAdapter, SyncOperation, VersionedFeatures, VersionedNode, VersionedPinnedNote } from "./types";
 import { canonicalSyncValue } from "./syncSelfRepair";
 import { recordActorReceipt, recordNormalUploadBlockedByRepair, recordNormalWriteDuringRepair, recordRepairComparison, recordRepairLock, recordRepairLockWait, recordRepairSnapshot, recordSyncActivity, selfRepairDiagnosticsActive } from "./selfRepairDiagnostics";
@@ -96,6 +97,25 @@ export function createFirebaseSyncAdapter(
   environment: TaskMemoEnvironment,
   options: AdapterOptions = {},
 ): SyncAdapter {
+  let connectedVersion: DataVersion | undefined;
+  let versionInvalid = false;
+  const checkTransaction = async (transaction: { get: (ref: ReturnType<typeof doc>) => Promise<{ data(): Record<string, unknown> | undefined }> }) => {
+    const gateRaw = (await transaction.get(doc(db, 'users', uid, 'syncMetadataV2', 'compatibility'))).data();
+    let gate;
+    try { gate = validateCompatibilityGate(gateRaw); } catch (error) { versionInvalid = true; throw error; }
+    const global = (await transaction.get(doc(db, 'syncControl', 'current'))).data();
+    if (versionInvalid || gate.minimumSyncProtocol !== (connectedVersion ?? 2) || global?.schemaVersion !== 1 || global?.writesEnabled !== true) {
+      versionInvalid = true;
+      throw { code: 'permission-denied', message: 'データVer/同期状態が変わりました。再接続してください。' };
+    }
+    connectedVersion ??= 2; // Existing direct V2 repair callers still validate the live transaction gate.
+  };
+  const metadata = () => connectedVersion === 3 ? { dataVersion: 3 } : {};
+  const checkRecordVersion = (value: Record<string, unknown> | undefined) => {
+    if (versionInvalid) throw new Error('データVerが変更されたため受信を停止しました。');
+    try { if (value && dataVersion(value.dataVersion) > (connectedVersion ?? 2)) throw new Error('受信データVerが一致しません。'); }
+    catch (error) { versionInvalid = true; throw error; }
+  };
   const projectId = db.app.options.projectId;
   const developmentAllowed = environment === "development" && projectId === FIREBASE_PROJECT_IDS.development;
   const productionAllowed = environment === "production" && projectId === FIREBASE_PROJECT_IDS.production;
@@ -119,6 +139,8 @@ export function createFirebaseSyncAdapter(
   let renewalFailed = false;
 
   return {
+    get dataVersion() { return connectedVersion; },
+    get dataVersionValid() { return !versionInvalid; },
     async assertExclusiveRepair() {
       const lock = await getDocFromServer(repairLockRef());
       if (!heldRepairOwner || renewalFailed || !lock.exists() ||
@@ -129,12 +151,13 @@ export function createFirebaseSyncAdapter(
       return withOriginLock("exclusive", async () => {
       if (!owner.startsWith("sync-self-repair-")) throw new Error("自己修復lockの所有者が不正です。");
       await runTransaction(db, async transaction => {
+        await checkTransaction(transaction);
         const current = await transaction.get(repairLockRef());
         if (current.exists() && leaseActive(current.data())) {
           recordRepairLock("blocked", owner);
           throw { code: "aborted", message: "別の自己修復が進行中です。" };
         }
-        transaction.set(repairLockRef(), { owner, expiresAt: Timestamp.fromMillis(Date.now() + 90_000), acquiredAt: serverTimestamp() });
+        transaction.set(repairLockRef(), { ...metadata(), owner, expiresAt: Timestamp.fromMillis(Date.now() + 90_000), acquiredAt: serverTimestamp() });
       });
       heldRepairOwner = owner;
       recordRepairLock("acquired", owner);
@@ -142,6 +165,7 @@ export function createFirebaseSyncAdapter(
       let renewal = Promise.resolve();
       const timer = setInterval(() => {
         renewal = renewal.then(() => runTransaction(db, async transaction => {
+          await checkTransaction(transaction);
           const current = await transaction.get(repairLockRef());
           if (!current.exists() || current.data().owner !== owner || !leaseActive(current.data()))
             throw new Error("自己修復lockが失われました。");
@@ -154,6 +178,7 @@ export function createFirebaseSyncAdapter(
         await renewal;
         heldRepairOwner = null;
         await runTransaction(db, async transaction => {
+          await checkTransaction(transaction);
           const current = await transaction.get(repairLockRef());
           if (current.exists() && current.data().owner === owner) transaction.delete(repairLockRef());
         });
@@ -175,6 +200,7 @@ export function createFirebaseSyncAdapter(
           ? doc(db, "users", uid, "nodesV2", targetNodeId)
           : doc(db, "users", uid, "profileV2", targetNodeId);
         return await runTransaction(db, async (transaction) => {
+          await checkTransaction(transaction);
           recordSyncActivity("repairTransactionAttempt", { operationId: opId, deviceId });
           const lock = await transaction.get(repairLockRef());
           if (!request.diagnosticOnly && (!lock.exists() || lock.data().owner !== deviceId || !leaseActive(lock.data()) || renewalFailed))
@@ -182,6 +208,7 @@ export function createFirebaseSyncAdapter(
           const receipt = await transaction.get(receiptRef);
           if (receipt.exists()) {
             const data = receipt.data();
+            checkRecordVersion(data);
             const operation = data.operation as SyncOperation | undefined;
             const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
             if (data.ownerUid !== uid || data.schemaVersion !== 2 || operation?.opId !== opId ||
@@ -197,6 +224,7 @@ export function createFirebaseSyncAdapter(
           }
           const snapshot = await transaction.get(targetRef);
           const data = snapshot.exists() ? snapshot.data() : null;
+          if (data) checkRecordVersion(data);
           if (data && (data.ownerUid !== uid || data.schemaVersion !== 2 ||
               (request.targetType === "node" && data.record?.value?.id !== targetNodeId)))
             throw { code: "invalid-argument", message: "Firebaseの対象Nodeが不正です。" };
@@ -245,10 +273,10 @@ export function createFirebaseSyncAdapter(
               : applyFeaturesOperation(current as VersionedFeatures | undefined, operation);
           if (acknowledgement.result !== "applied")
             throw { code: "invalid-argument", message: "自己修復operationがFirebase上で適用されませんでした。" };
-          transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2,
+          transaction.set(targetRef, { ...metadata(), ownerUid: uid, schemaVersion: 2,
             record: acknowledgement.record ?? acknowledgement.pinnedNoteRecord ?? acknowledgement.featuresRecord,
             serverUpdatedAt: serverTimestamp() });
-          transaction.set(receiptRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement,
+          transaction.set(receiptRef, { ...metadata(), ownerUid: uid, schemaVersion: 2, operation, acknowledgement,
             serverReceivedAt: serverTimestamp() });
           return { operation, acknowledgement };
         });
@@ -263,6 +291,7 @@ export function createFirebaseSyncAdapter(
       ]);
       if (nodes.metadata.fromCache || pinnedNote.metadata.fromCache || features.metadata.fromCache)
         throw { code: "preflight-cache", kind: "temporary" };
+      for (const snapshot of [...nodes.docs, pinnedNote, features]) if (snapshot.exists()) checkRecordVersion(snapshot.data());
       for (const snapshot of [pinnedNote, features]) {
         if (snapshot.exists() && (snapshot.data().ownerUid !== uid || snapshot.data().schemaVersion !== 2 ||
             !snapshot.data().record || !Number.isSafeInteger(snapshot.data().record.revision)))
@@ -371,6 +400,7 @@ export function createFirebaseSyncAdapter(
           if (!documents) throw { kind: "temporary", message: "Firebase receipt read did not complete." };
           for (const [slot, operation] of batch.entries()) {
             const data = documents.get(operation.opId);
+            checkRecordVersion(data);
             if (!data) { missing++; continue; }
             const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
             if (!sameOperation(data.operation, operation) || acknowledgement?.opId !== operation.opId ||
@@ -423,6 +453,7 @@ export function createFirebaseSyncAdapter(
               : await serverRead;
             if (!snapshot.exists()) { event("not-found"); return false; }
             const data = snapshot.data();
+            checkRecordVersion(data);
             const acknowledgement = data.acknowledgement as SyncAcknowledgement | undefined;
             if (!sameOperation(data.operation, operation) || acknowledgement?.opId !== operation.opId ||
                 (acknowledgement.result !== "applied" && acknowledgement.result !== "superseded"))
@@ -465,8 +496,12 @@ export function createFirebaseSyncAdapter(
           await options.ensureAccountReady();
           gate = await getDocFromServer(doc(db, "users", uid, "syncMetadataV2", "compatibility"));
         }
-        try { validateCompatibilityGate(gate.exists() ? gate.data() : undefined); }
-        catch (error) { throw { code: "permission-denied", message: String(error) }; }
+        try {
+          const next = dataVersion(validateCompatibilityGate(gate.exists() ? gate.data() : undefined).minimumSyncProtocol);
+          if (versionInvalid || (connectedVersion !== undefined && next !== connectedVersion)) { versionInvalid = true; throw new Error('接続後のデータVer変更を検知しました。再起動してください。'); }
+          connectedVersion = next;
+        }
+        catch (error) { versionInvalid = true; throw { code: "permission-denied", message: String(error) }; }
       } catch (reason) {
         throw adapterError(reason);
       }
@@ -493,6 +528,7 @@ export function createFirebaseSyncAdapter(
             : doc(db, "users", uid, "nodesV2", operation.targetNodeId);
         let outcome: RecoveryTransactionEvent = { phase: "success", receipt: null, nodeWrite: false, serverWinnerNoWrite: false };
         const acknowledgement = await runTransaction(db, async (transaction) => {
+          await checkTransaction(transaction);
           emit({ phase: "start", receipt: null, nodeWrite: false, serverWinnerNoWrite: false });
           const lock = await transaction.get(repairLockRef());
           if (lock.exists() && leaseActive(lock.data())) {
@@ -502,6 +538,7 @@ export function createFirebaseSyncAdapter(
           const existing = await transaction.get(operationRef);
           if (existing.exists()) {
             const data = existing.data();
+            checkRecordVersion(data);
             if (!sameOperation(data.operation, operation)) {
               throw { code: "invalid-argument", recoveryReason: "receipt-payload-mismatch", message: "opId collision with different payload" };
             }
@@ -511,6 +548,7 @@ export function createFirebaseSyncAdapter(
             return data.acknowledgement as SyncAcknowledgement;
           }
           const targetSnapshot = await transaction.get(targetRef);
+          if (targetSnapshot.exists()) checkRecordVersion(targetSnapshot.data());
           if (operation.ownership && !sameOperation(targetSnapshot.exists() ? targetSnapshot.data().record : null, operation.ownership.expectedCurrent))
             throw { kind: 'permanent', code: 'failed-precondition', message: '取り込み確認後にアカウントが変更されました。再確認してください。' };
           if (expectedCurrent !== undefined &&
@@ -524,8 +562,8 @@ export function createFirebaseSyncAdapter(
               : applyRevisionOperation(targetSnapshot.exists() ? targetSnapshot.data().record as VersionedNode : undefined, operation);
           if (expected && !sameOperation(acknowledgement, expected))
             throw { code: "invalid-argument", recoveryReason: "predicted-winner-mismatch", message: "recovery winner differs from preflight" };
-          if (acknowledgement.result === "applied") transaction.set(targetRef, { ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : features ? acknowledgement.featuresRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
-          transaction.set(operationRef, { ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
+          if (acknowledgement.result === "applied") transaction.set(targetRef, { ...metadata(), ownerUid: uid, schemaVersion: 2, record: pinnedNote ? acknowledgement.pinnedNoteRecord : features ? acknowledgement.featuresRecord : acknowledgement.record, serverUpdatedAt: serverTimestamp() });
+          transaction.set(operationRef, { ...metadata(), ownerUid: uid, schemaVersion: 2, operation, acknowledgement, serverReceivedAt: serverTimestamp() });
           outcome = { phase: "success", receipt: "created", nodeWrite: acknowledgement.result === "applied",
             serverWinnerNoWrite: acknowledgement.result === "superseded" };
           return acknowledgement;
@@ -543,10 +581,12 @@ export function createFirebaseSyncAdapter(
 
     async readPinnedNote() {
       const snapshot = await getDocFromServer(doc(db, "users", uid, "profileV2", "pinnedNote"));
+      checkRecordVersion(snapshot.data());
       return snapshot.exists() ? snapshot.data().record : undefined;
     },
     async readFeatures() {
       const snapshot = await getDocFromServer(doc(db, "users", uid, "profileV2", "features"));
+      checkRecordVersion(snapshot.data());
       return snapshot.exists() ? snapshot.data().record as VersionedFeatures : undefined;
     },
 
@@ -554,6 +594,13 @@ export function createFirebaseSyncAdapter(
       let active = true;
       let failed = false;
       let queue = Promise.resolve();
+      const stopGate = onSnapshot(doc(db, 'users', uid, 'syncMetadataV2', 'compatibility'), snapshot => {
+        if (!active) return;
+        try {
+          const version = validateCompatibilityGate(snapshot.data()).minimumSyncProtocol;
+          if (version !== connectedVersion) throw new Error('データVerが変更されました。原本を保持して再起動してください。');
+        } catch (error) { versionInvalid = true; failed = true; onError(error); }
+      }, error => { if (active) { versionInvalid = true; failed = true; onError(error); } });
       const unsubscribe = onSnapshot(collection(db, "users", uid, "nodesV2"), { includeMetadataChanges: true }, (snapshot) => {
         queue = queue.then(async () => {
           if (!active || failed) return;
@@ -561,16 +608,18 @@ export function createFirebaseSyncAdapter(
             if (!active) return;
             if (change.type === "removed") continue;
             const record = change.doc.data().record as VersionedNode | undefined;
+            checkRecordVersion(change.doc.data());
             recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
             if (record) await onRecord(record);
           }
           if (active) onSnapshotApplied?.(snapshot.metadata.fromCache ? 'cache' : 'server');
         }).catch(reason => { failed = true; if (active) onError(reason); });
       }, onError);
-      return () => { active = false; unsubscribe(); };
+      return () => { active = false; unsubscribe(); stopGate(); };
     },
     subscribePinnedNote(onRecord, onError) {
       return onSnapshot(doc(db, "users", uid, "profileV2", "pinnedNote"), { includeMetadataChanges: true }, (snapshot) => {
+        try { checkRecordVersion(snapshot.data()); } catch (error) { onError(error); return; }
         const record = snapshot.data()?.record;
         recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
         if (record) void Promise.resolve(onRecord(record)).catch(onError);
@@ -578,6 +627,7 @@ export function createFirebaseSyncAdapter(
     },
     subscribeFeatures(onRecord, onError) {
       return onSnapshot(doc(db, "users", uid, "profileV2", "features"), { includeMetadataChanges: true }, (snapshot) => {
+        try { checkRecordVersion(snapshot.data()); } catch (error) { onError(error); return; }
         const record = snapshot.data()?.record as VersionedFeatures | undefined;
         recordSyncActivity("listenerReceived", { operationId: record?.lastOpId, deviceId: record?.lastDeviceId });
         if (record) void Promise.resolve(onRecord(record)).catch(onError);

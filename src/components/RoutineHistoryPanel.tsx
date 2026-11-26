@@ -1,17 +1,21 @@
 import { memo as memoComponent, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { MemoNode } from '../models/node';
+import type { MemoNode, RoutineOutcome } from '../models/node';
 import { localDateKey, parseLocalDateKey, routineHistoryDays, type RoutineHistoryDay } from '../domain/routine';
 import { useAppTheme } from '../theme/theme';
+import { RoutineResultActions } from './RoutineResultActions';
 import { routineResultAppearance, RoutineResultIcon } from './RoutineResultMark';
 
 /** Mount with key=memo.id so a different Routine starts in compact mode. */
-export function RoutineHistoryPanel({ memo, onToggle }: {
+export function RoutineHistoryPanel({ memo, onToggle, onResult }: {
   memo: MemoNode;
   onToggle: (id: string, date: Date) => void;
+  /** Omitted by product entry until the reviewed server capability is supplied. */
+  onResult?: (id: string, date: Date, state: RoutineOutcome['state']) => void;
 }) {
   const { colors } = useAppTheme();
   const [limit, setLimit] = useState(7);
+  const [selected, setSelected] = useState<RoutineHistoryDay | null>(null);
   const today = localDateKey();
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const offset = new Date().getTimezoneOffset();
@@ -27,7 +31,10 @@ export function RoutineHistoryPanel({ memo, onToggle }: {
   const toggle = useCallback((id: string, date: Date) => callback.current(id, date), []);
   return <View>
     {!days.length && <Text style={{ color: colors.textSecondary }}>保存済みの実績はありません</Text>}
-    <HistoryRows days={days} id={memo.id} onToggle={toggle} />
+    <HistoryRows days={days} id={memo.id} onToggle={toggle} onSelect={onResult ? setSelected : undefined} />
+    {selected && onResult && <RoutineResultActions dateKey={selected.key}
+      state={allDays.find(day => day.key === selected.key)?.outcome ?? 'pending'}
+      onSelect={state => { onResult(memo.id, selected.date, state); setSelected(null); }} />}
     {limit < allDays.length && <Pressable accessibilityRole="button"
       accessibilityLabel={limit === 7 ? 'すべての履歴を表示' : 'さらに履歴を表示'}
       onPress={() => setLimit(current => Math.min(allDays.length, current === 7 ? 50 : current + 50))}
@@ -42,24 +49,23 @@ export function RoutineHistoryPanel({ memo, onToggle }: {
   </View>;
 }
 
-type RowsProps = { days: RoutineHistoryDay[]; id: string; onToggle: (id: string, date: Date) => void };
-const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle }: RowsProps) {
+type RowsProps = { days: RoutineHistoryDay[]; id: string; onToggle: (id: string, date: Date) => void; onSelect?: (day: RoutineHistoryDay) => void };
+const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle, onSelect }: RowsProps) {
   const { colors, resolved } = useAppTheme();
-  return <>{days.map(day => {
-    const result = routineResultAppearance(day.outcome, resolved, colors);
-    return <View key={day.key} style={styles.row}>
+  return <>{days.map(day => { const result = routineResultAppearance(day.outcome, resolved, colors); return <View key={day.key} style={styles.row}>
       <View style={styles.summary}>
         <RoutineResultIcon state={day.outcome} color={result.color} />
         <Text style={[styles.label, { color: colors.text }]}>{day.key} <Text testID={`routine-result-label-${day.outcome}`} style={{ color: result.color }}>{result.label}</Text></Text>
       </View>
-      {day.outcome !== 'skipped' && <Pressable accessibilityRole="button"
+      {day.outcome !== 'skipped' && day.outcome !== 'missed' && <Pressable accessibilityRole="button"
         accessibilityLabel={`${day.key}の${day.completed ? '完了を取り消す' : '完了'}`}
         onPress={() => onToggle(id, day.date)} style={styles.button}>
         <Text style={{ color: colors.accent }}>{day.completed ? '完了を取り消す' : '完了'}</Text>
       </Pressable>}
-    </View>;
-  })}</>;
-}, (before, after) => before.id === after.id && before.onToggle === after.onToggle &&
+      {onSelect && <Pressable accessibilityRole="button" accessibilityLabel={`${day.key}の結果を選択`}
+        onPress={() => onSelect(day)} style={styles.button}><Text style={{ color: colors.accent }}>結果を選択</Text></Pressable>}
+    </View>; })}</>;
+}, (before, after) => before.id === after.id && before.onToggle === after.onToggle && before.onSelect === after.onSelect &&
   (before.days === after.days || (before.days.length === after.days.length && before.days.every((day, index) => {
     const next = after.days[index];
     return day.key === next.key && day.outcome === next.outcome && day.completed === next.completed && day.date.getTime() === next.date.getTime();
