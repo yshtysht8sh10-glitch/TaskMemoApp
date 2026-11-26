@@ -17,6 +17,7 @@ Map.setやファイル出力とDB書込みを区別して追跡した。以下�
 | 経路 | 保存対象・現行拒否境界 | protocol3で必要な保護 |
 |---|---|---|
 | PWA/Native通常同期 `src/sync/firebaseSyncAdapter.ts` upload | nodesV2/profileV2/syncOperationsV2。同一transactionでNodeとreceipt。connect時にcompatibility検査、Rulesはprotocol2 | 各transaction/retry開始で最新server control/epoch/registryを読む。既存receipt分岐も同じ能力確認を先行。全変更対象を同一transactionで拒否 |
+| 残存V1 hook/旧artifact `src/hooks/useFirebaseSync.ts` pushNodes | writeBatchでusers/{uid}/nodesへ全Node保存。現在のuseTaskMemoSync入口はV2を選択し、このhookは不使用 | 固定旧V1 batchもprotocolWritable(uid,1)/v1WritesAllowed=falseで拒否。protocol3開放でV1許可を復活させない。旧端末のlocal原本を保持 |
 | 完了/取消/Undo/Redo/import/Queue/ownership | `taskMemoApplicationStore.ts`等で生成→上記upload | UIだけのgateでは不可。未知rawを失わず保存/再送停止。既存opへcapabilityを後付けして自動再送しない |
 | 自己修復 convergeRecoveryTarget | adapterの別transactionがNode/receiptを直接保存 | 通常uploadと同じ拒否契約。repair lock保有は能力の代替にならない。desired/observed原本・全結果を検証 |
 | repair lock create/renew/release | adapterの別transaction。**現RulesのrepairLock節にはprotocolWritable判定がない** | lease取得/更新もprotocol3/epoch/registry確認。旧lease解放の扱いは下記B0-2。期限切れを待つ経路を常に残す |
@@ -90,6 +91,10 @@ EmulatorはIAM/配備revisionの実在を証明しない。実環境IAM変更は
 | B10 |未知routine結果/未知raw・旧backup/local復旧経路 | 原本hash維持、保護停止。未知をpendingへ変換しない |
 | B11 |registry自己作成、偽build文字列、scope取り違え | server管理値をclientから変更不可。偽buildの意味保証は限界として検出/評価し、真正性証明と呼ばない |
 | B12 | 未棚卸しwriter/principal、旧revision残存 | feature閉鎖を維持、E完了/配信承認を出さない |
+
+B01a/B05aは固定旧V1 hookのwriteBatch→nodesを対象とし、B01b/B05bは旧V2 upload→
+nodesV2/profileV2/receiptを対象とする。前者の拒否は後者の能力試験の代わりにしない。
+どちらもprotocol3切替で許可が復活せず、別field編集/再送で原本を退役しないことを確認する。
 
 R08/R11/R12/R13/R14/R15/R18へ対応。他のR試験の代わりにはしない。
 ローカルpure/Emulator/実SDK/実機/IAM運用を分け、未実施・skipをPASSに数えない。
