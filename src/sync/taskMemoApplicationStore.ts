@@ -15,6 +15,7 @@ import type { SyncNodeValue, SyncOperation, SyncOperationType, VersionedFeatures
 import { decodeLegacyNodes } from './legacyLocalCodec';
 import { integrateOwnershipSortKeys } from './ownershipSortKeys';
 import { nextRoutineOutcome } from '../domain/routine';
+import { assertRoutineOutcomesReadable, containsMissedResult } from '../domain/routineOutcomeMerge';
 import { replayRoutineLifecycle } from '../domain/routineLifecycleRegister';
 import { stampQueueValue } from '../domain/queueRegisters';
 import { assertTaskQueueTransition } from '../domain/taskQueue';
@@ -68,11 +69,22 @@ type Envelope = {
     features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean };
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean;
+  /** Test harness only. Never grants server capability; the sync controller refuses this store. */
+  isolatedRoutineResults?: boolean };
 
 const encodeNodes = (nodes: Node[]) => nodes.map(nodeToV2Value);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const PINNED_NOTE_HISTORY_COALESCE_MS = 1_000;
+
+/** Inspect all retained result evidence, including History and unreceived operations. */
+function validateResultEvidence(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'routineOutcomes') assertRoutineOutcomesReadable(child);
+    else validateResultEvidence(child);
+  }
+}
 
 export class TaskMemoV2ApplicationStore {
   private ownershipPlans = new Map<string, OwnershipPlan>();
@@ -86,11 +98,16 @@ export class TaskMemoV2ApplicationStore {
     this.mutations = next.catch(() => undefined);
     return next;
   }
-  private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date) {}
+  private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date,
+    readonly isolatedRoutineResults = false) {}
 
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
     recordSyncActivity("hydrate");
     const journal = await persistence.loadJournal();
+    // Validate before recovery can write/clear the WAL. Unknown raw stays in place.
+    const committedRaw = await persistence.loadCommitted();
+    for (const raw of [journal, committedRaw]) if (raw) validateResultEvidence(JSON.parse(raw));
+    for (const node of initialNodes) assertRoutineOutcomesReadable((node as MemoNode).routineOutcomes);
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
     const hydrateStarted = new Date();
@@ -142,7 +159,7 @@ export class TaskMemoV2ApplicationStore {
         envelope.sync.outbox.push(operation);
       }
     }
-    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()));
+    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()), options.isolatedRoutineResults === true);
     // Remote/committed snapshots are not user edits. Auto-rewriting their sortKeys
     // produced normal Outbox operations and a listener/upload feedback loop.
     store.envelope = envelope;
@@ -151,6 +168,10 @@ export class TaskMemoV2ApplicationStore {
   }
 
   get nodes() { return Object.values(this.envelope.domain).map((record) => nodeFromV2Value(record.value)); }
+  get restrictedRoutineResults() {
+    return this.isolatedRoutineResults || Object.values(this.envelope.domain).some(record => containsMissedResult(record.value)) ||
+      this.envelope.sync.outbox.some(op => containsMissedResult(op.payload.node));
+  }
   get outbox() { return [...this.envelope.sync.outbox]; }
   get pendingCount() { return this.envelope.sync.outbox.length + (this.envelope.profile.pinnedNote.dirtySince ? 1 : 0); }
   get historyDepths() { return { past: this.envelope.history.past.length, future: this.envelope.history.future.length }; }
@@ -843,6 +864,12 @@ export class TaskMemoV2ApplicationStore {
     atomic = atomic || next.ownership?.kind === 'local' || Boolean(next.ownershipTransaction || next.ownershipRecoverySeed);
     const previousIds = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
     const generated = next.sync.outbox.filter(operation => !previousIds.has(operation.opId));
+    validateResultEvidence(next);
+    const resultWrite = generated.some(op => containsMissedResult(op.payload.node) ||
+      containsMissedResult(this.envelope.domain[op.targetNodeId]?.value));
+    if (resultWrite && !this.isolatedRoutineResults) throw new Error('未達の製品書込みは閉鎖中です。');
+    // Missed transactions use the existing raw CAS path, not a new persistence protocol.
+    if (this.isolatedRoutineResults && generated.length) atomic = true;
     const value = JSON.stringify(next);
     if (atomic) {
       if (!this.persistence.writeAtomic) throw new Error('原子的なテキスト保存に対応したstorageが必要です。');

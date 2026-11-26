@@ -20,11 +20,27 @@ const classify = (reason: unknown): { kind: SyncFailureKind; message: string } =
   }
   return { kind: "temporary", message: reason instanceof Error ? reason.message : String(reason) };
 };
+const ROUTINE_RESULTS_PROTECTION = '未達の実通信は未承認です。未送信操作を保持して停止します。';
 
 /** Common V2 Application bridge. Durable local state precedes network I/O. */
 export class TaskMemoV2SyncController {
   snapshotSource: 'checking' | 'cache' | 'server' = 'checking';
-  state: SyncState;
+  private currentState: SyncState = initialSyncState();
+  private routineResultsProtected = false;
+  private get routineResultsBlocked() {
+    if (this.options.localOnly) return false;
+    this.routineResultsProtected ||= this.store.restrictedRoutineResults;
+    return this.routineResultsProtected;
+  }
+  // Protection dominates every asynchronous state update, including profile
+  // listeners already queued before unsubscribe. This controller has no unlock.
+  get state(): SyncState {
+    if (this.routineResultsBlocked) {
+      return { phase: 'error', pendingCount: this.store.pendingCount, lastError: ROUTINE_RESULTS_PROTECTION };
+    }
+    return this.currentState;
+  }
+  set state(value: SyncState) { this.currentState = value; }
   ownershipAssessment: 'checking' | 'ready' | 'unavailable';
   private unsubscribe?: () => void;
   private running = false;
@@ -44,6 +60,7 @@ export class TaskMemoV2SyncController {
   }
 
   async start() {
+    this.assertRoutineResultsNetworkClosed();
     recordSyncActivity(this.options.localOnly ? "localOnlyStart" : "normalStart", { deviceId: this.store.deviceId });
     this.stop();
     if (this.options.localOnly) {
@@ -75,28 +92,31 @@ export class TaskMemoV2SyncController {
         async (record) => {
           if (generation !== this.generation) return;
           await this.store.receive(record);
+          if (generation !== this.generation) return;
           this.refresh();
           await this.flush();
           this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
         (source) => { if (generation !== this.generation) return; this.snapshotSource = source; this.onChange(); },
       );
       const unsubscribePinnedNote = this.adapter.subscribePinnedNote?.(
         async (record) => {
           if (generation !== this.generation) return;
           await this.store.receivePinnedNote(record);
+          if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
       const unsubscribeFeatures = this.adapter.subscribeFeatures?.(
         async (record) => {
           if (generation !== this.generation) return;
           await this.store.receiveFeatures(record);
+          if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
       const unsubscribeNodes = this.unsubscribe;
       this.unsubscribe = () => { unsubscribeNodes?.(); unsubscribePinnedNote?.(); unsubscribeFeatures?.(); };
@@ -149,6 +169,15 @@ export class TaskMemoV2SyncController {
   async resume() {
     this.paused = false;
     await this.start();
+  }
+
+  private assertRoutineResultsNetworkClosed() {
+    if (!this.routineResultsBlocked) return;
+    this.stop();
+    const message = ROUTINE_RESULTS_PROTECTION;
+    this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, kind: 'permanent', message });
+    this.onChange();
+    throw Object.assign(new Error(message), { kind: 'permanent' as const });
   }
 
   stop() { this.snapshotSource = 'checking'; recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
@@ -274,6 +303,7 @@ export class TaskMemoV2SyncController {
   }
 
   async flush() {
+    this.assertRoutineResultsNetworkClosed();
     if (this.options.localOnly) return;
     recordSyncActivity("normalFlush", { deviceId: this.store.deviceId });
     if (this.paused) {
@@ -302,17 +332,22 @@ export class TaskMemoV2SyncController {
   private async drain(generation: number) {
     try {
       while (!this.stopped && generation === this.generation && this.store.outbox.length) {
+        this.assertRoutineResultsNetworkClosed();
         if (this.store.pendingOwnership?.state === 'conflict') return;
         const operation = this.store.outbox[0];
         this.state = transitionSyncState(this.state, { type: "upload-started", pendingCount: this.store.pendingCount, retry: operation.attemptCount > 0 });
         try {
           if (this.stopped || generation !== this.generation) return;
           const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
-            () => !this.stopped && generation === this.generation);
+            () => !this.stopped && generation === this.generation && !this.routineResultsBlocked);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
+          this.assertRoutineResultsNetworkClosed();
           this.refresh();
         } catch (reason) {
+          // A restriction learned while awaiting upload/ACK is a permanent local
+          // stop, not an offline retry or an ownership conflict.
+          this.assertRoutineResultsNetworkClosed();
           if (operation.ownership) await this.store.markOwnershipConflict();
           const problem = classify(reason);
           this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });
