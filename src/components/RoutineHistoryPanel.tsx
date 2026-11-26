@@ -3,7 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MemoNode, RoutineOutcome } from '../models/node';
 import { localDateKey, parseLocalDateKey, routineHistoryDays, type RoutineHistoryDay } from '../domain/routine';
 import { useAppTheme } from '../theme/theme';
-import { routineResultLabel, RoutineResultActions } from './RoutineResultActions';
+import { RoutineResultActions } from './RoutineResultActions';
+import { routineResultAppearance, RoutineResultIcon } from './RoutineResultMark';
 
 /** Mount with key=memo.id so a different Routine starts in compact mode. */
 export function RoutineHistoryPanel({ memo, onToggle, onResult }: {
@@ -50,9 +51,12 @@ export function RoutineHistoryPanel({ memo, onToggle, onResult }: {
 
 type RowsProps = { days: RoutineHistoryDay[]; id: string; onToggle: (id: string, date: Date) => void; onSelect?: (day: RoutineHistoryDay) => void };
 const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle, onSelect }: RowsProps) {
-  const { colors } = useAppTheme();
-  return <>{days.map(day => <View key={day.key} style={styles.row}>
-      <Text style={[styles.label, { color: colors.text }]}>{day.key} {day.outcome === 'pending' ? '-' : routineResultLabel(day.outcome)}</Text>
+  const { colors, resolved } = useAppTheme();
+  return <>{days.map(day => { const result = routineResultAppearance(day.outcome, resolved, colors); return <View key={day.key} style={styles.row}>
+      <View style={styles.summary}>
+        <RoutineResultIcon state={day.outcome} color={result.color} />
+        <Text style={[styles.label, { color: colors.text }]}>{day.key} <Text testID={`routine-result-label-${day.outcome}`} style={{ color: result.color }}>{result.label}</Text></Text>
+      </View>
       {day.outcome !== 'skipped' && day.outcome !== 'missed' && <Pressable accessibilityRole="button"
         accessibilityLabel={`${day.key}の${day.completed ? '完了を取り消す' : '完了'}`}
         onPress={() => onToggle(id, day.date)} style={styles.button}>
@@ -60,7 +64,7 @@ const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle, onS
       </Pressable>}
       {onSelect && <Pressable accessibilityRole="button" accessibilityLabel={`${day.key}の結果を選択`}
         onPress={() => onSelect(day)} style={styles.button}><Text style={{ color: colors.accent }}>結果を選択</Text></Pressable>}
-    </View>)}</>;
+    </View>; })}</>;
 }, (before, after) => before.id === after.id && before.onToggle === after.onToggle && before.onSelect === after.onSelect &&
   (before.days === after.days || (before.days.length === after.days.length && before.days.every((day, index) => {
     const next = after.days[index];
@@ -69,6 +73,7 @@ const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle, onS
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  summary: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   label: { flexShrink: 1, fontSize: 14 },
   button: { minHeight: 44, paddingVertical: 10, paddingHorizontal: 8, justifyContent: 'center' },
 });

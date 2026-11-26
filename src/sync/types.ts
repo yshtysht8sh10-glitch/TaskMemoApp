@@ -102,6 +102,8 @@ export type RecoveryConvergenceResult = {
 };
 
 export interface SyncAdapter {
+  readonly dataVersion?: 2 | 3;
+  readonly dataVersionValid?: boolean;
   connect(): Promise<void>;
   /** Server-backed exclusive lease. The callback must not start repair writes without it. */
   withExclusiveRepair?<T>(owner: string, task: () => Promise<T>): Promise<T>;
