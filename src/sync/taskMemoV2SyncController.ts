@@ -171,7 +171,7 @@ export class TaskMemoV2SyncController {
     const message = '未達の実通信は未承認です。未送信操作を保持して停止します。';
     this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, kind: 'permanent', message });
     this.onChange();
-    throw new Error(message);
+    throw Object.assign(new Error(message), { kind: 'permanent' as const });
   }
 
   stop() { this.snapshotSource = 'checking'; recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
@@ -332,18 +332,23 @@ export class TaskMemoV2SyncController {
     try {
       while (!this.stopped && generation === this.generation && this.store.outbox.length) {
         if (this.protectStorage()) return;
+        this.assertRoutineResultsNetworkClosed();
         if (this.store.pendingOwnership?.state === 'conflict') return;
         const operation = this.store.outbox[0];
         this.state = transitionSyncState(this.state, { type: "upload-started", pendingCount: this.store.pendingCount, retry: operation.attemptCount > 0 });
         try {
           if (this.stopped || generation !== this.generation) return;
           const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
-            () => !this.stopped && generation === this.generation && !this.store.protectionError);
+            () => !this.stopped && generation === this.generation && !this.store.restrictedRoutineResults && !this.store.protectionError);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
+          this.assertRoutineResultsNetworkClosed();
           this.refresh();
         } catch (reason) {
           if (this.protectStorage()) return;
+          // A restriction learned while awaiting upload/ACK is a permanent local
+          // stop, not an offline retry or an ownership conflict.
+          this.assertRoutineResultsNetworkClosed();
           if (operation.ownership) await this.store.markOwnershipConflict();
           const problem = classify(reason);
           this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem });

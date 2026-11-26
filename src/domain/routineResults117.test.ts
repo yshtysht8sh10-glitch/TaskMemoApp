@@ -7,7 +7,7 @@ import { parseNodeBackup, serializeNodeBackup } from '../services/nodeBackup';
 import { nodeToV2Value } from '../sync/nodeV2Codec';
 import { TaskMemoV2ApplicationStore } from '../sync/taskMemoApplicationStore';
 import { TaskMemoV2SyncController } from '../sync/taskMemoV2SyncController';
-import type { SyncAdapter } from '../sync/types';
+import type { SyncAdapter, SyncNodeValue } from '../sync/types';
 import { InMemoryRevisionServer } from '../sync/revisionModel';
 import { IndexedDbTaskMemoApplicationJournal } from '../sync/indexedDbApplicationStorage';
 import { IDBFactory } from 'fake-indexeddb';
@@ -145,4 +145,83 @@ it('R08/R18: isolated store cannot connect or flush any SDK adapter, including a
     expect(s.outbox).toHaveLength(1);
   }
   expect(connect).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled();
+});
+
+it.each([1, 2])('R145: an ACK introducing missed stops the running drain with %i original operations', async count => {
+  const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-ack-fence', new IDBFactory());
+  const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now });
+  for (let i = 0; i < count; i++) await store.command('title', 'update', nodes => nodes.map(n => n.id === 'a' ? { ...n, title: String(i) } : n));
+  const originals = JSON.parse(JSON.stringify(store.outbox));
+  const upload = vi.fn<SyncAdapter['upload']>(async op => ({ opId: op.opId, record: {
+    value: { ...op.payload.node as SyncNodeValue, routineOutcomes: { [key]: { state: 'missed', changedAt: now.toISOString(), version: 100 } } },
+    revision: 100, lastOpId: 'remote:100', lastDeviceId: 'remote', lastLocalSeq: 100, operationType: 'update',
+  } }));
+  const unsubscribe = vi.fn();
+  const controller = new TaskMemoV2SyncController(store, { connect: async () => {}, upload, subscribe: () => unsubscribe });
+  await controller.start();
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(store.outbox).toEqual(originals.slice(1));
+  expect(controller.state).toMatchObject({ phase: 'error', pendingCount: count - 1 });
+  expect(unsubscribe).toHaveBeenCalledOnce();
+  expect(memo(store.nodes).routineOutcomes?.[key].state).toBe('missed');
+  const restarted = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'ignored' });
+  expect(restarted.outbox).toEqual(originals.slice(1));
+  expect(restarted.historyDepths.past).toBe(count);
+});
+
+it('R145: mayStart rechecks a new restriction while an upload waits in the adapter queue', async () => {
+  const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-queued-fence', new IDBFactory());
+  const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now });
+  await store.command('title', 'update', nodes => nodes.map(n => n.id === 'a' ? { ...n, title: 'draft' } : n));
+  const original = JSON.parse(JSON.stringify(store.outbox));
+  let resolveStarted!: () => void, release!: () => void;
+  const started = new Promise<void>(r => { resolveStarted = r; }), wait = new Promise<void>(r => { release = r; });
+  let allowed: boolean | undefined;
+  const controller = new TaskMemoV2SyncController(store, { connect: async () => {}, upload: async (_op, _expected, _current, mayStart) => {
+    resolveStarted(); await wait; allowed = mayStart?.();
+    throw { kind: 'offline', message: 'queued operation not started' };
+  } });
+  const running = controller.start(); await started;
+  const record = store.versionedNode('a')!;
+  await store.receive({ ...record, revision: 100, lastOpId: 'remote:100', lastDeviceId: 'remote',
+    value: { ...record.value, routineOutcomes: { [key]: { state: 'missed', changedAt: now.toISOString(), version: 100 } } } });
+  release(); await running;
+  expect(allowed).toBe(false); expect(store.outbox).toEqual(original);
+  expect(controller.state.phase).toBe('error');
+});
+
+it('R145: listener reception during an in-flight upload preserves the remaining original operation', async () => {
+  const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-listener-fence', new IDBFactory());
+  const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now });
+  for (const title of ['one', 'two']) await store.command('title', 'update', nodes => nodes.map(n => n.id === 'a' ? { ...n, title } : n));
+  const original = JSON.parse(JSON.stringify(store.outbox));
+  let listener!: Parameters<NonNullable<SyncAdapter['subscribe']>>[0];
+  let release!: () => void, started!: () => void;
+  const waiting = new Promise<void>(r => { release = r; }), began = new Promise<void>(r => { started = r; });
+  const upload = vi.fn<SyncAdapter['upload']>(async op => {
+    started(); await waiting;
+    return { opId: op.opId, record: { ...store.versionedNode('a')!, value: op.payload.node as SyncNodeValue, revision: 1,
+      lastOpId: op.opId, lastDeviceId: op.deviceId, lastLocalSeq: op.localSeq } };
+  });
+  const controller = new TaskMemoV2SyncController(store, { connect: async () => {}, upload, subscribe: receive => { listener = receive; return () => {}; } });
+  const running = controller.start(); await began;
+  const current = store.versionedNode('a')!;
+  await expect(Promise.resolve(listener({ ...current, revision: 100, lastOpId: 'remote:100', lastDeviceId: 'remote',
+    value: { ...current.value, routineOutcomes: { [key]: { state: 'missed', changedAt: now.toISOString(), version: 100 } } } }))).rejects.toThrow(/未承認/);
+  release(); await running;
+  expect(upload).toHaveBeenCalledTimes(1); expect(store.outbox).toEqual(original.slice(1));
+  expect(memo(store.nodes).routineOutcomes?.[key].state).toBe('missed');
+  expect(controller.state).toMatchObject({ phase: 'error', pendingCount: 1 });
+});
+
+it('R145: localOnly retains isolated results and operations without connecting, and resume never opens the network', async () => {
+  const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-local-only', new IDBFactory());
+  const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now, isolatedRoutineResults: true });
+  await store.command('未達', 'update', n => set(n, 'missed'));
+  const original = await p.loadCommitted(), connect = vi.fn(), upload = vi.fn();
+  const controller = new TaskMemoV2SyncController(store, { connect, upload }, undefined, { localOnly: true });
+  await controller.start(); await controller.flush(); await controller.resume();
+  expect(controller.state.phase).toBe('offline');
+  expect(connect).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled();
+  expect(await p.loadCommitted()).toBe(original); expect(store.outbox).toHaveLength(1);
 });

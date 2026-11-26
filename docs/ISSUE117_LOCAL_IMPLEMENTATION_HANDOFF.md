@@ -105,3 +105,26 @@ R01〜R18のいずれも、設計の全条件を満たした最終受入PASSと�
 unknown時の全体停止は厳しいため、利用者向けの保護表示と完全backupは後続実装・レビューが必要。
 旧reader/writerへのrollbackは禁止。原本保持、対応版へのforward fixを基本とする。
 リリース①はPR144単独で独立レビュー後に先行できる。
+
+## M145-1 修正・再レビュー
+
+独立レビュー対象6224b19はCHANGES_REQUESTED（Major 1）となった。
+最初のACKでmissedのあるwinnerを受信するとrestrictedになっても、既に動いているdrainは
+次の操作を送ってしまう。start/flush入口の検査だけでは不十分だった。
+
+修正前にACK後の残数1/0、開始待ち中のmayStartを試験し、3 FAILを確認した。
+同じファイルの17件は名前filter対象外であり、成功や受入skipとして加算しない。
+各drain反復の送信前、ACK反映直後、upload例外処理で制限を再確認し、
+adapterへ渡すmayStartも現在のrestricted状態を見るよう修正した。
+保護停止をpermanent failureとして維持し、offline再試行やownership競合へ読み替えない。
+
+開始済みuploadの正当なACKは照合・永続化し、まだ受領されていない別操作は変更せず残す。
+最後のACKでOutboxが0になっても、missedのある状態をsyncedへ変えずerror/停止とする。
+既に開始した実サーバーtransactionを撤回できるという保証ではなく、新しいuploadの禁止である。
+server側のfenceは引き続き未実装で、これを代替したとは扱わない。
+
+回帰試験5件: ACKでmissed（元操作1件/2件）、adapter開始待ち中の受信、listener受信中の
+開始済みACK、localOnlyとresume。原Outbox payload/History/再起動後の保持、追加uploadなし、
+error状態、購読停止を確認する。関連Store/Controllerは41 PASS。
+レビュー担当の外部8件も開発側の別artifactで再実行してPASSした。
+これは開発側の反例再実行であり、独立再承認ではない。新SHAの独立再レビューを必須とする。
