@@ -154,6 +154,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     if (controller) {
       const currentStatus = activeLocalRef.current ? configured ? 'signed-out' : 'disabled' : repairRunningRef.current ? 'self-repairing' : localRecoveryModeRef.current ? 'local-recovery' : ownershipStatus ?? controller.state.phase;
       startupEditableRef.current = startupPresentation({ preferencesReady: true, authReady: authResolvedRef.current,
+        versionBlocked: controller.versionBlocked,
         applicationState: store ? 'ready' : 'opening', account: !activeLocalRef.current, snapshotSource: controller.snapshotSource,
         status: currentStatus, elapsed: true, cacheEditing: cacheEditingRef.current }).editable;
       setStatus(currentStatus); setError(controller.state.lastError);
@@ -350,7 +351,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           throw new Error("旧journalとIndexedDBの状態が一致しません。復旧を停止しました。");
         if (await persistence.loadJournal()) await adapter.connect();
         if (currentGeneration !== generation) return;
-        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { dataVersion: version, deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` }, firebase.environment === "production");
+        const store = await recoverV2ApplicationAfterAudit(persistence, adapter, { dataVersion: version, writePermission: () => currentGeneration === generation && adapter.dataVersionValid !== false && adapter.dataVersion === version, deviceId: `taskmemo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` }, firebase.environment === "production");
         if (currentGeneration !== generation) return;
         const local = localApplicationRef.current;
         const targetScope = activeScopeRef.current;
@@ -397,6 +398,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
     return () => clearTimeout(timer);
   }, [applicationState, authReady, user]);
   const startup = startupPresentation({ preferencesReady: ready, authReady, applicationState,
+    versionBlocked: controllerRef.current?.versionBlocked,
     account: !!user, snapshotSource, status, elapsed: startupElapsed, cacheEditing });
   const run = (action: (controller: TaskMemoV2SyncController) => Promise<unknown>) => {
     if (!startupEditableRef.current) { setError('読み込み・クラウド確認中は編集できません。'); return true; }

@@ -2,10 +2,12 @@ export type StartupInput = {
   preferencesReady: boolean; authReady: boolean; applicationState: 'opening' | 'ready' | 'error';
   account: boolean; snapshotSource: 'checking' | 'cache' | 'server'; status: string;
   elapsed: boolean; cacheEditing: boolean;
+  versionBlocked?: boolean;
 };
 export function startupPresentation(input: StartupInput) {
   const result = (message: string, showData = false, editable = false, canUseCache = false) => ({ message, showData, editable, canUseCache });
   if (!input.preferencesReady) return result('表示設定を読み込んでいます…');
+  if (input.versionBlocked) return result('データVerが一致しません。原本を保持して読込み・編集を停止しています。');
   if (input.applicationState === 'error') return result('保存データを開けません。原本を保持して停止しています。');
   if (!input.authReady) return result('ログイン状態を確認しています…');
   if (input.applicationState !== 'ready') return result('端末の保存データを復元しています…');

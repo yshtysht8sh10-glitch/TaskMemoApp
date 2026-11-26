@@ -69,7 +69,7 @@ type Envelope = {
     features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean; dataVersion?: DataVersion;
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean; dataVersion?: DataVersion; writePermission?: () => boolean;
   /** Test harness only. Never grants server capability; the sync controller refuses this store. */
   isolatedRoutineResults?: boolean };
 
@@ -106,7 +106,7 @@ export class TaskMemoV2ApplicationStore {
     return next;
   }
   private constructor(private readonly persistence: ApplicationJournalPersistence, private envelope: Envelope, private readonly now: () => Date,
-    private committedRaw: string | null, readonly isolatedRoutineResults = false) {}
+    private committedRaw: string | null, readonly isolatedRoutineResults = false, private readonly writePermission: () => boolean = () => true) {}
 
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
     recordSyncActivity("hydrate");
@@ -172,7 +172,7 @@ export class TaskMemoV2ApplicationStore {
         envelope.sync.outbox.push(operation);
       }
     }
-    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()), committed, options.isolatedRoutineResults === true);
+    const store = new TaskMemoV2ApplicationStore(persistence, envelope, options.now ?? (() => new Date()), committed, options.isolatedRoutineResults === true, options.writePermission);
     // Remote/committed snapshots are not user edits. Auto-rewriting their sortKeys
     // produced normal Outbox operations and a listener/upload feedback loop.
     store.envelope = envelope;
@@ -906,6 +906,7 @@ export class TaskMemoV2ApplicationStore {
   }
 
   private async commit(next: Envelope, atomic = false) {
+    if (!this.writePermission()) throw new Error('データVer/認証が変更されました。保存せず原本を保持しました。');
     if (this.storageFailure) throw this.storageFailure;
     atomic = atomic || Boolean(this.persistence.writeAtomic) || next.ownership?.kind === 'local' || Boolean(next.ownershipTransaction || next.ownershipRecoverySeed);
     const previousIds = new Set(this.envelope.sync.outbox.map(operation => operation.opId));
@@ -920,6 +921,7 @@ export class TaskMemoV2ApplicationStore {
     try {
       if (atomic) {
         if (!this.persistence.writeAtomic) throw new Error('原子的なテキスト保存に対応したstorageが必要です。');
+        if (!this.writePermission()) throw new Error('データVer/認証が変更されました。保存を停止しました。');
         await this.persistence.writeAtomic(this.committedRaw, value);
       } else {
         // Compatibility for the non-transactional foundation/test adapter only.
