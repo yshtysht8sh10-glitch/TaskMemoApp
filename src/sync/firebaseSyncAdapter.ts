@@ -100,7 +100,9 @@ export function createFirebaseSyncAdapter(
   let connectedVersion: DataVersion | undefined;
   let versionInvalid = false;
   const checkTransaction = async (transaction: { get: (ref: ReturnType<typeof doc>) => Promise<{ data(): Record<string, unknown> | undefined }> }) => {
-    const gate = validateCompatibilityGate((await transaction.get(doc(db, 'users', uid, 'syncMetadataV2', 'compatibility'))).data());
+    const gateRaw = (await transaction.get(doc(db, 'users', uid, 'syncMetadataV2', 'compatibility'))).data();
+    let gate;
+    try { gate = validateCompatibilityGate(gateRaw); } catch (error) { versionInvalid = true; throw error; }
     const global = (await transaction.get(doc(db, 'syncControl', 'current'))).data();
     if (versionInvalid || gate.minimumSyncProtocol !== (connectedVersion ?? 2) || global?.schemaVersion !== 1 || global?.writesEnabled !== true) {
       versionInvalid = true;
@@ -111,7 +113,8 @@ export function createFirebaseSyncAdapter(
   const metadata = () => connectedVersion === 3 ? { dataVersion: 3 } : {};
   const checkRecordVersion = (value: Record<string, unknown> | undefined) => {
     if (versionInvalid) throw new Error('データVerが変更されたため受信を停止しました。');
-    if (value && dataVersion(value.dataVersion) > (connectedVersion ?? 2)) throw new Error('受信データVerが一致しません。');
+    try { if (value && dataVersion(value.dataVersion) > (connectedVersion ?? 2)) throw new Error('受信データVerが一致しません。'); }
+    catch (error) { versionInvalid = true; throw error; }
   };
   const projectId = db.app.options.projectId;
   const developmentAllowed = environment === "development" && projectId === FIREBASE_PROJECT_IDS.development;
@@ -498,7 +501,7 @@ export function createFirebaseSyncAdapter(
           if (versionInvalid || (connectedVersion !== undefined && next !== connectedVersion)) { versionInvalid = true; throw new Error('接続後のデータVer変更を検知しました。再起動してください。'); }
           connectedVersion = next;
         }
-        catch (error) { throw { code: "permission-denied", message: String(error) }; }
+        catch (error) { versionInvalid = true; throw { code: "permission-denied", message: String(error) }; }
       } catch (reason) {
         throw adapterError(reason);
       }

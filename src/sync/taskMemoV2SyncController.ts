@@ -28,7 +28,7 @@ export class TaskMemoV2SyncController {
   private currentState: SyncState = initialSyncState();
   private routineResultsProtected = false;
   private versionMismatch = false;
-  get versionBlocked() { return this.versionMismatch || this.adapter.dataVersionValid === false; }
+  get versionBlocked() { this.versionMismatch ||= this.adapter.dataVersionValid === false; return this.versionMismatch; }
   private get routineResultsBlocked() {
     if (this.options.localOnly) return false;
     this.routineResultsProtected ||= this.store.restrictedRoutineResults;
@@ -95,6 +95,7 @@ export class TaskMemoV2SyncController {
       this.unsubscribe = this.adapter.subscribe?.(
         async (record) => {
           if (generation !== this.generation) return;
+          this.assertVersion();
           await this.store.receive(record);
           if (generation !== this.generation) return;
           this.refresh();
@@ -107,6 +108,7 @@ export class TaskMemoV2SyncController {
       const unsubscribePinnedNote = this.adapter.subscribePinnedNote?.(
         async (record) => {
           if (generation !== this.generation) return;
+          this.assertVersion();
           await this.store.receivePinnedNote(record);
           if (generation !== this.generation) return;
           this.refresh(); this.onChange();
@@ -116,6 +118,7 @@ export class TaskMemoV2SyncController {
       const unsubscribeFeatures = this.adapter.subscribeFeatures?.(
         async (record) => {
           if (generation !== this.generation) return;
+          this.assertVersion();
           await this.store.receiveFeatures(record);
           if (generation !== this.generation) return;
           this.refresh(); this.onChange();
@@ -176,6 +179,7 @@ export class TaskMemoV2SyncController {
   }
 
   private assertRoutineResultsNetworkClosed() {
+    this.assertVersion();
     if (!this.routineResultsBlocked) return;
     this.stop();
     const message = ROUTINE_RESULTS_PROTECTION;
@@ -183,10 +187,14 @@ export class TaskMemoV2SyncController {
     this.onChange();
     throw Object.assign(new Error(message), { kind: 'permanent' as const });
   }
+  private assertVersion() {
+    if (this.versionBlocked) throw new Error('データVerを確認できません。原本を保持して読込み・書込みを停止しました。');
+  }
 
   stop() { this.snapshotSource = 'checking'; recordSyncActivity("stop", { deviceId: this.store.deviceId }); this.stopped = true; this.generation++; this.receiptsAudited = false; this.unsubscribe?.(); this.unsubscribe = undefined; if (this.pinnedNoteTimer) clearTimeout(this.pinnedNoteTimer); this.pinnedNoteTimer = undefined; this.state = { phase: "offline", pendingCount: this.store.pendingCount, lastError: null }; }
 
   async updatePinnedNote(body: string, debounceMs = 500) {
+    this.assertVersion();
     await this.store.setPinnedNoteDraft(body);
     this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -198,6 +206,7 @@ export class TaskMemoV2SyncController {
   }
 
   async adoptLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    this.assertVersion();
     await this.store.setPinnedNoteDraft(candidate.body);
     await this.store.discardLegacyPinnedNoteCandidate(candidate);
     await this.store.queuePinnedNoteOperation();
@@ -208,16 +217,19 @@ export class TaskMemoV2SyncController {
   }
 
   async discardLegacyPinnedNoteCandidate(candidate: LegacyPinnedNoteCandidate) {
+    this.assertVersion();
     await this.store.discardLegacyPinnedNoteCandidate(candidate);
     this.onChange();
   }
 
   async importLegacyPinnedNoteCandidates(candidates: LegacyPinnedNoteCandidate[]) {
+    this.assertVersion();
     await this.store.importLegacyPinnedNoteCandidates(candidates);
     this.onChange();
   }
 
   async updateIdeasEnabled(value: boolean, type: SyncOperationType = "update") {
+    this.assertVersion();
     const operation = await this.store.setIdeasEnabled(value, type);
     if (operation) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -227,6 +239,7 @@ export class TaskMemoV2SyncController {
   }
 
   async command(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
+    this.assertVersion();
     const operations = await this.store.command(label, type, transform, options);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -237,6 +250,7 @@ export class TaskMemoV2SyncController {
 
   /** Lazy system setup. Never infer an empty account from an empty local cache. */
   async ensureRoutineRoot() {
+    this.assertVersion();
     const generation = this.generation;
     if (!this.options.localOnly && this.ownershipAssessment !== 'ready')
       throw new Error('アカウントの初期取り込み確認が完了するまでお待ちください。');
@@ -265,6 +279,7 @@ export class TaskMemoV2SyncController {
   prepareTextEdit(session: TextSession, text: string) { return this.store.prepareTextEdit(session, text); }
   discardTextEdit(session: TextSession) { this.store.discardTextEdit(session); }
   async saveTextEdit(plan: TextPlan, confirmation?: { fingerprint: string; deletedIds: string[] }) {
+    this.assertVersion();
     const operations = await this.store.commitTextEdit(plan, confirmation);
     if (operations.length) this.state = transitionSyncState(this.state, { type: 'local-operation', pendingCount: this.store.pendingCount });
     this.onChange();
@@ -277,6 +292,7 @@ export class TaskMemoV2SyncController {
 
   /** Confirm the durable local write; cloud upload continues independently. */
   async commandLocal(label: string, type: SyncOperationType, transform: (nodes: Node[]) => Node[], options: { recordHistory?: boolean } = {}) {
+    this.assertVersion();
     const operations = await this.store.command(label, type, transform, options);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -289,6 +305,7 @@ export class TaskMemoV2SyncController {
   }
 
   async undo(now?: Date) {
+    this.assertVersion();
     const operations = await this.store.undo(now);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -298,6 +315,7 @@ export class TaskMemoV2SyncController {
   }
 
   async redo(now?: Date) {
+    this.assertVersion();
     const operations = await this.store.redo(now);
     if (operations.length) this.state = transitionSyncState(this.state, { type: "local-operation", pendingCount: this.store.pendingCount });
     this.onChange();
@@ -343,7 +361,7 @@ export class TaskMemoV2SyncController {
         try {
           if (this.stopped || generation !== this.generation) return;
           const acknowledgement = await this.adapter.upload(operation, undefined, undefined,
-            () => !this.stopped && generation === this.generation && !this.routineResultsBlocked);
+            () => !this.stopped && generation === this.generation && !this.routineResultsBlocked && !this.versionBlocked);
           if (acknowledgement.opId !== operation.opId) throw { kind: "permanent", message: "acknowledgement opId mismatch" };
           await this.store.acknowledge(operation.opId, acknowledgement.record, acknowledgement.pinnedNoteRecord, acknowledgement.featuresRecord);
           this.assertRoutineResultsNetworkClosed();
