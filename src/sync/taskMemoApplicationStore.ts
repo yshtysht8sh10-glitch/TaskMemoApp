@@ -1,4 +1,5 @@
 import { findRoutineRoot, newRoutineRoot, isRoutineRoot, assertRoutineRootTransition } from '../domain/routineRoot';
+import { dataVersion, type DataVersion } from './dataVersion';
 import type { NodeHistory } from "../domain/nodeHistory";
 import { recordSyncActivity } from "./selfRepairDiagnostics";
 import { recordSortKeyPass } from "./sortKeyDiagnostics";
@@ -51,6 +52,7 @@ type StoredHistoryEntry = {
 };
 export type LegacyPinnedNoteCandidate = { body: string; updatedAt: string };
 type Envelope = {
+  dataVersion?: DataVersion;
   ownershipLedgers?: Record<string, OwnershipLedger>;
   ownershipTransaction?: { plan: OwnershipPlan; choices: Record<string, 'local' | 'account'>; opIds: string[]; appliedIds: string[]; history: StoredHistoryEntry; state: 'uploading' | 'conflict' };
   ownershipRecoverySeed?: NonNullable<Envelope['ownershipTransaction']>;
@@ -67,7 +69,7 @@ type Envelope = {
     features: { localIdeasEnabled: boolean; synced: VersionedFeatures | null; migrationPending: boolean };
   };
 };
-type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean;
+type Options = { deviceId: string; now?: () => Date; bootstrapInitialNodes?: boolean; preserveSortKeys?: boolean; initialPinnedNote?: { body: string; updatedAt: Date }; initialIdeasEnabled?: boolean; dataVersion?: DataVersion;
   /** Test harness only. Never grants server capability; the sync controller refuses this store. */
   isolatedRoutineResults?: boolean };
 
@@ -112,7 +114,12 @@ export class TaskMemoV2ApplicationStore {
     if (journal && persistence.writeAtomic) throw new Error('未確定journalがあります。整合性確認が完了するまで保存・同期を停止します。');
     // Validate before recovery can write/clear the WAL. Unknown raw stays in place.
     const committedRaw = await persistence.loadCommitted();
-    for (const raw of [journal, committedRaw]) if (raw) validateResultEvidence(JSON.parse(raw));
+    for (const raw of [journal, committedRaw]) if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.version !== 2) throw new Error('未知の保存形式です。原本を保持して停止しました。');
+      if (dataVersion(parsed.dataVersion) !== (options.dataVersion ?? 2)) throw new Error('保存データVerが一致しません。原本を保持しました。');
+      validateResultEvidence(parsed);
+    }
     for (const node of initialNodes) assertRoutineOutcomesReadable((node as MemoNode).routineOutcomes);
     if (journal) { await persistence.writeCommitted(journal); await persistence.clearJournal(); }
     const committed = journal ?? await persistence.loadCommitted();
@@ -121,7 +128,7 @@ export class TaskMemoV2ApplicationStore {
     recordSortKeyPass("hydrate", initialNodes, normalizedInitialNodes, 0, hydrateStarted, Date.now() - hydrateStarted.getTime());
     const loadedEnvelope = committed ? JSON.parse(committed) as Envelope : null;
     let envelope: Envelope = loadedEnvelope ?? {
-      version: 2, deviceId: options.deviceId, nextLocalSeq: 1,
+      version: 2, dataVersion: options.dataVersion ?? 2, deviceId: options.deviceId, nextLocalSeq: 1,
       domain: Object.fromEntries(normalizedInitialNodes.map((node) => [node.id, { value: nodeToV2Value(node), revision: 0, lastOpId: "initial", lastDeviceId: "initial", lastLocalSeq: 0, operationType: "import" }])),
       history: { past: [], future: [] }, sync: { outbox: [], seenOpIds: [] },
       profile: {
@@ -175,9 +182,11 @@ export class TaskMemoV2ApplicationStore {
 
   get nodes() { return Object.values(this.envelope.domain).map((record) => nodeFromV2Value(record.value)); }
   get restrictedRoutineResults() {
-    return this.isolatedRoutineResults || Object.values(this.envelope.domain).some(record => containsMissedResult(record.value)) ||
-      this.envelope.sync.outbox.some(op => containsMissedResult(op.payload.node));
+    return this.isolatedRoutineResults || (!this.routineResultsEnabled && (Object.values(this.envelope.domain).some(record => containsMissedResult(record.value)) ||
+      this.envelope.sync.outbox.some(op => containsMissedResult(op.payload.node))));
   }
+  get routineResultsEnabled() { return this.envelope.dataVersion === 3; }
+  get dataVersion() { return dataVersion(this.envelope.dataVersion); }
   get outbox() { return [...this.envelope.sync.outbox]; }
   get pendingCount() { return this.envelope.sync.outbox.length + (this.envelope.profile.pinnedNote.dirtySince ? 1 : 0); }
   get historyDepths() { return { past: this.envelope.history.past.length, future: this.envelope.history.future.length }; }
@@ -904,9 +913,9 @@ export class TaskMemoV2ApplicationStore {
     validateResultEvidence(next);
     const resultWrite = generated.some(op => containsMissedResult(op.payload.node) ||
       containsMissedResult(this.envelope.domain[op.targetNodeId]?.value));
-    if (resultWrite && !this.isolatedRoutineResults) throw new Error('未達の製品書込みは閉鎖中です。');
+    if (resultWrite && !this.isolatedRoutineResults && !this.routineResultsEnabled) throw new Error('未達の製品書込みは閉鎖中です。');
     // Missed transactions use the existing raw CAS path, not a new persistence protocol.
-    if (this.isolatedRoutineResults && generated.length) atomic = true;
+    if ((this.isolatedRoutineResults || this.routineResultsEnabled) && generated.length) atomic = true;
     const value = JSON.stringify(next);
     try {
       if (atomic) {

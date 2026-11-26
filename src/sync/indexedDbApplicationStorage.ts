@@ -1,4 +1,5 @@
 import type { ApplicationJournalPersistence } from "./applicationStore";
+import { assertVersion3Baseline, prepareVersion3Copy, versionedScope } from './dataVersion';
 import { TaskMemoV2ApplicationJournal } from "./applicationStorage";
 import { planRecoverySortKeyRepair } from "./recoverySortKeyRepair";
 import { applyRevisionOperation } from "./revisionModel";
@@ -84,6 +85,36 @@ function validateEnvelope(raw: string | null) {
 /** Web-only adapter. The legacy source is never written, deleted, or silently re-imported. */
 export class IndexedDbTaskMemoApplicationJournal implements ApplicationJournalPersistence {
   private constructor(private readonly database: IDBDatabase, private readonly scope: string) {}
+
+  /** A separate scope protects Ver3 from cached old PWA writers. Source stays intact. */
+  static async openVersion3(baseScope: string, baseline: Parameters<typeof assertVersion3Baseline>[1], factory = globalThis.indexedDB) {
+    if (!factory) throw new Error('IndexedDBがありません。');
+    const database = await openDatabase(factory, true), scope = versionedScope(baseScope, 3);
+    const legacy = new TaskMemoV2ApplicationJournal(baseScope);
+    const legacyCommitted = await legacy.loadCommitted(), legacyJournal = await legacy.loadJournal();
+    const emptyFingerprint = await fingerprint(null, null), sourceFingerprint = await fingerprint(legacyCommitted, legacyJournal);
+    const tx = database.transaction(STORE_NAME, 'readwrite'), done = transactionDone(tx), store = tx.objectStore(STORE_NAME);
+    try {
+      const destination = await requestResult(store.get(scope)) as StoredScope | undefined;
+      if (!destination) {
+        const source = await requestResult(store.get(baseScope)) as StoredScope | undefined;
+        if (source?.localRecoveryMode || source?.authoritativeRecoveryPlan || source?.journal != null || legacyJournal !== null) throw new Error('復旧/保存待ちの原本があります。切替を停止しました。');
+        if (source && source.legacyFingerprint !== sourceFingerprint) throw new Error('旧保存元が変更されています。');
+        const raw = source?.committed ?? legacyCommitted;
+        if (!raw) throw new Error('切替元の保存済みデータがありません。空初期化せず停止しました。');
+        assertVersion3Baseline(raw, baseline);
+        const copied = raw ? prepareVersion3Copy(raw, source?.journal ?? legacyJournal) : null;
+        store.add({ ...source, scope, legacyFingerprint: emptyFingerprint, committed: copied, journal: null });
+      }
+      await done;
+      return new IndexedDbTaskMemoApplicationJournal(database, scope);
+    } catch (error) { try { tx.abort(); } catch { /* transaction already ended */ } await done.catch(() => {}); database.close(); throw error; }
+  }
+  async assertNoVersion3Sibling() {
+    const tx = this.database.transaction(STORE_NAME, 'readonly');
+    const found = await requestResult(tx.objectStore(STORE_NAME).get(versionedScope(this.scope, 3)));
+    if (found) throw new Error('Ver3切替済みです。Ver2へ戻さず対応版を使用してください。');
+  }
 
   static async open(scope: string, factory?: IDBFactory, options: { allowLegacyCopy?: boolean } = {}) {
     const selectedFactory = factory ?? globalThis.indexedDB;

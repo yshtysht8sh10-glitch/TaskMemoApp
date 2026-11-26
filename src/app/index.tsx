@@ -1,5 +1,7 @@
 import { FormTextInput } from '../components/FormTextInput';
 import { routineResultLabel } from '../components/RoutineResultActions';
+import { setRoutineResult } from '../domain/routine';
+import type { RoutineOutcome } from '../models/node';
 import { RoutineHistoryPanel } from '../components/RoutineHistoryPanel';
 import { CompletedRoutines, RoutineCompletionButton } from '../components/RoutineCompletion';
 import { completeRoutineDefinition, resumeRoutineDefinition, isRoutineDefinitionCompleted } from '../domain/routineLifecycle';
@@ -1281,6 +1283,7 @@ export default function HomeScreen() {
             toggleRoutineCompletion(current, memoId, date, new Date()),
           )
         }
+        onRoutineResult={sync.routineResultsEnabled ? (memoId, date, state) => apply('Routineの結果を変更', current => setRoutineResult(current, memoId, date, state, new Date())) : undefined}
         onClose={(reason) => changeEditor(null, reason)}
         onSave={async (draft, close = true) => {
           recordEditorDiagnostic('editor-save-begin', { close });
@@ -1555,6 +1558,7 @@ export default function HomeScreen() {
               <Text style={styles.buildInfoText}>Display mode: {typeof window !== 'undefined' && ((window.navigator as Navigator & { standalone?: boolean }).standalone === true || window.matchMedia('(display-mode: standalone)').matches) ? 'standalone' : 'browser'}</Text>
             </>}
             <Text style={styles.buildInfoText}>Sync: V{sync.protocol}</Text>
+            <Text style={styles.buildInfoText}>データVer: {sync.dataVersion ?? '確認中'} / アプリ対応: 2・3</Text>
             <Text style={styles.buildInfoText}>Environment: {appBuildInfo.environment}</Text>
           </View>
           {Platform.OS === "web" && (
@@ -1907,6 +1911,7 @@ function EditorModal({
   visibleGroupIds,
   todayGranularity,
   onToggleRoutineHistory,
+  onRoutineResult,
   onClose,
   onSave,
   onCompleteRoutine,
@@ -1916,6 +1921,7 @@ function EditorModal({
   visibleGroupIds: ReadonlySet<DeadlineGroupKey>;
   todayGranularity: TodayGranularity;
   onToggleRoutineHistory: (memoId: string, date: Date) => void;
+  onRoutineResult?: (memoId: string, date: Date, state: RoutineOutcome['state']) => void;
   onCompleteRoutine: (id: string) => Promise<boolean>;
   onClose: (reason: string) => void;
   onSave: (draft: {
@@ -2209,7 +2215,7 @@ function EditorModal({
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} />
+                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} onResult={onRoutineResult} />
                       </>
                     )}
                   </>
