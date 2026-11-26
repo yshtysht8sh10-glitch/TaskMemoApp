@@ -20,11 +20,23 @@ const classify = (reason: unknown): { kind: SyncFailureKind; message: string } =
   }
   return { kind: "temporary", message: reason instanceof Error ? reason.message : String(reason) };
 };
+const ROUTINE_RESULTS_PROTECTION = '未達の実通信は未承認です。未送信操作を保持して停止します。';
 
 /** Common V2 Application bridge. Durable local state precedes network I/O. */
 export class TaskMemoV2SyncController {
   snapshotSource: 'checking' | 'cache' | 'server' = 'checking';
-  state: SyncState;
+  private currentState: SyncState = initialSyncState();
+  private routineResultsProtected = false;
+  // Protection dominates every asynchronous state update, including profile
+  // listeners already queued before unsubscribe. This controller has no unlock.
+  get state(): SyncState {
+    if (!this.options.localOnly && (this.routineResultsProtected || this.store.restrictedRoutineResults)) {
+      this.routineResultsProtected = true;
+      return { phase: 'error', pendingCount: this.store.pendingCount, lastError: ROUTINE_RESULTS_PROTECTION };
+    }
+    return this.currentState;
+  }
+  set state(value: SyncState) { this.currentState = value; }
   ownershipAssessment: 'checking' | 'ready' | 'unavailable';
   private unsubscribe?: () => void;
   private running = false;
@@ -77,7 +89,7 @@ export class TaskMemoV2SyncController {
         async (record) => {
           await this.receiveRecords([record], generation);
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
         (source) => { if (generation !== this.generation || source === this.snapshotSource) return; this.snapshotSource = source; this.onChange(); },
         (records) => this.receiveRecords(records, generation),
       );
@@ -88,7 +100,7 @@ export class TaskMemoV2SyncController {
           if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
       const unsubscribeFeatures = this.adapter.subscribeFeatures?.(
         async (record) => {
@@ -97,7 +109,7 @@ export class TaskMemoV2SyncController {
           if (generation !== this.generation) return;
           this.refresh(); this.onChange();
         },
-        (reason) => { const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
+        (reason) => { if (generation !== this.generation) return; const problem = classify(reason); this.state = transitionSyncState(this.state, { type: "failure", pendingCount: this.store.pendingCount, ...problem }); this.onChange(); },
       );
       const unsubscribeNodes = this.unsubscribe;
       this.unsubscribe = () => { unsubscribeNodes?.(); unsubscribePinnedNote?.(); unsubscribeFeatures?.(); };
@@ -166,9 +178,10 @@ export class TaskMemoV2SyncController {
   }
 
   private assertRoutineResultsNetworkClosed() {
-    if (!this.store.restrictedRoutineResults || this.options.localOnly) return;
+    if (this.options.localOnly || !(this.routineResultsProtected || this.store.restrictedRoutineResults)) return;
+    this.routineResultsProtected = true;
     this.stop();
-    const message = '未達の実通信は未承認です。未送信操作を保持して停止します。';
+    const message = ROUTINE_RESULTS_PROTECTION;
     this.state = transitionSyncState(this.state, { type: 'failure', pendingCount: this.store.pendingCount, kind: 'permanent', message });
     this.onChange();
     throw Object.assign(new Error(message), { kind: 'permanent' as const });

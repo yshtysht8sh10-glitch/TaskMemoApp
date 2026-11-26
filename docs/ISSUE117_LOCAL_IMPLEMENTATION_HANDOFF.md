@@ -128,3 +128,20 @@ server側のfenceは引き続き未実装で、これを代替したとは扱わ
 error状態、購読停止を確認する。関連Store/Controllerは41 PASS。
 レビュー担当の外部8件も開発側の別artifactで再実行してPASSした。
 これは開発側の反例再実行であり、独立再承認ではない。新SHAの独立再レビューを必須とする。
+
+## M145-2 並行profile通知と保護表示
+
+fcfd1f3の独立再レビューではM145-1は解消したが、停止前から処理待ちだった常設メモ/設定の
+callbackがawait後にrefreshしてerrorをsyncedへ上書きする反例が2件見つかった。
+書込みの再開ではなく保護状態の誤表示であり、同じMajorとして再レビューが必要になった。
+
+常設メモ/設定それぞれの再現2 FAILを先に確認してから修正。
+Node/常設メモ/設定のcallbackはawait後とerror通知時にgenerationを再照合する。
+加えて保護表示を通常のstate更新より優先する投影へ集約し、当該controller内で一度成立した
+保護は遅着ack/connected/profile/transport error/ownership pauseで解除しない。
+このcontrollerには保護解除APIを追加しない。正当に保存されたprofile/rawを巻き戻さない。
+
+追加8ケースは常設メモ/設定×Node先/逆順×単発/重複。profile保存成功、元結果とOutbox保持、
+error理由、stale error、pause/resume、後着の有効pending結果でも当該controllerが自動再開しない
+ことを検証する。localOnlyとM145-1の送信停止/開始済みACK照合も回帰する。
+これはclient controller内の保護表示契約で、server fenceや完全復旧の実装承認ではない。
