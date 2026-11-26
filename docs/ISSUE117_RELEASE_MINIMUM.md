@@ -58,3 +58,21 @@ DEVはPR147/0b408a1基点（Queue保持）。本番抽出時はProduction候補9
 既知制約: account起動時にgateを先に取得するため、通信不能の再起動ではローカル先行編集へ進めない。
 起動性能最適化は今回行わない。通常起動後のオフライン編集は保存し、再送時は最新gateを確認する。
 新端末で切替元rawがない場合も空初期化せず停止し、Owner判断で別途安全な導入手順を用意する。
+
+## PR #152 M152-1: Production physical storage scope
+
+The account scope remains `<project>/<uid>`. The Journal startup helper now receives
+`versionedScope(scope, version)`, matching the physical IndexedDB scope selected by
+`openVersion3`. Ver2 is unchanged. No scope check, Journal validation, raw CAS,
+storage-failure latch, receiveBatch, or persisted envelope format is relaxed.
+
+Regression: `productionVersionScope.test.ts` first ran 4 PASS / 1 FAIL against the
+old hook; the hook wiring assertion failed as expected. After the one-call fix,
+all 5 PASS and the related combined run has 90 PASS. The independent reviewer
+also retains the original first-copy/restart 2 FAIL / 2 PASS evidence and reports
+6 PASS after the fix, including pending Outbox preservation without upload.
+Local reports: `artifacts/117-m152-before.json`, `117-m152-after.json`, and
+`artifacts/pr152-independent-takeover/results-after.json` (outside this worktree).
+Full suite, type/lint and the fixed-SHA build results are recorded in PR #152.
+These tests are synthetic; iPhone PWA cutover/acceptance is still unverified.
+Production Hosting, Rules, data version and user data have not been changed.

@@ -1,3 +1,4 @@
+import { versionedScope } from '../sync/dataVersion';
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
@@ -281,7 +282,7 @@ function useFirebaseV2Sync(history: NodeHistory, ready: boolean, onHistory: (his
           return;
         }
         if (persistence instanceof IndexedDbTaskMemoApplicationJournal) {
-          await repairRedundantJournalAtStartup(persistence, adapter, scope, () => currentGeneration === generation);
+          await repairRedundantJournalAtStartup(persistence, adapter, versionedScope(scope, version), () => currentGeneration === generation);
           if (currentGeneration !== generation) return;
         }
         if (guardedRecovery && await persistence.loadJournal()) {
