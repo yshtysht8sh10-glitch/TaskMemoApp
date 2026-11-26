@@ -109,3 +109,101 @@ it('preserves a lone V2 application when its journal is absent', async () => {
   expect(JSON.parse(await fixture.share.mock.calls[0][0].files[0].text()).entries).toEqual([{ key, value: raw }]);
   expect(fixture.writes).not.toHaveBeenCalled();
 });
+
+it.each(['{ damaged JSON', JSON.stringify({ version: 999, opaque: { state: 'future' } })])('preserves uninterpretable local raw without normalizing or claiming restoration: %s', async raw => {
+  const key = '@taskmemo/sync-v2/taskmemo-application/v2/project%2FPRIVATE';
+  const fixture = launch({ [key]: raw });
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(false);
+  expect(fixture.status.textContent).toContain('未検証');
+  fixture.handlers.get('share')!();
+  const archive = JSON.parse(await fixture.share.mock.calls[0][0].files[0].text());
+  expect(archive.entries).toEqual([{ key, value: raw }]);
+  expect(archive.capture).toMatchObject({ kind: 'local-raw', consistentCut: false, automaticRestoreAllowed: false, serverReceipts: 'not-collected' });
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
+it('exports IDB-only raw including malformed Journal and preserved recovery fields with no localStorage keys', async () => {
+  const indexedDB = new IDBFactory(), request = indexedDB.open('taskmemo-v2-local-application', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('scopes', { keyPath: 'scope' });
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  const record = { scope: 'synthetic/private', legacyFingerprint: 'fp', committed: '{opaque raw', journal: 'unknown raw',
+    preservedRecoveryJournal: 'EXACT_RECOVERY_RAW', preservedSelfRepairCommitted: 'EXACT_REPAIR_RAW',
+    authoritativeRecoveryPlan: 'EXACT_PLAN', unknownFutureMetadata: { fields: ['keep'] } };
+  const transaction = database.transaction('scopes', 'readwrite'); transaction.objectStore('scopes').put(record);
+  await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
+  database.close();
+  const fixture = launch({}, indexedDB);
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(false); expect(fixture.status.textContent).toContain('未検証');
+  fixture.handlers.get('share')!();
+  const archive = JSON.parse(await fixture.share.mock.calls[0][0].files[0].text());
+  expect(archive.entries).toEqual([]); expect(archive.indexedDb.records).toEqual([record]);
+  expect(archive.capture.automaticRestoreAllowed).toBe(false);
+  for (const secret of ['private', 'EXACT_', 'unknown raw']) expect(fixture.status.textContent).not.toContain(secret);
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
+it('does not prepare an empty backup when neither source has TaskMemo data', async () => {
+  const fixture = launch({}, new IDBFactory());
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(true); expect(fixture.share).not.toHaveBeenCalled();
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['Date', new Date(0)], ['Map', new Map([['secret', 'value']])],
+  ['undefined', undefined], ['nonfinite', Infinity],
+])('refuses lossy JSON encoding of unknown IndexedDB metadata: %s', async (_kind, metadata) => {
+  const indexedDB = new IDBFactory(), request = indexedDB.open('taskmemo-v2-local-application', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('scopes', { keyPath: 'scope' });
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  const transaction = database.transaction('scopes', 'readwrite');
+  transaction.objectStore('scopes').put({ scope: 'synthetic', legacyFingerprint: 'fp', committed: 'opaque', journal: null, futureMetadata: metadata });
+  await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
+  const fixture = launch({}, indexedDB); await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(true);
+  expect(fixture.status.textContent).toMatch(/損失|原本/);
+  expect(fixture.share).not.toHaveBeenCalled(); expect(fixture.writes).not.toHaveBeenCalled();
+  const read = database.transaction('scopes', 'readonly').objectStore('scopes').get('synthetic');
+  const retained = await new Promise<{ futureMetadata: unknown }>((resolve, reject) => {
+    read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error);
+  });
+  expect(retained.futureMetadata).toEqual(metadata); database.close();
+});
+
+it.each([
+  { label: 'out-of-line key', version: 1, keyPath: null, extra: false, auto: false, index: false },
+  { label: 'extra store', version: 1, keyPath: 'scope', extra: true, auto: false, index: false },
+  { label: 'unknown DB version', version: 2, keyPath: 'scope', extra: false, auto: false, index: false },
+  { label: 'auto increment', version: 1, keyPath: 'scope', extra: false, auto: true, index: false },
+  { label: 'unknown index', version: 1, keyPath: 'scope', extra: false, auto: false, index: true },
+])('M146-1 refuses $label without omitting physical keys or stores', async schema => {
+  const indexedDB = new IDBFactory(), request = indexedDB.open('taskmemo-v2-local-application', schema.version);
+  request.onupgradeneeded = () => {
+    const store = request.result.createObjectStore('scopes', { keyPath: schema.keyPath, autoIncrement: schema.auto });
+    if (schema.index) store.createIndex('future-index', 'legacyFingerprint');
+    if (schema.extra) request.result.createObjectStore('future');
+  };
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  const transaction = database.transaction(schema.extra ? ['scopes', 'future'] : 'scopes', 'readwrite');
+  const record = { scope: 'synthetic', legacyFingerprint: 'fp', committed: 'opaque', journal: null };
+  if (schema.keyPath === null) transaction.objectStore('scopes').put(record, 'external-storage-key');
+  else transaction.objectStore('scopes').put(record);
+  if (schema.extra) transaction.objectStore('future').put('uncollected evidence', 'keep');
+  await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
+  const fixture = launch({}, indexedDB); await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(true); expect(fixture.buttons.download.disabled).toBe(true);
+  expect(fixture.status.textContent).toMatch(/構成|原本/); expect(fixture.share).not.toHaveBeenCalled();
+  const read = database.transaction('scopes', 'readonly').objectStore('scopes').getAllKeys();
+  const keys = await new Promise<IDBValidKey[]>((resolve, reject) => { read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
+  expect(keys).toEqual([schema.keyPath === null ? 'external-storage-key' : 'synthetic']);
+  expect(database.version).toBe(schema.version); expect(database.objectStoreNames.contains('future')).toBe(schema.extra);
+  expect(fixture.writes).not.toHaveBeenCalled(); database.close();
+});
