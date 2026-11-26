@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MemoNode } from '../models/node';
 import { localDateKey, parseLocalDateKey, routineHistoryDays, type RoutineHistoryDay } from '../domain/routine';
 import { useAppTheme } from '../theme/theme';
+import { routineResultAppearance, RoutineResultIcon } from './RoutineResultMark';
 
 /** Mount with key=memo.id so a different Routine starts in compact mode. */
 export function RoutineHistoryPanel({ memo, onToggle }: {
@@ -43,15 +44,21 @@ export function RoutineHistoryPanel({ memo, onToggle }: {
 
 type RowsProps = { days: RoutineHistoryDay[]; id: string; onToggle: (id: string, date: Date) => void };
 const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle }: RowsProps) {
-  const { colors } = useAppTheme();
-  return <>{days.map(day => <View key={day.key} style={styles.row}>
-      <Text style={[styles.label, { color: colors.text }]}>{day.key} {day.outcome === 'completed' ? '完了' : day.outcome === 'skipped' ? 'スキップ' : '-'}</Text>
+  const { colors, resolved } = useAppTheme();
+  return <>{days.map(day => {
+    const result = routineResultAppearance(day.outcome, resolved, colors);
+    return <View key={day.key} style={styles.row}>
+      <View style={styles.summary}>
+        <RoutineResultIcon state={day.outcome} color={result.color} />
+        <Text style={[styles.label, { color: colors.text }]}>{day.key} <Text testID={`routine-result-label-${day.outcome}`} style={{ color: result.color }}>{result.label}</Text></Text>
+      </View>
       {day.outcome !== 'skipped' && <Pressable accessibilityRole="button"
         accessibilityLabel={`${day.key}の${day.completed ? '完了を取り消す' : '完了'}`}
         onPress={() => onToggle(id, day.date)} style={styles.button}>
         <Text style={{ color: colors.accent }}>{day.completed ? '完了を取り消す' : '完了'}</Text>
       </Pressable>}
-    </View>)}</>;
+    </View>;
+  })}</>;
 }, (before, after) => before.id === after.id && before.onToggle === after.onToggle &&
   (before.days === after.days || (before.days.length === after.days.length && before.days.every((day, index) => {
     const next = after.days[index];
@@ -60,6 +67,7 @@ const HistoryRows = memoComponent(function HistoryRows({ days, id, onToggle }: R
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  summary: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   label: { flexShrink: 1, fontSize: 14 },
   button: { minHeight: 44, paddingVertical: 10, paddingHorizontal: 8, justifyContent: 'center' },
 });
