@@ -145,3 +145,16 @@ Node/常設メモ/設定のcallbackはawait後とerror通知時にgenerationを�
 error理由、stale error、pause/resume、後着の有効pending結果でも当該controllerが自動再開しない
 ことを検証する。localOnlyとM145-1の送信停止/開始済みACK照合も回帰する。
 これはclient controller内の保護表示契約で、server fenceや完全復旧の実装承認ではない。
+
+## M145-3 送信開始待ちと同一ラッチ
+
+26acd60の再レビューではM145-2は解消したが、UI/入口とmayStartの判定が別だったため、
+待機中にmissed→pendingとなると表示は保護中のままmayStartだけがtrueへ戻る反例が見つかった。
+新しい回帰を先に実行し、pending後着1 FAIL（未取消側1 PASS、名前filter対象外29）を確認した。
+
+保護の観測・ラッチ・判定をroutineResultsBlockedの一つへ統一する。
+state投影、start/flush/drain/ACK/catch、mayStartは同じ単調なcontroller内ラッチを見る。
+mayStart自体が制限を最初に観測した場合もラッチを成立させ、後着pendingでtrueへ戻さない。
+localOnlyは実ネットワークを呼ばないままとし、原操作/History/未受領Outboxを保持する。
+対応版のclient停止であり、既に開始した実transactionの撤回・server fence・保護の完全復旧を
+保証するものではない。新固定SHAの独立再レビューまで承認扱いしない。
