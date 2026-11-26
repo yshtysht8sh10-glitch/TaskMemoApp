@@ -50,13 +50,14 @@ it('normal backup carries a version older apps cannot accept and rejects unknown
   expect(() => parseNodeBackup(JSON.stringify({ ...data, dataVersion: 99 }))).toThrow();
 });
 it.each(['before-command', 'before-CAS'])('revoked version permission %s cannot save or retire pending operations', async stage => {
-  let raw: string | null = null, journal: string | null = null, allowed = true, revokeOnRead = false;
-  const p = { loadCommitted: async () => { if (revokeOnRead) allowed = false; return raw; }, loadJournal: async () => journal,
+  let raw: string | null = null, journal: string | null = null, allowed = true, revokeBeforeCAS = false, permissionChecks = 0;
+  const p = { loadCommitted: async () => raw, loadJournal: async () => journal,
     writeCommitted: async (v: string) => { raw = v; }, writeJournal: async (v: string) => { journal = v; }, clearJournal: async () => { journal = null; },
     writeAtomic: async (expected: string | null, v: string) => { expect(raw).toBe(expected); raw = v; } };
-  const store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'test', dataVersion: 3, writePermission: () => allowed });
+  const store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'test', dataVersion: 3, writePermission: () => allowed && !(revokeBeforeCAS && ++permissionChecks >= 2) });
   const before = raw;
-  if (stage === 'before-command') allowed = false; else revokeOnRead = true;
+  permissionChecks = 0;
+  if (stage === 'before-command') allowed = false; else revokeBeforeCAS = true;
   await expect(store.command('new', 'create', nodes => createNode(nodes, 'memo', { title: 'keep', parentId: null }, new Date(), 'new'))).rejects.toThrow(/Ver/);
   expect(raw).toBe(before); expect(journal).toBeNull(); expect(store.nodes).toEqual([]); expect(store.outbox).toEqual([]);
 });

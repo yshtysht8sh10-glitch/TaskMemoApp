@@ -1,6 +1,12 @@
 # #117 今週の最小リリース契約
 
 Ownerの2026-11-26優先順位変更を適用。A2完全復旧、registry、複雑なcapabilityは再開しない。
+本番抽出版は97ce5fbを基点とし、QueueのUI/model/検証は導入しない。
+Production固有のcommittedRawによるraw CAS、保存失敗ラッチ、初回receiveBatchを保持する。
+R06のDEV試験は同Storeでの自動再試行を期待していたため、本番では失敗後の再操作も拒否し、
+原本不変を確認して再起動したStoreだけで同じ未使用seqを使うよう強化した。
+CAS直前失効試験はloadCommittedを呼ぶことを前提にせず、権限再検査の2回目で失効させる。
+未知Journal拒否は本番既存の厳格なguardを残し、原本保持のメッセージを追記した。
 PR145/559a59bの結果モデル/取消/Undo/Redo/未知raw保護を再利用する。
 DEVはPR147/0b408a1基点（Queue保持）。本番抽出時はProduction候補97ce5fb基点へ今回差分だけ移す。
 

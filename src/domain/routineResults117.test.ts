@@ -102,13 +102,15 @@ it('R08/R18: default product store never publishes new missed writes', async () 
 });
 it.each(['QuotaExceededError', 'AbortError', 'CAS mismatch'])('R06: %s leaves raw, memory, sequence and Outbox unchanged', async failure => {
   const p = await IndexedDbTaskMemoApplicationJournal.open('synthetic-failure', new IDBFactory());
-  const store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now, isolatedRoutineResults: true });
+  let store = await TaskMemoV2ApplicationStore.open(p, seed(), { deviceId: 'a', now: () => now, isolatedRoutineResults: true });
   const raw = await p.loadCommitted(), nodes = JSON.stringify(store.nodes);
   const fail = vi.spyOn(p, 'writeAtomic').mockRejectedValueOnce(new Error(failure));
   await expect(store.command('未達', 'update', n => set(n, 'missed'))).rejects.toThrow(failure);
   expect(await p.loadCommitted()).toBe(raw); expect(await p.loadJournal()).toBeNull();
   expect(JSON.stringify(store.nodes)).toBe(nodes); expect(store.outbox).toEqual([]); expect(store.historyDepths.past).toBe(0);
   fail.mockRestore();
+  await expect(store.command('未達', 'update', n => set(n, 'missed'))).rejects.toThrow(failure);
+  store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'a', now: () => now, isolatedRoutineResults: true });
   const [op] = await store.command('未達', 'update', n => set(n, 'missed'));
   expect(op.localSeq).toBe(1);
 });

@@ -111,7 +111,7 @@ export class TaskMemoV2ApplicationStore {
   static async open(persistence: ApplicationJournalPersistence, initialNodes: Node[], options: Options) {
     recordSyncActivity("hydrate");
     const journal = await persistence.loadJournal();
-    if (journal && persistence.writeAtomic) throw new Error('未確定journalがあります。整合性確認が完了するまで保存・同期を停止します。');
+    if (journal && persistence.writeAtomic) throw new Error('未確定journalがあります。原本を保持し、整合性確認が完了するまで保存・同期を停止します。');
     // Validate before recovery can write/clear the WAL. Unknown raw stays in place.
     const committedRaw = await persistence.loadCommitted();
     for (const raw of [journal, committedRaw]) if (raw) {
