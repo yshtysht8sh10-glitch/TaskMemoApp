@@ -1,0 +1,63 @@
+# #117 後続分割・A1原本退避
+
+2026-11-26 / 開発担当。設計正本PR139/e422fbf、ローカル実装PR145/6224b19。
+本ブランチはPR145の後続で、PR144のDEV配信には含めない。
+
+## 分割と依存
+
+| 差分 | 具体的な成果物 | 依存・停止条件 |
+|---|---|---|
+| A1（本差分） | 既存standalone backupのIDB-only/未知raw退避。ローカル原本と復旧保証を区別 | PR145の後続。自動復元や通信は接続しない |
+| A2 | 原本archiveの検証・隔離復元候補、scope/binding照合、取消/History/Outbox/receipt参照の完全性、draft確定/静止条件 | A1＋PR145修正承認。未知rawを通常Node importへ通さず保護。実データ復元は別承認 |
+| B | writer台帳・server fence契約と実装。PWA/Native/再送/Undo/import/repair/Functions/Adminを列挙 | PR139§9.1–9.3。AdminはRulesを迂回する。未確認principalがあればclosed。実IAM変更は別承認 |
+| C | protocol3/feature contract/epoch/writer registryの製品判定、各transactionの再検査、同一transactionのNode/receipt拒否 | Bの拒否契約とA2保全。field/path/registry発行責任の詳細をレビューし、自己申告で開かない。実protocol切替は別承認 |
+| D | 実capabilityへ連動したOccurrenceメニュー・履歴選択、取消、ワンタップ維持 | Cのserver供給が必要。不明・期限切れ・Auth/epoch変更なら閉鎖。UI flagだけで有効化しない |
+| E | R01–R18の不足分を固定旧SHA/複数actor/障害/再起動/backup/rollbackで総合受入 | A2/B/C/D。各試験をlocal/Emulator/実SDK/実機へ分類。未実施をPASSとしない |
+
+B/Cは境界設計と合成試験を先に分け、実環境のRules/Functions/IAM変更、protocol切替、
+移行、missed書込み開放は後続Owner承認まで実行しない。PR145が修正要求になれば先に修正し、
+それと無関係なA1のstatic原本退避を別差分で保持する。PR144の受入を待たせない。
+
+## A1で確認した問題
+
+`public/v2-recovery-backup.js` はlocalStorageキーが0件だとIndexedDBを読む前に中断していた。
+また、件数表示のためのJSON.parse/既知version検査が、壊れたJSONや未知schemaを含む原本の
+ファイル退避まで拒否していた。例外停止でsourceが削除されるわけではないが、復旧用の救出経路がない。
+
+8試験のうち追加4ケースを先に実行し、3 FAIL/5 PASSを確認。
+IDB-only/破損JSON/未知versionの3失敗を原本救出の再現として使用した。
+
+## A1の変更
+
+- localStorageが空でも既存IndexedDBを読む。両方空なら空backupを成功扱いしない。
+- 件数表示は任意の観測へ変更。解釈不能でもrawを一字も変えずarchiveへ入れ、未検証と表示。
+- 既存IndexedDBのreadonly transactionで全scope recordを取得し、Journal/Committedだけでなく
+  preservedRecoveryJournal、preservedSelfRepairCommitted、authoritativeRecoveryPlan、未知metadataも保持。
+- 物理保存形式（scope/fingerprint、rawがstring/null）を検証不能なら安全に中断。
+  未知の物理DB/store/schemaを推測して開設・変換しない。
+- archiveにcaptureメタデータを追加し、local-raw、consistentCut=false、automaticRestoreAllowed=false、
+  serverReceipts/drafts=not-collectedを明示する。
+- JSON parseや集計が失敗してもユーザー内容・UID・rawを画面/ログへ表示しない。
+- Firebase/本体の起動、migration、保存領域の書込み・削除、復元入口は追加しない。
+
+通常Node backupへ未知rawを押し込まず、復旧用のopaque原本に留める。
+archive全体のSHA-256は既存どおりファイル保存前に提示する。これは破損確認であり、真正性の証明ではない。
+snapshot二回一致は静止や排他の証明ではない。書込み/入力が続いている状況のconsistent cutとして使わない。
+
+## A1の試験
+
+- focused: 8 PASS、skip 0。
+- 全体: 1299 PASS / 46 skip（169 files PASS / 4 skip）。
+- TypeScript、Lint、node --check、git diff --check PASS。
+- public変更を含むため、Web exportも固定commitで実施しPRへ結果を追記する。
+- すべて合成localStorage/fake-indexeddb/VM。実保存領域・実ユーザーデータにはアクセスしていない。
+
+## A2以降に残る重大条件
+
+このarchiveだけで完全復旧可能とは判断しない。
+ACKでOutboxから消え、serverだけにあるreceipt原操作はローカル全copyにも存在しない場合がある。
+実serverからの必要証拠取得・束縛・照合は新たな許可と設計が必要で、捏造/推測補完しない。
+編集中の未確定タイトル/本文、debounce、通信中操作、別端末・別タブの未送信copyも別途回収する。
+通常backupと完全復旧snapshotを区別し、未回収一覧と停止理由をmanifestへ持つ方針とする。
+復旧・rollbackは原本を保護し、自動Journal clear、未送信退役、旧writerへの戻しを行わない。
+未知rawの安全な解釈ができない場合、退避成功と操作再開許可を分離して停止を維持する。

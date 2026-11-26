@@ -109,3 +109,46 @@ it('preserves a lone V2 application when its journal is absent', async () => {
   expect(JSON.parse(await fixture.share.mock.calls[0][0].files[0].text()).entries).toEqual([{ key, value: raw }]);
   expect(fixture.writes).not.toHaveBeenCalled();
 });
+
+it.each(['{ damaged JSON', JSON.stringify({ version: 999, opaque: { state: 'future' } })])('preserves uninterpretable local raw without normalizing or claiming restoration: %s', async raw => {
+  const key = '@taskmemo/sync-v2/taskmemo-application/v2/project%2FPRIVATE';
+  const fixture = launch({ [key]: raw });
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(false);
+  expect(fixture.status.textContent).toContain('未検証');
+  fixture.handlers.get('share')!();
+  const archive = JSON.parse(await fixture.share.mock.calls[0][0].files[0].text());
+  expect(archive.entries).toEqual([{ key, value: raw }]);
+  expect(archive.capture).toMatchObject({ kind: 'local-raw', consistentCut: false, automaticRestoreAllowed: false, serverReceipts: 'not-collected' });
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
+it('exports IDB-only raw including malformed Journal and preserved recovery fields with no localStorage keys', async () => {
+  const indexedDB = new IDBFactory(), request = indexedDB.open('taskmemo-v2-local-application', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('scopes', { keyPath: 'scope' });
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  const record = { scope: 'synthetic/private', legacyFingerprint: 'fp', committed: '{opaque raw', journal: 'unknown raw',
+    preservedRecoveryJournal: 'EXACT_RECOVERY_RAW', preservedSelfRepairCommitted: 'EXACT_REPAIR_RAW',
+    authoritativeRecoveryPlan: 'EXACT_PLAN', unknownFutureMetadata: { fields: ['keep'] } };
+  const transaction = database.transaction('scopes', 'readwrite'); transaction.objectStore('scopes').put(record);
+  await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
+  database.close();
+  const fixture = launch({}, indexedDB);
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(false); expect(fixture.status.textContent).toContain('未検証');
+  fixture.handlers.get('share')!();
+  const archive = JSON.parse(await fixture.share.mock.calls[0][0].files[0].text());
+  expect(archive.entries).toEqual([]); expect(archive.indexedDb.records).toEqual([record]);
+  expect(archive.capture.automaticRestoreAllowed).toBe(false);
+  for (const secret of ['private', 'EXACT_', 'unknown raw']) expect(fixture.status.textContent).not.toContain(secret);
+  expect(fixture.writes).not.toHaveBeenCalled();
+});
+
+it('does not prepare an empty backup when neither source has TaskMemo data', async () => {
+  const fixture = launch({}, new IDBFactory());
+  await fixture.handlers.get('prepare')!();
+  expect(fixture.buttons.share.disabled).toBe(true); expect(fixture.share).not.toHaveBeenCalled();
+  expect(fixture.writes).not.toHaveBeenCalled();
+});

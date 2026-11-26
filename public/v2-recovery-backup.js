@@ -19,7 +19,6 @@
       }
     }
     entries.sort((a, b) => a.key.localeCompare(b.key));
-    if (!entries.length) throw new Error('TaskMemoのlocalStorageキーが見つかりません。PWA内で開いたか確認してください。');
     for (const entry of entries)
       if (storage.getItem(entry.key) !== entry.value) throw new Error('読み取り中に保存内容が変わりました。再度準備してください。');
     return entries;
@@ -28,13 +27,13 @@
   function summary(entries) {
     const committed = new Map();
     const journals = new Map();
+    let unverified = 0;
     for (const entry of entries) {
       const kind = entry.key.startsWith(committedPrefix) ? 'committed' : entry.key.startsWith(journalPrefix) ? 'journal' : null;
       if (!kind) continue;
       const scope = entry.key.slice((kind === 'committed' ? committedPrefix : journalPrefix).length);
-      const root = JSON.parse(entry.value);
-      if (!root || root.version !== 2 || !root.domain || !root.sync || !Array.isArray(root.sync.outbox))
-        throw new Error('V2データを検証できません。元データは変更していません。');
+      const root = inspectEnvelope(entry.value);
+      if (!root) { unverified++; continue; }
       (kind === 'committed' ? committed : journals).set(scope, {
         nodes: Object.keys(root.domain).length, outbox: root.sync.outbox.length,
       });
@@ -42,7 +41,16 @@
     const pairs = [];
     for (const [scope, application] of committed)
       if (journals.has(scope)) pairs.push({ application, journal: journals.get(scope) });
-    return { pairs, committed: [...committed.values()], journals: [...journals.values()] };
+    return { pairs, committed: [...committed.values()], journals: [...journals.values()], unverified };
+  }
+
+  // Counts are optional observations, never a condition for rescuing opaque raw.
+  function inspectEnvelope(raw) {
+    try {
+      const root = JSON.parse(raw);
+      return root && root.version === 2 && root.domain && typeof root.domain === 'object' &&
+        !Array.isArray(root.domain) && Array.isArray(root.sync?.outbox) ? root : null;
+    } catch { return null; }
   }
 
   async function digest(value) {
@@ -84,13 +92,11 @@
       for (const record of records) {
         if (typeof record.scope !== 'string' || typeof record.legacyFingerprint !== 'string')
           throw new Error('IndexedDBのV2データを検証できません。');
-        for (const raw of [record.committed, record.journal]) {
-          if (raw !== null && raw !== undefined) {
-            const root = JSON.parse(raw);
-            if (root.version !== 2 || !root.domain || !Array.isArray(root.sync?.outbox))
-              throw new Error('IndexedDBのV2データを検証できません。');
-          }
-        }
+        // Do not hydrate, repair or interpret the payload to export it. Unknown
+        // outcome/schema or broken JSON must remain byte-identical raw strings.
+        for (const raw of [record.committed, record.journal])
+          if (raw !== null && raw !== undefined && typeof raw !== 'string')
+            throw new Error('IndexedDBの原本形式を保存できません。元データは変更していません。');
       }
       return { available: true, records };
     } finally { database.close(); }
@@ -103,13 +109,17 @@
     status.textContent = '読み取り中…';
     try {
       const entries = readSnapshot(window.localStorage);
-      const { pairs, committed, journals } = summary(entries);
+      const { pairs, committed, journals, unverified } = summary(entries);
       const indexedDb = await readIndexedDbSnapshot();
+      if (!entries.length && !indexedDb.records.length)
+        throw new Error('TaskMemoの保存原本が見つかりません。PWA内で開いたか確認してください。');
       const archive = JSON.stringify({
         format: 'taskmemo-v2-recovery-v2',
         capturedAt: new Date().toISOString(),
         origin: location.origin,
         appCommit: document.querySelector('meta[name="taskmemo-commit"]').content,
+        capture: { kind: 'local-raw', consistentCut: false, automaticRestoreAllowed: false,
+          serverReceipts: 'not-collected', drafts: 'not-collected' },
         entries,
         indexedDb,
       });
@@ -124,11 +134,12 @@
       downloadButton.disabled = false;
       const pairSummary = `旧V2 application: ${committed.map(item => item.nodes + ' Node / ' + item.outbox + ' outbox').join('、') || 'なし'}\n旧V2 journal: ${journals.map(item => item.nodes + ' Node / ' + item.outbox + ' outbox').join('、') || 'なし'}`;
       const idbSummary = indexedDb.records.map((record, index) => {
-        const committed = record.committed ? JSON.parse(record.committed) : null;
-        const journal = record.journal ? JSON.parse(record.journal) : null;
-        return `IndexedDB組${index + 1}: application ${committed ? Object.keys(committed.domain).length : 0} Node / ${committed ? committed.sync.outbox.length : 0} outbox、journal ${journal ? Object.keys(journal.domain).length : 0} Node / ${journal ? journal.sync.outbox.length : 0} outbox`;
+        const committed = inspectEnvelope(record.committed), journal = inspectEnvelope(record.journal);
+        const description = (raw, root) => raw == null ? '0 Node / 0 outbox'
+          : root ? `${Object.keys(root.domain).length} Node / ${root.sync.outbox.length} outbox` : '未検証の原本';
+        return `IndexedDB組${index + 1}: application ${description(record.committed, committed)}、journal ${description(record.journal, journal)}`;
       }).join('\n');
-      status.textContent = `準備完了（まだファイルへ保存していません）。\nキー: ${entries.length}、同一アカウントの組: ${pairs.length}\n${pairSummary}\nIndexedDB: ${indexedDb.available ? indexedDb.records.length + '組' : '未対応'}${idbSummary ? '\n' + idbSummary : ''}\nファイル: ${file.name}\nサイズ: ${file.size} bytes\nSHA-256: ${sha256}\n保存後、ファイルの存在とサイズを確認してください。`;
+      status.textContent = `準備完了（まだファイルへ保存していません）。\nキー: ${entries.length}、同一アカウントの組: ${pairs.length}\n${pairSummary}\n未検証の旧原本: ${unverified}件\nIndexedDB: ${indexedDb.available ? indexedDb.records.length + '組' : '未対応'}${idbSummary ? '\n' + idbSummary : ''}\nファイル: ${file.name}\nサイズ: ${file.size} bytes\nSHA-256: ${sha256}\nこれはローカル原本の退避です。サーバー受領証・編集中入力・同期した一時点の完全性・自動復元を保証しません。\n保存後、ファイルの存在とサイズを確認してください。`;
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : 'バックアップの準備に失敗しました。';
     }
