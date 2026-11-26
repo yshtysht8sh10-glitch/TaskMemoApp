@@ -3,6 +3,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { IndexedDbTaskMemoApplicationJournal } from './indexedDbApplicationStorage';
 import { prepareVersion3Copy, assertVersion3Baseline } from './dataVersion';
 import { createNode } from '../domain/nodeOperations';
+import { TaskMemoV2SyncController } from './taskMemoV2SyncController';
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } }));
 import { TaskMemoV2ApplicationStore } from './taskMemoApplicationStore';
 import { validateCompatibilityGate } from './compatibilityGate';
@@ -58,4 +59,17 @@ it.each(['before-command', 'before-CAS'])('revoked version permission %s cannot 
   if (stage === 'before-command') allowed = false; else revokeOnRead = true;
   await expect(store.command('new', 'create', nodes => createNode(nodes, 'memo', { title: 'keep', parentId: null }, new Date(), 'new'))).rejects.toThrow(/Ver/);
   expect(raw).toBe(before); expect(journal).toBeNull(); expect(store.nodes).toEqual([]); expect(store.outbox).toEqual([]);
+});
+it('controller hard-stop blocks direct local commands, flush and automatic re-enable', async () => {
+  const p = await IndexedDbTaskMemoApplicationJournal.open('stopped', new IDBFactory());
+  const store = await TaskMemoV2ApplicationStore.open(p, [], { deviceId: 'test', dataVersion: 3 });
+  let valid = true;
+  const upload = vi.fn(async (op: { opId: string }) => ({ opId: op.opId }));
+  const controller = new TaskMemoV2SyncController(store, { dataVersion: 3, get dataVersionValid() { return valid; }, connect: async () => {}, upload });
+  await controller.start(); upload.mockClear(); valid = false;
+  const raw = await p.loadCommitted();
+  await expect(controller.commandLocal('new', 'create', nodes => createNode(nodes, 'memo', { title: 'keep', parentId: null }, new Date(), 'new'))).rejects.toThrow(/Ver/);
+  await expect(controller.flush()).rejects.toThrow(/Ver/); valid = true;
+  await expect(controller.start()).rejects.toThrow(/Ver/);
+  expect(await p.loadCommitted()).toBe(raw); expect(upload).not.toHaveBeenCalled(); controller.stop();
 });
