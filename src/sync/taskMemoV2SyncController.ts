@@ -37,7 +37,7 @@ export class TaskMemoV2SyncController {
   // Protection dominates every asynchronous state update, including profile
   // listeners already queued before unsubscribe. This controller has no unlock.
   get state(): SyncState {
-    if (this.versionBlocked) return { phase: 'error', pendingCount: this.store.pendingCount, lastError: 'データVerを確認できません。原本を保持して停止しています。' };
+    if (this.versionBlocked) return { phase: 'error', pendingCount: this.store.pendingCount, lastError: this.currentState.lastError ?? 'データVerを確認できません。原本を保持して停止しています。' };
     if (this.routineResultsBlocked) {
       return { phase: 'error', pendingCount: this.store.pendingCount, lastError: ROUTINE_RESULTS_PROTECTION };
     }
