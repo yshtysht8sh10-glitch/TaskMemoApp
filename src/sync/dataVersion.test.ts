@@ -74,3 +74,22 @@ it('controller hard-stop blocks direct local commands, flush and automatic re-en
   await expect(controller.start()).rejects.toThrow(/Ver/);
   expect(await p.loadCommitted()).toBe(raw); expect(upload).not.toHaveBeenCalled(); controller.stop();
 });
+
+it.each(['acknowledgement', 'self-echo batch'] as const)('revoked permission at %s keeps the durable Outbox and original snapshot', async delivery => {
+  const persistence = await IndexedDbTaskMemoApplicationJournal.open('revoked-ack', new IDBFactory());
+  let allowed = true;
+  const store = await TaskMemoV2ApplicationStore.open(persistence, [], {
+    deviceId: 'ack-device', dataVersion: 3, writePermission: () => allowed,
+  });
+  await store.command('create', 'create', nodes => createNode(nodes, 'category', { title: 'pending', parentId: null }, new Date(0), 'pending'));
+  const operation = store.outbox[0], record = store.versionedNode('pending')!;
+  const raw = await persistence.loadCommitted(), outbox = [...store.outbox], history = store.historyDepths;
+  allowed = false;
+  const result = delivery === 'acknowledgement' ? store.acknowledge(operation.opId, record) : store.receiveBatch([record]);
+  await expect(result).rejects.toThrow(/Ver/);
+  expect(await persistence.loadCommitted()).toBe(raw); expect(await persistence.loadJournal()).toBeNull();
+  expect(store.outbox).toEqual(outbox); expect(store.historyDepths).toEqual(history);
+  expect(store.versionedNode('pending')).toEqual(record);
+  const reopened = await TaskMemoV2ApplicationStore.open(persistence, [], { deviceId: 'ignored', dataVersion: 3 });
+  expect(reopened.outbox).toEqual(outbox); expect(reopened.historyDepths).toEqual(history);
+});

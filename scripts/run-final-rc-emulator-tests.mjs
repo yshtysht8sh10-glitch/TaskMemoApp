@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
+// Never let this opt-in integration runner fall through to a real project or remote endpoint.
+if (process.env.GCLOUD_PROJECT !== 'demo-taskmemo-v2' || process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8180')
+  throw new Error('Data protection tests require the isolated demo-taskmemo-v2 loopback emulator.');
+
 const root = process.cwd();
 const commands = [
   { cwd: root, entry: resolve(root, "node_modules/vitest/vitest.mjs"), args: ["run", "src/sync/firebaseEmulatorV2.e2e.test.ts"] },

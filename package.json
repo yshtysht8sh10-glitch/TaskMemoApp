@@ -93,7 +93,9 @@
     "functions:build": "npm --prefix functions run build",
     "functions:test": "npm --prefix functions test",
     "verify": "tsc --noEmit && npm run lint && npm test && npm run functions:build && npm run functions:test",
-    "test:onboarding:emulator": "npm --prefix functions run build && npx firebase-tools emulators:exec --config firebase.onboarding.emulator.json --project demo-taskmemo-onboarding --only auth,firestore,functions \"node scripts/run-onboarding-emulator-tests.mjs\""
+    "test:onboarding:emulator": "npm --prefix functions run build && npx firebase-tools emulators:exec --config firebase.onboarding.emulator.json --project demo-taskmemo-onboarding --only auth,firestore,functions \"node scripts/run-onboarding-emulator-tests.mjs\"",
+    "test:data-protection": "vitest run --maxWorkers=2 src/sync/issue116AtomicPersistence.test.ts src/sync/dataVersion.test.ts src/sync/productionVersionScope.test.ts src/sync/version3RecoveredCopy.test.ts src/sync/indexedDbApplicationStorage.test.ts src/sync/taskMemoApplicationStore.test.ts src/sync/taskMemoV2SyncController.test.ts src/domain/routineResults117.test.ts src/sync/revisionModel.test.ts src/hooks/useEditorAutosave.test.tsx src/hooks/useTaskMemoSync.webStartup.test.tsx src/services/nodeBackup.test.ts src/utils/v2RecoveryBackup.test.ts scripts/data-protection-runner.test.mjs",
+    "test:data-protection:emulator": "npx firebase-tools emulators:exec --config firebase.production-rules.emulator.json --project demo-taskmemo-v2 --only firestore \"node scripts/run-final-rc-emulator-tests.mjs\""
   },
   "private": true
 }
