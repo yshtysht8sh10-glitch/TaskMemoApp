@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Node } from "../models/node";
-import { serializeNodeBackup } from "../services/nodeBackup";
 import { createAuthoritativeV1RehearsalBundle } from "./authoritativeV1Source";
+
+// Freeze the historical schema1 contract; the current serializer intentionally emits schema5.
+const serializeLegacyV1 = (nodes: Node[], exportedAt: Date) => JSON.stringify({ schemaVersion: 1, exportedAt: exportedAt.toISOString(), nodes });
 
 const at = new Date("2026-09-20T00:00:00.000Z");
 const node: Node = { id: "a", type: "category", parentId: null, sortKey: "a0", title: "A", createdAt: at, updatedAt: at, deletedAt: null };
 
 describe("authoritative V1 source decision", () => {
   it("uses only Export values after matching the exact approved hash and comparison", () => {
-    const raw = serializeNodeBackup([node], at);
+    const raw = serializeLegacyV1([node], at);
     const snapshotRaw = JSON.stringify({ projectId: "taskmemoapp-eabc3", nodes: [{ uid: "owner", node: { ...node, title: "Cloud", createdAt: at.toISOString(), updatedAt: at.toISOString() } }] });
     const result = createAuthoritativeV1RehearsalBundle(raw, snapshotRaw, "approved", {
       classification: "USER-APPROVED AUTHORITATIVE SOURCE DECISION", sourceSha256: createHash("sha256").update(raw).digest("hex"), expectedNodeCount: 1,
@@ -20,7 +22,7 @@ describe("authoritative V1 source decision", () => {
   });
 
   it("fails closed when the comparison changed", () => {
-    const raw = serializeNodeBackup([node], at);
+    const raw = serializeLegacyV1([node], at);
     const snapshotRaw = JSON.stringify({ projectId: "taskmemoapp-eabc3", nodes: [{ uid: "owner", node: { ...node, createdAt: at.toISOString(), updatedAt: at.toISOString() } }] });
     expect(() => createAuthoritativeV1RehearsalBundle(raw, snapshotRaw, "approved", {
       classification: "USER-APPROVED AUTHORITATIVE SOURCE DECISION", sourceSha256: createHash("sha256").update(raw).digest("hex"), expectedNodeCount: 1,

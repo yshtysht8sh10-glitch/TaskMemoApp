@@ -38,7 +38,11 @@ const receiptPath = "users/uid/syncOperationsV2/device:1";
 const nodePath = "users/uid/nodesV2/node-1";
 
 describe("recovery transaction diagnostics", () => {
-  beforeEach(() => { state.documents.clear(); state.sdkFailure = null; state.writes = 0; });
+  beforeEach(() => { state.documents.clear();
+    // Recovery fixtures exercise the supported Ver2 repair contract, behind both live gates.
+    state.documents.set('users/uid/syncMetadataV2/compatibility', { schemaVersion: 1, minimumSyncProtocol: 2, v1WritesAllowed: false, v2Enabled: true });
+    state.documents.set('syncControl/current', { schemaVersion: 1, writesEnabled: true });
+    state.sdkFailure = null; state.writes = 0; });
 
   const adapter = (events: RecoveryTransactionEvent[]) => createFirebaseSyncAdapter(
     { app: { options: { projectId: "taskmemoapp-eabc3" } } } as never, "uid", "production",

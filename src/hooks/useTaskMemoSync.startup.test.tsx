@@ -26,7 +26,7 @@ vi.mock('firebase/auth', () => ({ onAuthStateChanged: (_auth: unknown, callback:
   signOut: vi.fn(), signInWithEmailAndPassword: vi.fn(), createUserWithEmailAndPassword: vi.fn() }));
 vi.mock('../services/firebaseConfig', () => ({ firebaseConfiguration: () => ({ config: { projectId: 'taskmemoapp-dev' }, environment: 'development', error: null }) }));
 vi.mock('../services/firebaseClient', () => ({ getFirebaseClient: () => ({ auth: {}, db: { app: { options: { projectId: 'taskmemoapp-dev' } } } }) }));
-vi.mock('../sync/firebaseSyncAdapter', () => ({ createFirebaseSyncAdapter: (_db: unknown, uid: string) => ({ connect: async () => { if (fake.failure) throw fake.failure; },
+vi.mock('../sync/firebaseSyncAdapter', () => ({ createFirebaseSyncAdapter: (_db: unknown, uid: string) => ({ dataVersion: 2, dataVersionValid: true, connect: async () => { if (fake.failure) throw fake.failure; },
   auditOutbox: async () => ({ received: 0, missing: 0 }), upload: async (operation: Parameters<InMemoryRevisionServer['apply']>[0]) => {
     if (fake.failure) throw fake.failure;
     const server = servers.get(uid) ?? new InMemoryRevisionServer(); servers.set(uid, server); fake.uploadedTo.push(uid);

@@ -2,7 +2,13 @@ import { expect, it, vi } from 'vitest';
 import { createFirebaseSyncAdapter } from './firebaseSyncAdapter';
 const sdk = vi.hoisted(() => ({ snapshot: undefined as undefined | ((snapshot: unknown) => void) }));
 vi.mock('firebase/firestore', async importOriginal => ({ ...await importOriginal<typeof import('firebase/firestore')>(),
-  collection: vi.fn(), onSnapshot: vi.fn((_ref, _options, next) => { sdk.snapshot = next; return () => {}; }),
+  doc: (_db: unknown, ...parts: string[]) => parts.join('/'),
+  collection: (_db: unknown, ...parts: string[]) => parts.join('/'),
+  // Gate listeners use the three-argument overload; Node listeners use metadata options.
+  onSnapshot: vi.fn((ref: string, _options, next) => {
+    if (ref.endsWith('/nodesV2')) sdk.snapshot = next;
+    return () => {};
+  }),
 }));
 
 it('serializes cached/server snapshots and signals server readiness only after durable receives, including metadata-only empty results', async () => {
