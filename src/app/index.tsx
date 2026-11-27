@@ -1261,6 +1261,18 @@ export default function HomeScreen() {
                 } else askDelete(menuNode);
               }}
             />
+            {menuRoutineDate && menuNode?.type === 'memo' && sync.routineResultsEnabled && (
+              <Action
+                label="今回だけ未達"
+                onPress={() => {
+                  const date = parseLocalDateKey(menuRoutineDate);
+                  if (!date) return;
+                  const targetId = menuNode.id;
+                  apply('ルーティーン今回だけ未達', current => setRoutineResult(current, targetId, date, 'missed', new Date()));
+                  setMenuNode(null);
+                }}
+              />
+            )}
           </>
         ) : null}
       </Sheet>
