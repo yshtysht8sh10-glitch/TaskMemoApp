@@ -3,7 +3,7 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RoutineHistoryPanel } from './RoutineHistoryPanel';
-import type { MemoNode } from '../models/node';
+import type { MemoNode, Node, RoutineOutcome } from '../models/node';
 import { localDateKey, routineHistoryDays } from '../domain/routine';
 
 vi.mock('react-native', () => ({
@@ -22,11 +22,11 @@ const task = (count: number, id = 'r1'): MemoNode => ({
 });
 let cleanup: (() => Promise<void>) | undefined;
 afterEach(async () => { await cleanup?.(); vi.useRealTimers(); });
-async function mount(memo: MemoNode) {
+async function mount(memo: MemoNode, nodes?: Node[], onResult?: (id: string, date: Date, state: RoutineOutcome['state']) => void) {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now);
   const host = document.createElement('div'); document.body.append(host);
   const root = createRoot(host), toggle = vi.fn();
-  const render = async (next: MemoNode) => act(async () => root.render(<RoutineHistoryPanel key={next.id} memo={next} onToggle={toggle} />));
+  const render = async (next: MemoNode) => act(async () => root.render(<RoutineHistoryPanel key={next.id} memo={next} nodes={nodes} onToggle={toggle} onResult={onResult} />));
   await render(memo);
   cleanup = async () => { await act(async () => root.unmount()); host.remove(); };
   const click = async (label: string) => { const button = [...host.querySelectorAll('button')].find(b => b.textContent === label)!; expect(button).toBeTruthy(); await act(async () => button.click()); };
@@ -98,4 +98,16 @@ it('rechecks today after a date boundary even when the memo object stays unchang
   expect(dates()).toEqual(['2026-11-25 -']);
   vi.setSystemTime(new Date(2026, 10, 26, 0, 1)); await render(memo);
   expect(dates()).toEqual(['2026-11-26 -']);
+});
+it('exposes the overdue 11/26 result selector and passes that date to the existing result callback', async () => {
+  const memo = task(0); memo.repeatRule = { frequency: 'day', interval: 1, startsOn: '2026-11-26' };
+  const nodes: Node[] = [{ id: 'r', type: 'category', categoryKind: 'routineRoot', parentId: null, title: 'Routine', sortKey: 'a0', createdAt: now, updatedAt: now, deletedAt: null }, memo];
+  const before = JSON.stringify(nodes), result = vi.fn();
+  const { host, dates, render, click } = await mount(memo, nodes, result);
+  vi.setSystemTime(new Date(2026, 10, 27, 12)); await render(memo);
+  expect(dates()).toEqual(['2026-11-27 -', '2026-11-26 -']);
+  expect(JSON.stringify(nodes)).toBe(before); expect(result).not.toHaveBeenCalled();
+  await act(async () => (host.querySelector('button[aria-label="2026-11-26の結果を選択"]') as HTMLButtonElement).click());
+  await click('未達');
+  expect(result).toHaveBeenCalledExactlyOnceWith(memo.id, new Date(2026, 10, 26), 'missed');
 });

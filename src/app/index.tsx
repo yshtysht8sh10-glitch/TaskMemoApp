@@ -2227,7 +2227,7 @@ function EditorModal({
                     {memo && (
                       <>
                         <Text style={styles.label}>実績</Text>
-                        <RoutineHistoryPanel key={memo.id} memo={memo} onToggle={onToggleRoutineHistory} onResult={onRoutineResult} />
+                        <RoutineHistoryPanel key={memo.id} memo={memo} nodes={nodes} onToggle={onToggleRoutineHistory} onResult={onRoutineResult} />
                       </>
                     )}
                   </>
