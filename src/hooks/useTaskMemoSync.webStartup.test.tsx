@@ -35,7 +35,7 @@ vi.mock('../services/localV2Application', async () => {
 vi.mock('../sync/firebaseSyncAdapter', () => ({ createFirebaseSyncAdapter: (_: unknown, uid: string): SyncAdapter => {
   const server = new InMemoryRevisionServer();
   return {
-    connect: async () => { await fake.gate; if (fake.offline) throw { kind: 'offline', message: 'synthetic offline' }; },
+    dataVersion: 2, dataVersionValid: true, connect: async () => { await fake.gate; if (fake.offline) throw { kind: 'offline', message: 'synthetic offline' }; },
     auditOutbox: async operations => { fake.events.push(`audit-start:${operations.length}`); await fake.auditGate;
       fake.events.push('audit-complete'); return { received: 0, missing: operations.length }; },
     upload: async operation => { fake.events.push('upload'); return server.apply(operation); },
@@ -78,31 +78,43 @@ it('renders restored Web account tasks before delayed Cloud and keeps editing ga
   try {
     expect(view.host.textContent).toBe('restoring');
     await act(async () => { fake.auth!({ uid: 'early' }); });
-    await view.settle(() => expect(view.host.textContent).toBe('cached early'));
-    expect(view.current().startup).toMatchObject({ showData: true, editable: false, canUseCache: false });
+    // The authenticated dataVer gate must succeed before any account cache is exposed.
+    expect(view.host.textContent).toBe('restoring');
+    expect(view.current().startup.showData).toBe(false);
     expect(fake.subscriptions.size).toBe(0);
     await act(async () => { release(); });
     await view.settle(() => expect(fake.subscriptions.has('early')).toBe(true));
+    expect(view.host.textContent).toBe('cached early');
+    expect(view.current().startup).toMatchObject({ showData: true, editable: false, canUseCache: false });
     await act(async () => { fake.subscriptions.get('early')!.applied('server'); });
     expect(view.current().startup.editable).toBe(true);
   } finally { release(); await view.close(); }
 });
 
-it('shows offline data and retains pending Outbox, and audits before sending after reconnection', async () => {
-  const p = await seed('pending', true); fake.offline = true;
+it('fails closed before an offline version gate, retains raw Outbox, and audits on authenticated reconnection', async () => {
+  const p = await seed('pending', true); const before = await p.loadCommitted(); fake.offline = true;
   const view = await mount();
   try {
     await act(async () => { fake.auth!({ uid: 'pending' }); });
-    await view.settle(() => expect(view.current().status).toBe('offline'));
-    expect(view.host.textContent).toBe('pending pending'); expect(view.current().startup.editable).toBe(false);
+    await view.settle(() => expect(view.current().status).toBe('error'));
+    expect(view.host.textContent).toBe('restoring');
+    expect(view.current().startup.showData).toBe(false);
+    expect(view.current().startup.editable).toBe(false);
+    expect(await p.loadCommitted()).toBe(before);
+    expect(await p.loadJournal()).toBeNull();
+    expect(fake.subscriptions.size).toBe(0);
+    await act(async () => { view.current().useCachedData(); await view.current().retrySync(); });
+    expect(view.current().startup.editable).toBe(false);
+    expect(await p.loadCommitted()).toBe(before);
     expect(JSON.parse((await p.loadCommitted())!).sync.outbox).toHaveLength(1);
     expect(fake.events).not.toContain('upload');
     fake.offline = false; let release!: () => void; fake.auditGate = new Promise(resolve => { release = resolve; });
-    let retry!: Promise<void>;
-    await act(async () => { retry = view.current().retrySync(); });
+    // Re-enter activation after the version gate becomes reachable; no controller existed before it.
+    await act(async () => { fake.auth!({ uid: 'pending' }); });
     await view.settle(() => expect(fake.events).toContain('audit-start:1'));
     expect(fake.events).not.toContain('upload');
-    await act(async () => { release(); await retry; });
+    await act(async () => { release(); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(JSON.parse((await p.loadCommitted())!).sync.outbox).toHaveLength(0); });
     expect(fake.events.indexOf('audit-complete')).toBeLessThan(fake.events.indexOf('upload'));
     expect(JSON.parse((await p.loadCommitted())!).sync.outbox).toHaveLength(0);
   } finally { await view.close(); }
@@ -129,11 +141,15 @@ it('ignores retired account batch/server notifications while showing the newly a
     const retired = fake.subscriptions.get('account-a')!, before = await a.loadCommitted();
     let release!: () => void; fake.gate = new Promise(resolve => { release = resolve; });
     await act(async () => { fake.auth!({ uid: 'account-b' }); });
-    await view.settle(() => expect(view.host.textContent).toBe('cached account-b'));
+    expect(view.host.textContent).toBe('restoring');
+    expect(view.current().startup.showData).toBe(false);
     const old = JSON.parse(before!).domain['account-a-memo'] as VersionedNode;
     await act(async () => { await retired.batch([{ ...old, revision: 9, value: { ...old.value, title: 'retired data' } }]); retired.applied('server'); });
-    expect(view.host.textContent).toBe('cached account-b'); expect(view.current().startup.editable).toBe(false);
+    expect(view.host.textContent).toBe('restoring'); expect(view.current().startup.editable).toBe(false);
     expect(await a.loadCommitted()).toBe(before);
     await act(async () => { release(); });
+    await view.settle(() => expect(view.host.textContent).toBe('cached account-b'));
+    expect(view.current().startup.editable).toBe(false);
+    expect(await a.loadCommitted()).toBe(before);
   } finally { await view.close(); }
 });

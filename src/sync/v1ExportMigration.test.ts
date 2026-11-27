@@ -4,6 +4,9 @@ import { serializeNodeBackup } from "../services/nodeBackup";
 import { nodeFromV2Value } from "./nodeV2Codec";
 import { compareV1NodeSources, describeV1ExportValidationFailure, prepareSchema1V1Export, PRODUCTION_V1_PROFILE_POLICY } from "./v1ExportMigration";
 
+// Freeze the historical schema1 contract; the current serializer intentionally emits schema5.
+const serializeLegacyV1 = (nodes: Node[], exportedAt: Date) => JSON.stringify({ schemaVersion: 1, exportedAt: exportedAt.toISOString(), nodes });
+
 const at = new Date("2026-09-20T00:00:00.000Z");
 const nodes: Node[] = [
   { id: "category", type: "category", parentId: null, sortKey: "a0", title: "Category", createdAt: at, updatedAt: at, deletedAt: null },
@@ -13,8 +16,11 @@ const nodes: Node[] = [
 ];
 
 describe("production schema 1 V1 Export migration", () => {
+  it("does not reinterpret a current schema5 backup as a legacy V1 export", () => {
+    expect(() => prepareSchema1V1Export(serializeNodeBackup(nodes, at), "current")).toThrow(/schemaVersion/);
+  });
   it("validates and migrates all Nodes without semantic or field loss using deterministic identities", () => {
-    const prepared = prepareSchema1V1Export(serializeNodeBackup(nodes, at), "iphone-export-1");
+    const prepared = prepareSchema1V1Export(serializeLegacyV1(nodes, at), "iphone-export-1");
     expect(prepared.migration).toMatchObject({ sourceCount: 4, outputCount: 4, ideaCount: 1, routineCount: 1, completedCount: 1, deletedCount: 1, purgedCount: 1, changedFields: [], lostFieldCount: 0, issues: [] });
     expect(prepared.migration.records.map((item) => nodeFromV2Value(item.value))).toEqual(nodes);
     expect(prepared.migration.records.every((item) => item.revision === 0 && item.lastDeviceId === "migration:iphone-export-1" && item.operationType === "import")).toBe(true);
@@ -26,10 +32,10 @@ describe("production schema 1 V1 Export migration", () => {
   });
 
   it("rejects wrong schema and semantic sort-key normalization", () => {
-    const wrong = JSON.parse(serializeNodeBackup(nodes, at)); wrong.schemaVersion = 2;
+    const wrong = JSON.parse(serializeLegacyV1(nodes, at)); wrong.schemaVersion = 2;
     expect(() => prepareSchema1V1Export(JSON.stringify(wrong), "x")).toThrow(/schemaVersion/);
-    expect(() => prepareSchema1V1Export(serializeNodeBackup(nodes.map((node) => node.id === "task" ? { ...node, sortKey: "zzzz" } : node), at), "x")).toThrow(/semantic normalization/);
-    expect(prepareSchema1V1Export(serializeNodeBackup(nodes.map((node) => node.id === "idea" ? { ...node, sortKey: "zzzz" } : node), at), "x").migration.changedFields).toEqual([]);
+    expect(() => prepareSchema1V1Export(serializeLegacyV1(nodes.map((node) => node.id === "task" ? { ...node, sortKey: "zzzz" } : node), at), "x")).toThrow(/semantic normalization/);
+    expect(prepareSchema1V1Export(serializeLegacyV1(nodes.map((node) => node.id === "idea" ? { ...node, sortKey: "zzzz" } : node), at), "x").migration.changedFields).toEqual([]);
   });
 
   it("classifies identical, export-only, Firestore-only and field differences without merging", () => {
@@ -46,7 +52,7 @@ describe("production schema 1 V1 Export migration", () => {
   });
 
   it("reports the exact unresolved parent without exposing or repairing Node content", () => {
-    const raw = serializeNodeBackup([{ ...nodes[2], id: "orphan", parentId: "missing" }], at);
+    const raw = serializeLegacyV1([{ ...nodes[2], id: "orphan", parentId: "missing" }], at);
     expect(describeV1ExportValidationFailure(raw, new Error("orphanの親参照が不正です。"))).toEqual({
       message: "orphanの親参照が不正です。", nodeId: "orphan", field: "parentId", value: "missing", parentExists: false, parentType: null, selfReference: false,
     });

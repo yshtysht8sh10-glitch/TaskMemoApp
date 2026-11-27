@@ -17,7 +17,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 vi.mock('../sync/firebaseSyncAdapter', () => ({ createFirebaseSyncAdapter: (_db: unknown, uid: string) => {
   const server = new InMemoryRevisionServer();
-  return { connect: async () => {}, auditOutbox: async () => ({ receivedOperationIndexes: [] }),
+  return { dataVersion: 2, dataVersionValid: true, connect: async () => {}, auditOutbox: async () => ({ receivedOperationIndexes: [] }),
     subscribe: (_receive: unknown, _error: unknown, applied?: (source: 'server') => void) => { applied?.('server'); return () => {}; },
     ...(initialAccounts.has(uid) ? { readRecoverySnapshot: async () => ({ nodes: [], receiptDocumentCount: 0 }) } : {}),
     upload: async (op: Parameters<InMemoryRevisionServer['apply']>[0]) => { uploads.push({ uid, nodeId: op.targetNodeId }); return server.apply(op); } };
