@@ -18,7 +18,8 @@
 <body>
   <main>
     <h1>TaskMemo復旧バックアップ</h1>
-    <p>このページはTaskMemo本体・Firebase同期を起動せず、現在のPWAのTaskMemo localStorageを読み取るだけです。保存領域への書き込み・削除は行いません。</p>
+    <p>このページはTaskMemo本体・Firebase同期を起動せず、現在のPWAのTaskMemo localStorageと既存IndexedDBを読み取るだけです。保存領域への書き込み・削除は行いません。</p>
+    <p>解釈できない状態や壊れたJSONも原本のまま退避します。これはローカル原本の保全用です。サーバーだけにある受領証、まだ保存されていない入力、他端末のデータは含まず、同期した一時点の完全性や自動復元を保証しません。</p>
     <p><strong>注意:</strong> バックアップファイルにはメモのタイトル・本文・常設メモ、outbox、Undo/Redo履歴などの個人データが含まれます。ChatGPT/Codexへ貼り付けず、端末の「ファイル」等の安全な場所へ保存してください。通常の「データを読み込む」では復元できない復旧用原本です。</p>
     <button id="prepare" type="button">バックアップを準備</button>
     <button id="share" type="button" disabled>ファイルへ共有・保存</button>
