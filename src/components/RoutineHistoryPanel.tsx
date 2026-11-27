@@ -1,14 +1,16 @@
 import { memo as memoComponent, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { MemoNode, RoutineOutcome } from '../models/node';
+import type { MemoNode, Node, RoutineOutcome } from '../models/node';
+import { routineHistoryRows } from '../utils/routineHistoryRows';
 import { localDateKey, parseLocalDateKey, routineHistoryDays, type RoutineHistoryDay } from '../domain/routine';
 import { useAppTheme } from '../theme/theme';
 import { RoutineResultActions } from './RoutineResultActions';
 import { routineResultAppearance, RoutineResultIcon } from './RoutineResultMark';
 
 /** Mount with key=memo.id so a different Routine starts in compact mode. */
-export function RoutineHistoryPanel({ memo, onToggle, onResult }: {
+export function RoutineHistoryPanel({ memo, nodes, onToggle, onResult }: {
   memo: MemoNode;
+  nodes?: Node[];
   onToggle: (id: string, date: Date) => void;
   /** Omitted by product entry until the reviewed server capability is supplied. */
   onResult?: (id: string, date: Date, state: RoutineOutcome['state']) => void;
@@ -22,7 +24,8 @@ export function RoutineHistoryPanel({ memo, onToggle, onResult }: {
   // Refresh local Date action targets even if a device zone switch leaves the
   // displayed YYYY-MM-DD unchanged.
   const calendar = useMemo(() => ({ date: parseLocalDateKey(today)!, zone, offset }), [today, zone, offset]);
-  const allDays = useMemo(() => routineHistoryDays(memo, calendar.date, Infinity), [memo, calendar]);
+  const allDays = useMemo(() => nodes ? routineHistoryRows(nodes, memo, calendar.date, Infinity)
+    : routineHistoryDays(memo, calendar.date, Infinity), [nodes, memo, calendar]);
   const days = useMemo(() => allDays.slice(0, limit), [allDays, limit]);
   // Parent callbacks may change after autosave/auth updates. Keep the event target
   // current without making thousands of unchanged rows render for that change.
